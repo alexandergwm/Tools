@@ -1,0 +1,22 @@
+%% This function is used to calibrate microphone
+close
+clear
+clc
+%%
+fs = 48000;
+NChsMics = 1:8;
+SamplePerFrame = 1024;
+
+%% 获取音频录制设备
+reader = audioDeviceReader('Driver','ASIO','SampleRate',fs,'SamplesPerFrame',SamplePerFrame,'Device','ASIO MADIface USB',...
+    'ChannelMappingSource','Property','ChannelMapping',NChsMics);
+len = 2*fs;
+NLoop = floor(len / SamplePerFrame);
+Lbp = 1;
+controlpout1 = zeros(len, 4);
+for m = Lbp: NLoop
+    err = reader();
+    controlpout1((m-1)*SamplePerFrame+1 : m*SamplePerFrame, NChsMics) = err;
+end
+release(reader);
+clear player
