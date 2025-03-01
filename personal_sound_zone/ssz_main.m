@@ -8,15 +8,14 @@ config = struct(...
     'mic_num',            8,          ... % 麦克风数量
     'group_num',          8,          ... % 测量组数
     'planar_num',         1,          ... % 测量平面数
-    'spk_chs',           [3:6,15:30], ... % 扬声器通道映射
+    'spk_chs',           15:30, ... % 扬声器通道映射
     'filter_len',        8192,        ... % 滤波器长度
     'fft_len',           48000,       ... % FFT长度
     'IR_len',            65536,       ... % 脉冲响应长度
     'play_duration',     20,          ... % 播放时长(秒)
     'bright_gain',       1,           ... % 明区增益
-    'dark_gain',         0,           ... % 暗区增益
+    'dark_gain',         1,           ... % 暗区增益
     'fs',                48000,       ... % 采样率
-    'audio_level',       -27,         ... % 输出电平(dB)
     'mic_sensitivity',   [0.0087 0.0088 0.0085 0.0083 0.0087 0.0087 0.0082 0.0076], ... % 麦克风灵敏度
     'zone_number',       2,           ... % 分区数量
     'cut_start_idx',     300,         ... % 切割IR的起始点 
@@ -27,8 +26,8 @@ audioConfig = struct(...
     'sampleRate', 48000,      ...% 采样率
     'deviceName', 'ASIO MADIface USB',  ...% 设备名称
     'bufferSize', 1024,       ...% 缓冲区大小
-    'outputChannels', [3:6,15:30],  ...% 输出通道映射
-    'outputLevelDB', -27     ...% 输出电平(dB)
+    'outputChannels', 15:30,  ...% 输出通道映射
+    'audio_level', -27     ...% 输出电平(dB)
 );
 
 %% 控制标志
@@ -63,7 +62,6 @@ half_filterLen = config.filter_len/2;
 filename1 = "hong_speech0202.mat";
 filename2 = "渡口2.wav";
 filename3 = "渡口2.wav";
-fs = 48000;
 
 [signal1, signal2, signal3] = getSSZAudioSignal3(filename1, filename2, filename3, 1, config.play_duration*fs);
 fft_num = config.filter_len + config.play_duration*fs-1;
@@ -75,9 +73,28 @@ output_final = config.bright_gain*output1(half_filterLen:half_filterLen+config.p
                config.dark_gain*output2(half_filterLen:half_filterLen+config.play_duration*fs - 1,:);
 
 
-
 %% 按通道播放音频信号
+output_final = output_final * 10^(audioConfig.audio_level/20);
 
+player = audioDeviceWriter('Driver','CoreAudio',...
+                           'SampleRate',config.fs,...
+                           'BufferSize',audioConfig.bufferSize,...
+                           'Device','Default',...
+                           'ChannelMappingSource','Property',...
+                           'ChannelMapping',audioConfig.outputChannels);
+totalSamples = size(output_final, 1);
+numBuffer = ceil(totalSamples / audioConfig.bufferSize);
+
+for idxBuffer = 1:numBuffer
+    startIdx = (idxBuffer-1)*audioConfig.bufferSize + 1;
+    endIdx = min(idxBuffer*audioConfig.bufferSize, totalSamples);
+
+    play = output_final(startIdx:endIdx, 1:size(output_final,2));
+
+    player(play);
+end
+
+release(player);
 %% 读取脉冲响应和传递函数
 function [irData_cut, tfData] = load_IR_TF(config, flags)
      if flags.recalculate_tf || ~exist('ssz_tfData.mat','file')
