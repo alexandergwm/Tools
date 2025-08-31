@@ -6,7 +6,7 @@ clc
 filename = 'music.wav';
 [sig, fs] = audioread(filename);
 Audio_level = -20;             % 播放音频大小
-sig = sig * 10^(Audio_level/15);
+sig = sig * 10^(Audio_level/20);
 SamplePerFrame = 1024;         % 声卡每次采集的信号缓冲区长度
 NChsSpks = [16];               % 播放通道映射
 numSPK = numel(NChsSpks);
