@@ -27,11 +27,13 @@ typedef struct
     int FrameIdx_A;
     int FrameIdx_B;
     int FrameIdx_C;
-    double K;
-    double L;
-    double Dt;
-    double Di;
-    double Do;
+    long double K;
+    long double L;
+    long double Dt;
+    long double Di;
+    long double Do;
+    int FadeInSamples;      // 新增：淡入样本数
+    int FadeOutSamples;     // 新增：淡出样本数
 } GEN_SWEEP_SET;
 #pragma pack()
 
@@ -39,70 +41,76 @@ GEN_SWEEP_SET Sweep_Set;
 
 void Gen_Sweep_Init(void)
 {
-    // 计算总帧数 - 与MATLAB保持一致
+    // 计算总帧数
     Sweep_Set.Frame_Total = (int)((SIG_LEN + SILENCE_LEN) * FS / BLOCK_SIZE);
 
-    // 计算关键帧索引 - 与MATLAB保持一致
+    // 计算关键帧索引
     Sweep_Set.FrameIdx_A = (int)(FADE_IN * FS / BLOCK_SIZE);
     Sweep_Set.FrameIdx_B = (int)((SIG_LEN - FADE_OUT) * FS / BLOCK_SIZE);
     Sweep_Set.FrameIdx_C = (int)(SIG_LEN * FS / BLOCK_SIZE);
 
-    // 计算扫频参数 - 与MATLAB保持一致
+    // 计算淡入淡出样本数（关键修正！）
+    Sweep_Set.FadeInSamples = (int)(FADE_IN * FS);
+    Sweep_Set.FadeOutSamples = (int)(FADE_OUT * FS);
+
+    // 计算扫频参数
     Sweep_Set.K = (SIG_LEN * F_START * 2 * PI) / log(F_END / F_START);
     Sweep_Set.L = log(F_END / F_START) / SIG_LEN;
 
     // 时间步长
     Sweep_Set.Dt = 1.0 / FS;
 
-    // 淡入淡出参数 - 修正计算方式
-    Sweep_Set.Di = (PI / 2.0) / (Sweep_Set.FrameIdx_A * BLOCK_SIZE);
-    Sweep_Set.Do = (PI / 2.0) / ((Sweep_Set.FrameIdx_C - Sweep_Set.FrameIdx_B) * BLOCK_SIZE);
+    // 淡入淡出参数 - 关键修正！
+    // 使用实际的样本数量，而不是帧索引
+    Sweep_Set.Di = (PI / 2.0) / Sweep_Set.FadeInSamples;
+    Sweep_Set.Do = (PI / 2.0) / Sweep_Set.FadeOutSamples;
 }
 
-int Gen_Sweep_Fun(int Frame_Num, float *Buff)
+int Gen_Sweep_Fun(int Frame_Num, long double *Buff)
 {
     if (Frame_Num >= Sweep_Set.FrameIdx_C)
     {
         // 静音段
-        memset(Buff, 0, BLOCK_SIZE * sizeof(float));
+        memset(Buff, 0, BLOCK_SIZE * sizeof(long double));
         return 0;
     }
 
-    // 计算当前帧的起始时间（与MATLAB保持一致）
-    double start_time = Frame_Num * BLOCK_SIZE * Sweep_Set.Dt;
+    // 计算当前帧的起始样本索引
+    int start_sample_index = Frame_Num * BLOCK_SIZE;
+    double start_time = start_sample_index * Sweep_Set.Dt;
 
     if (Frame_Num >= Sweep_Set.FrameIdx_A && Frame_Num < Sweep_Set.FrameIdx_B)
     {
         // 主扫频段（无淡入淡出）
         for (int i = 0; i < BLOCK_SIZE; i++)
         {
-            double t = start_time + i * Sweep_Set.Dt;
-            double phase = Sweep_Set.K * (exp(t * Sweep_Set.L) - 1.0);
-            Buff[i] = (float)sin(phase);
+            long double t = start_time + i * Sweep_Set.Dt;
+            long double phase = Sweep_Set.K * (expd(t * Sweep_Set.L) - 1.0);
+            Buff[i] = (long double)sin(phase);
         }
     }
     else if (Frame_Num < Sweep_Set.FrameIdx_A)
     {
-        // 淡入段 - 与MATLAB保持一致
+        // 淡入段 - 修正索引计算
         for (int i = 0; i < BLOCK_SIZE; i++)
         {
-            double t = start_time + i * Sweep_Set.Dt;
-            double sample_index = Frame_Num * BLOCK_SIZE + i;
-            double fade_factor = sin(sample_index * Sweep_Set.Di);
-            double phase = Sweep_Set.K * (exp(t * Sweep_Set.L) - 1.0);
-            Buff[i] = (float)(sin(phase) * fade_factor);
+            long double t = start_time + i * Sweep_Set.Dt;
+            int sample_index = start_sample_index + i;
+            long double fade_factor = sin(sample_index * Sweep_Set.Di);
+            long double phase = Sweep_Set.K * (expd(t * Sweep_Set.L) - 1.0);
+            Buff[i] = (long double)(sin(phase) * fade_factor);
         }
     }
     else if (Frame_Num >= Sweep_Set.FrameIdx_B && Frame_Num < Sweep_Set.FrameIdx_C)
     {
-        // 淡出段 - 与MATLAB保持一致
+        // 淡出段 - 修正索引计算
         for (int i = 0; i < BLOCK_SIZE; i++)
         {
-            double t = start_time + i * Sweep_Set.Dt;
-            double sample_index = (Frame_Num - Sweep_Set.FrameIdx_B) * BLOCK_SIZE + i;
-            double fade_factor = cos(sample_index * Sweep_Set.Do);
-            double phase = Sweep_Set.K * (exp(t * Sweep_Set.L) - 1.0);
-            Buff[i] = (float)(sin(phase) * fade_factor);
+        	long double t = start_time + i * Sweep_Set.Dt;
+            int sample_index = start_sample_index + i - Sweep_Set.FrameIdx_B * BLOCK_SIZE;
+            long double fade_factor = cos(sample_index * Sweep_Set.Do);
+            long double phase = Sweep_Set.K * (expd(t * Sweep_Set.L) - 1.0);
+            Buff[i] = (long double)(sin(phase) * fade_factor);
         }
     }
     else
@@ -112,6 +120,7 @@ int Gen_Sweep_Fun(int Frame_Num, float *Buff)
 
     return 0;
 }
+
 
 void Gen_Sweep_Main(void)
 {
@@ -129,7 +138,7 @@ void Gen_Sweep_Main(void)
 
     printf("[%s] Write Start\n", filename);
 
-    float *out_buffer = (float*)malloc(BLOCK_SIZE * sizeof(float));
+    long double *out_buffer = (long double*)malloc(BLOCK_SIZE * sizeof(long double));
     if (!out_buffer)
     {
         printf("Error: Memory allocation failed!\n");
@@ -149,7 +158,7 @@ void Gen_Sweep_Main(void)
             continue;
         }
 
-        size_t written = fwrite(out_buffer, sizeof(float), BLOCK_SIZE, fp);
+        size_t written = fwrite(out_buffer, sizeof(long double), BLOCK_SIZE, fp);
         if (written != BLOCK_SIZE)
         {
             printf("Error: Write failed at frame [%d]\n", i);

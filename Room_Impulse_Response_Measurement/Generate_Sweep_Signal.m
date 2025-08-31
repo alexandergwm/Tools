@@ -1,10 +1,13 @@
+%%
+% 逐帧生成正弦指数扫频信号
 clear
 close all
-
+clc
+%%
 % 参数设置
 T_sig = 6;          % 信号持续时间（秒）
 T_silence = 2;      % 静音持续时间（秒）
-fs = 48000;         % 采样率（Hz）
+fs = 48e3;         % 采样率（Hz）
 fadeInTime = 0.08;  % 淡入时间（秒）
 fadeOutTime = 0.005;% 淡出时间（秒）
 Frame_len = 240;    % 帧长度（样本数）
@@ -53,7 +56,7 @@ fileID = fopen("out_Sweep.dat", 'rb');
 if fileID == -1
     error('无法打开文件 out_Sweep.dat');
 end
-C_Data = fread(fileID, 'float32');
+C_Data = fread(fileID, 'float64');
 fclose(fileID);
 
 % 确保数据长度一致
@@ -63,7 +66,7 @@ C_Data = C_Data(1:minLen);
 
 % 计算误差
 Error = yt - C_Data;
-
+y_mat = sweeptone(6,2,48000,SweepFrequencyRange=[1,24e3],ExcitationLevel=0);
 % 绘制结果
 figure;
 subplot(3,1,1);
@@ -88,3 +91,8 @@ fprintf('MATLAB\t\tC\t\t误差\n');
 for i = 1:min(10, length(yt))
     fprintf('%.6f\t%.6f\t%.6f\n', yt(i), C_Data(i), Error(i));
 end
+
+%%
+error2 = y_mat - yt;
+%%
+error3 = y_mat - C_Data;
