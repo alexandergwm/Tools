@@ -152,22 +152,30 @@ function parseLinkerMap(xmlFile, outputFile)
         dualPrint(fid, ' 输出段数量: %d, 大符号数量: %d\n', sectionCount, largeSymbolCount);
     end
 
-    % -------- 表格总结 --------
+       % -------- 表格总结 --------
     dualPrint(fid, '\n\n================ 内存段总结表 ================\n');
-    dualPrint(fid, '| %-13s | %-15s | %-12s | %-12s | %-10s | %-12s | %-12s |\n', ...
-        'ID', 'Name', 'Start', 'Width', 'Used(KB)', 'Unused(KB)', 'Total(KB)');
-    dualPrint(fid, '---------------------------------------------------------------------------------------------------\n');
+    % 修改表格头：增加End Addr列，移除Width列
+    dualPrint(fid, '| %-10s | %-12s | %-12s | %-12s | %-10s | %-12s | %-12s |\n', ...
+        'ID', 'Name', 'Start Addr', 'End Addr', 'Used(KB)', 'Unused(KB)', 'Total(KB)');
+    dualPrint(fid, '-------------------------------------------------------------------------------------------------------\n');
 
     for i = 1:size(memSummary, 1)
         usedKB = memSummary{i, 6} / 1024;
         unusedKB = memSummary{i, 7} / 1024;
         totalKB = memSummary{i, 9};
         
-        dualPrint(fid, '| %-13s | %-15s | %-12s | %-12d | %-10.2f | %-12.2f | %-12.2f |\n', ...
-            memSummary{i,1}, memSummary{i,2}, memSummary{i,3}, ...
-            memSummary{i,5}, usedKB, unusedKB, totalKB);
+        % 修改：打印结束地址(第4列)替代原宽度(第5列)
+        dualPrint(fid, '| %-10s | %-12s | %-12s | %-12s | %-10.2f | %-12.2f | %-12.2f |\n', ...
+            memSummary{i,1}, ...
+            memSummary{i,2}, ...
+            memSummary{i,3}, ...  % Start Address
+            memSummary{i,4}, ...  % End Address (新增)
+            usedKB, ...
+            unusedKB, ...
+            totalKB);
     end
-    dualPrint(fid, '---------------------------------------------------------------------------------------------------\n');
+    dualPrint(fid, '-------------------------------------------------------------------------------------------------------\n');
+
 
     % -------- 分类统计 (针对ADSP-21569内存布局) --------
     % 初始化统计变量 (单位: KB)
