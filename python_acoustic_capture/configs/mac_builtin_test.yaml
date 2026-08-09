@@ -1,0 +1,63 @@
+audio:
+  backend: sounddevice
+  device: null
+  input_device: null
+  output_device: null
+  sample_rate: 48000
+  block_size: 1024
+  input_channels:
+  - 1
+  target_output_channel: 1
+  interferer_output_channel: 2
+  latency: high
+  dtype: float32
+general:
+  action: play_record
+  source_file: ../audio/source.wav
+  duration_s: 2.0
+  level_dbfs: -42.0
+  output_channel: 1
+sweep:
+  start_hz: 40.0
+  end_hz: 22000.0
+  duration_s: 8.0
+  pre_silence_s: 1.0
+  post_silence_s: 3.0
+  fade_s: 0.02
+  level_dbfs: -30.0
+  rir_duration_s: 2.0
+  pre_peak_s: 0.01
+repeats:
+  minimum: 4
+  maximum: 10
+  correlation_threshold: 0.98
+  peak_drift_samples: 2
+  required_stable_takes: 3
+  reject_clipped: true
+  clip_threshold: 0.999
+  pause_s: 0.5
+scene:
+  items:
+  - ambient
+  - target_only
+  - interferer_only
+  - mixture
+  duration_s: null
+  ambient_duration_s: 10.0
+  target_file: ../audio/target.wav
+  interferer_file: ../audio/interferer.wav
+  target_level_dbfs: -26.0
+  interferer_level_dbfs: -26.0
+  repetitions: 1
+  countdown_s: 3.0
+  gap_s: 1.0
+storage:
+  root: ../runs
+  session_name: mac_builtin_hardware_test
+  wav_subtype: FLOAT
+  save_playback_reference: true
+  compute_sha256: true
+metadata:
+  purpose: macOS 内置扬声器与麦克风播录验收
+  signal: 合成流程验收音频
+  notes: 播放电平为负 42 满刻度分贝

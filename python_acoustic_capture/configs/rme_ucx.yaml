@@ -1,0 +1,92 @@
+audio:
+  backend: sounddevice
+  # 先运行“查看音频设备”，若名称不一致，请换成列表里的 RME ASIO 设备编号或完整名称。
+  device: null
+  input_device: "ASIO Fireface USB"
+  output_device: "ASIO Fireface USB"
+  sample_rate: 48000
+  block_size: 1024
+  input_channels: [1, 2]
+  target_output_channel: 1
+  interferer_output_channel: 2
+  latency: high
+  dtype: float32
+
+general:
+  action: play_record
+  source_file: ../audio/source.wav
+  duration_s: 5
+  level_dbfs: -30
+  output_channel: 1
+
+sweep:
+  start_hz: 40
+  end_hz: 22000
+  duration_s: 8
+  pre_silence_s: 1
+  post_silence_s: 3
+  fade_s: 0.02
+  # 首次接线验收从低电平开始，确认路由安全后再逐步提高。
+  level_dbfs: -30
+  rir_duration_s: 2
+  pre_peak_s: 0.01
+
+repeats:
+  minimum: 4
+  maximum: 10
+  correlation_threshold: 0.98
+  peak_drift_samples: 2
+  required_stable_takes: 3
+  reject_clipped: true
+  clip_threshold: 0.999
+  pause_s: 0.5
+
+scene:
+  # GUI 中可选择任意子集；正式完整采集建议保留下列四项。
+  items: [ambient, target_only, interferer_only, mixture]
+  duration_s: null
+  target_file: ../audio/target.wav
+  interferer_file: ../audio/interferer.wav
+  target_level_dbfs: -26
+  interferer_level_dbfs: -26
+  repetitions: 1
+  countdown_s: 3
+  ambient_duration_s: 10
+  gap_s: 1
+
+storage:
+  root: ../runs
+  session_name: headA_wearing01_azimuth090_height_ear
+  wav_subtype: FLOAT
+  save_playback_reference: true
+  compute_sha256: true
+
+metadata:
+  operator: ""
+  room_id: ""
+  artificial_head_id: headA
+  device_under_test: ""
+  wearing_id: wearing01
+  microphone_1: left
+  microphone_2: right
+  target:
+    source_id: artificial_head_mouth
+    azimuth_deg: 0
+    elevation_deg: 0
+    distance_m: null
+    height_m: null
+  interferer:
+    source_id: interferer_speaker_01
+    azimuth_deg: 90
+    elevation_deg: 0
+    distance_m: null
+    height_m: null
+  rme:
+    clock_source: internal
+    input_gain_1_db: null
+    input_gain_2_db: null
+    totalmix_snapshot: ""
+  environment:
+    temperature_c: null
+    humidity_percent: null
+  notes: ""

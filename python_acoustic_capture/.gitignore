@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+runs/
+audio/
+mac_gui_launcher.log
+build/
+dist/
+*.egg-info/

@@ -1,0 +1,77 @@
+#!/bin/zsh -f
+
+# A Finder-safe launcher. `-f` prevents interactive .zshrc/oh-my-zsh prompts
+# from consuming the command that Finder is trying to execute.
+set -u
+
+APP_EXECUTABLE_DIR="${0:A:h}"
+PROJECT_DIR="${APP_EXECUTABLE_DIR}/../../.."
+PROJECT_DIR="${PROJECT_DIR:A}"
+VENV_DIR="$PROJECT_DIR/.venv"
+PYTHON_EXE="$VENV_DIR/bin/python"
+LOG_FILE="$PROJECT_DIR/mac_gui_launcher.log"
+
+show_error() {
+    /usr/bin/osascript - "$1" "$LOG_FILE" <<'APPLESCRIPT'
+on run argv
+    display dialog (item 1 of argv) & return & return & "日志：" & (item 2 of argv) buttons {"确定"} default button "确定" with icon stop
+end run
+APPLESCRIPT
+}
+
+notify_user() {
+    /usr/bin/osascript - "$1" <<'APPLESCRIPT'
+on run argv
+    display notification (item 1 of argv) with title "声学采集工具"
+end run
+APPLESCRIPT
+}
+
+{
+    echo "[$(/bin/date)] 启动器已运行"
+    echo "项目目录：$PROJECT_DIR"
+
+    if [[ ! -x "$PYTHON_EXE" ]]; then
+        notify_user "首次启动：正在创建 Python 环境，可能需要几分钟。"
+        SYSTEM_PYTHON=""
+        for candidate in \
+            /opt/homebrew/bin/python3 \
+            /usr/local/bin/python3 \
+            /opt/anaconda3/bin/python3 \
+            /usr/bin/python3; do
+            if [[ -x "$candidate" ]]; then
+                SYSTEM_PYTHON="$candidate"
+                break
+            fi
+        done
+        if [[ -z "$SYSTEM_PYTHON" ]]; then
+            show_error "未找到 Python 3。请安装 Python 3.10 或更高版本后重试。"
+            exit 1
+        fi
+        echo "Python: $SYSTEM_PYTHON"
+        if ! "$SYSTEM_PYTHON" -m venv "$VENV_DIR"; then
+            show_error "无法创建 Python 虚拟环境。"
+            exit 1
+        fi
+    fi
+
+    echo "正在安装或更新声学采集工具……"
+    if ! "$PYTHON_EXE" -m pip install -e "$PROJECT_DIR"; then
+        show_error "无法安装声学采集工具所需组件。"
+        exit 1
+    fi
+
+    if [[ ! -f "$PROJECT_DIR/audio/target.wav" ]]; then
+        echo "正在生成无版权的流程验收音频……"
+        if ! "$PYTHON_EXE" -m acoustic_capture demo-audio --output-dir "$PROJECT_DIR/audio"; then
+            show_error "无法生成流程验收音频。"
+            exit 1
+        fi
+    fi
+
+    echo "正在打开图形界面……"
+    if ! "$PYTHON_EXE" -m acoustic_capture gui "$PROJECT_DIR/configs/simulated.yaml"; then
+        show_error "图形界面异常退出。"
+        exit 1
+    fi
+} >>"$LOG_FILE" 2>&1
