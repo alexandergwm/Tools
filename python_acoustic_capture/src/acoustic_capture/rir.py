@@ -136,7 +136,8 @@ def capture_rir(
                 ]
                 drift = [peaks[ch] - reference_peaks[ch] for ch in range(channel_count)]
             clipped = any(bool(item["clipped"]) for item in raw_metrics)
-            accepted_now = not (repeat_cfg.reject_clipped and clipped)
+            xrun = bool(capture.status.get("xrun"))
+            accepted_now = not xrun and not (repeat_cfg.reject_clipped and clipped)
             if accepted and min(correlations) < repeat_cfg.correlation_threshold:
                 accepted_now = False
             metrics = {
@@ -147,6 +148,7 @@ def capture_rir(
                 "peak_drift_samples": drift,
                 "correlation_to_running_average": correlations,
                 "backend_status": capture.status,
+                "audio_xrun": xrun,
             }
             store.write_audio(f"raw/take_{take_index:03d}.wav", raw, fs)
             store.write_audio(f"processed/take_{take_index:03d}_rir.wav", aligned, fs)
@@ -160,7 +162,7 @@ def capture_rir(
                 log(f"  已接受；相关性={min(correlations):.4f}，峰值漂移={drift}")
             else:
                 stable_count = 0
-                log(f"  已拒绝；削波={clipped}，相关性={min(correlations):.4f}")
+                log(f"  已拒绝；音频丢帧={xrun}，削波={clipped}，相关性={min(correlations):.4f}")
 
             enough = len(accepted) >= repeat_cfg.minimum
             stable = stable_count >= repeat_cfg.required_stable_takes

@@ -5,7 +5,7 @@ import numpy as np
 import soundfile as sf
 
 from acoustic_capture.audio import CaptureResult, SimulatedBackend
-from acoustic_capture.check import capture_input_check
+from acoustic_capture.check import capture_input_check, capture_silent_duplex_check
 from acoustic_capture.config import ExperimentConfig
 from acoustic_capture.general import capture_general_io
 from acoustic_capture.rir import capture_rir
@@ -52,6 +52,36 @@ def test_rir_supports_more_than_two_microphones(tmp_path: Path):
     store = capture_rir(cfg, SimulatedBackend(cfg.audio), log=lambda _: None)
     average, _ = sf.read(store.path("processed/average_rir.wav"), always_2d=True)
     assert average.shape[1] == 4
+
+
+def test_rir_rejects_take_with_audio_xrun(tmp_path: Path):
+    class FirstTakeXrunBackend(SimulatedBackend):
+        def __init__(self, config):
+            super().__init__(config)
+            self.take = 0
+
+        def play_record(self, output: np.ndarray) -> CaptureResult:
+            self.take += 1
+            result = super().play_record(output)
+            result.status["xrun"] = self.take == 1
+            return result
+
+    cfg = ExperimentConfig()
+    cfg.audio.backend = "simulated"
+    cfg.sweep.duration_s = 0.2
+    cfg.sweep.pre_silence_s = 0.05
+    cfg.sweep.post_silence_s = 0.1
+    cfg.sweep.rir_duration_s = 0.08
+    cfg.repeats.minimum = 2
+    cfg.repeats.maximum = 3
+    cfg.repeats.required_stable_takes = 1
+    cfg.repeats.correlation_threshold = 0.85
+    cfg.repeats.pause_s = 0
+    cfg.storage.root = str(tmp_path)
+    cfg.storage.compute_sha256 = False
+    store = capture_rir(cfg, FirstTakeXrunBackend(cfg.audio), log=lambda _: None)
+    assert store.manifest["summary"]["rejected_takes"] == [1]
+    assert store.manifest["summary"]["accepted_takes"] == [2, 3]
 
 
 def test_selectable_scene_block(tmp_path: Path):
@@ -177,4 +207,33 @@ def test_input_check_warns_when_all_microphones_are_zero(tmp_path: Path):
     cfg.storage.root = str(tmp_path)
     cfg.storage.compute_sha256 = False
     store = capture_input_check(cfg, SilentBackend(cfg.audio), duration_s=0.01)
+    assert store.manifest["summary"]["warnings"]
+
+
+def test_silent_duplex_check_opens_both_output_channels(tmp_path: Path):
+    class InspectBackend(SimulatedBackend):
+        def play_record(self, output: np.ndarray) -> CaptureResult:
+            assert output.shape == (480, 2)
+            assert np.count_nonzero(output) == 0
+            return CaptureResult(np.zeros((480, 2), dtype=np.float32), {"xrun": False})
+
+    cfg = ExperimentConfig()
+    cfg.audio.backend = "simulated"
+    cfg.storage.root = str(tmp_path)
+    cfg.storage.compute_sha256 = False
+    store = capture_silent_duplex_check(cfg, InspectBackend(cfg.audio), duration_s=0.01)
+    assert store.manifest["status"] == "completed"
+    assert store.manifest["summary"]["output_channels_opened"] == 2
+
+
+def test_silent_duplex_check_reports_audio_xrun(tmp_path: Path):
+    class XrunBackend(SimulatedBackend):
+        def play_record(self, output: np.ndarray) -> CaptureResult:
+            return CaptureResult(np.zeros((len(output), 2), dtype=np.float32), {"xrun": True})
+
+    cfg = ExperimentConfig()
+    cfg.audio.backend = "simulated"
+    cfg.storage.root = str(tmp_path)
+    cfg.storage.compute_sha256 = False
+    store = capture_silent_duplex_check(cfg, XrunBackend(cfg.audio), duration_s=0.01)
     assert store.manifest["summary"]["warnings"]

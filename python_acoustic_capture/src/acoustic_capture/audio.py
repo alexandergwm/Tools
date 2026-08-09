@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+import os
+import sys
 from typing import Any
 
 import numpy as np
@@ -41,11 +43,27 @@ class AudioBackend(ABC):
 
 class SoundDeviceBackend(AudioBackend):
     def _module(self):
+        _enable_windows_asio()
         try:
             import sounddevice as sd
         except Exception as exc:  # pragma: no cover - depends on local driver
             raise RuntimeError("无法加载 sounddevice/PortAudio，请检查安装和声卡驱动") from exc
         return sd
+
+    @staticmethod
+    def _callback_status(sd) -> dict[str, Any]:
+        """Return PortAudio callback faults from the just-finished operation."""
+        try:
+            flags = sd.get_status()
+        except Exception:
+            return {"text": "", "xrun": False}
+        names = ("input_underflow", "input_overflow", "output_underflow", "output_overflow")
+        values = {name: bool(getattr(flags, name, False)) for name in names}
+        return {
+            "text": str(flags),
+            "xrun": any(values.values()),
+            **values,
+        }
 
     def _devices(self):
         input_device = self.config.input_device if self.config.input_device is not None else self.config.device
@@ -74,12 +92,25 @@ class SoundDeviceBackend(AudioBackend):
                 return {"error": str(exc), "configured": device}
 
         input_device, output_device = self._devices()
+        try:
+            portaudio_version = sd.get_portaudio_version()[1]
+        except Exception:
+            portaudio_version = None
         return {
             "backend": "sounddevice",
+            "sounddevice_version": getattr(sd, "__version__", None),
+            "portaudio_version": portaudio_version,
+            "windows_asio_requested": bool(os.environ.get("SD_ENABLE_ASIO")),
             "default_devices": list(sd.default.device),
             "input_device": describe(input_device, "input"),
             "output_device": describe(output_device, "output"),
         }
+
+    def _operation_status(self, sd) -> dict[str, Any]:
+        status = self._device_status(sd)
+        status["callback_status"] = self._callback_status(sd)
+        status["xrun"] = status["callback_status"]["xrun"]
+        return status
 
     def check_settings(
         self,
@@ -104,7 +135,33 @@ class SoundDeviceBackend(AudioBackend):
                 dtype=self.config.dtype,
                 samplerate=self.config.sample_rate,
             )
-        return self._device_status(sd)
+        status = self._device_status(sd)
+        input_info = status.get("input_device", {})
+        output_info = status.get("output_device", {})
+        input_host = input_info.get("host_api")
+        output_host = output_info.get("host_api")
+        if input_required and output_channels is not None and input_host != output_host:
+            raise RuntimeError(
+                "同步播录要求录制设备和播放设备属于同一主机接口；"
+                f"当前分别为 {input_info.get('host_api_name')} 和 {output_info.get('host_api_name')}"
+            )
+        if (
+            input_required
+            and output_channels is not None
+            and input_info.get("host_api_name") == "ASIO"
+            and input_info.get("index") != output_info.get("index")
+        ):
+            raise RuntimeError("ASIO 同步播录应为输入和输出选择同一个 RME 双工设备")
+        warnings = []
+        if sys.platform == "win32" and input_required and output_channels is not None:
+            host_name = str(input_info.get("host_api_name") or "")
+            if host_name != "ASIO":
+                warnings.append(
+                    f"当前同步播录使用 {host_name or '未知接口'}，不是 ASIO；"
+                    "正式 RME 数据采集建议选择设备列表中主机接口为 ASIO 的设备"
+                )
+        status["warnings"] = warnings
+        return status
 
     def play_record(self, output: np.ndarray) -> CaptureResult:
         sd = self._module()
@@ -124,7 +181,7 @@ class SoundDeviceBackend(AudioBackend):
             blocking=True,
         )
         selected = recording[:, np.asarray(self.config.input_channels) - 1]
-        return CaptureResult(np.asarray(selected, dtype=np.float32), self._device_status(sd))
+        return CaptureResult(np.asarray(selected, dtype=np.float32), self._operation_status(sd))
 
     def record(self, frames: int) -> CaptureResult:
         sd = self._module()
@@ -141,7 +198,7 @@ class SoundDeviceBackend(AudioBackend):
             blocking=True,
         )
         selected = recording[:, np.asarray(self.config.input_channels) - 1]
-        return CaptureResult(np.asarray(selected, dtype=np.float32), self._device_status(sd))
+        return CaptureResult(np.asarray(selected, dtype=np.float32), self._operation_status(sd))
 
     def play(self, output: np.ndarray) -> dict[str, Any]:
         sd = self._module()
@@ -154,7 +211,7 @@ class SoundDeviceBackend(AudioBackend):
             latency=self.config.latency,
             blocking=True,
         )
-        return self._device_status(sd)
+        return self._operation_status(sd)
 
 
 class SimulatedBackend(AudioBackend):
@@ -224,6 +281,10 @@ def format_hardware_status(status: dict[str, Any]) -> str:
     if status.get("message"):
         return str(status["message"])
     lines = [f"音频后端：{status.get('backend', '未知')}"]
+    if status.get("sounddevice_version"):
+        lines.append(f"sounddevice 版本：{status['sounddevice_version']}")
+    if status.get("portaudio_version"):
+        lines.append(f"PortAudio：{status['portaudio_version']}")
     if "default_devices" in status:
         lines.append(f"系统默认输入/输出设备编号：{status['default_devices']}")
     for key, label in (("input_device", "录制设备"), ("output_device", "播放设备")):
@@ -240,11 +301,14 @@ def format_hardware_status(status: dict[str, Any]) -> str:
                 f"  默认采样率：{device.get('default_sample_rate', '未知')}",
             ]
         )
+    for warning in status.get("warnings", []):
+        lines.append(f"警告：{warning}")
     return "\n".join(lines)
 
 
 def list_devices() -> str:
     try:
+        _enable_windows_asio()
         import sounddevice as sd
 
         devices = sd.query_devices()
@@ -265,6 +329,7 @@ def list_devices() -> str:
 def device_choices() -> list[str]:
     """Compact GUI choices; the numeric prefix is accepted by sounddevice."""
     try:
+        _enable_windows_asio()
         import sounddevice as sd
         host_apis = sd.query_hostapis()
         return [
@@ -274,3 +339,16 @@ def device_choices() -> list[str]:
         ]
     except Exception:
         return []
+
+
+def _enable_windows_asio() -> None:
+    """Ask pip's sounddevice package to load its ASIO-enabled DLL on Windows.
+
+    Set ``ACOUSTIC_CAPTURE_ENABLE_ASIO=0`` before launching to opt out when
+    diagnosing a machine-specific PortAudio problem.
+    """
+    if (
+        sys.platform == "win32"
+        and os.environ.get("ACOUSTIC_CAPTURE_ENABLE_ASIO", "1") != "0"
+    ):
+        os.environ.setdefault("SD_ENABLE_ASIO", "1")

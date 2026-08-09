@@ -436,7 +436,11 @@ class CaptureGUI(tk.Tk):
         try:
             config = self._apply_values()
             result = check_hardware_settings(config.audio)
-            messagebox.showinfo("声卡检查通过", format_hardware_status(result))
+            details = format_hardware_status(result)
+            if result.get("warnings"):
+                messagebox.showwarning("声卡参数可用，但存在风险", details)
+            else:
+                messagebox.showinfo("声卡检查通过", details)
         except Exception as exc:
             messagebox.showerror("声卡检查失败", str(exc))
 

@@ -118,7 +118,7 @@ class ExperimentConfig:
         channels = a.input_channels + [a.target_output_channel, a.interferer_output_channel]
         if any((not isinstance(ch, int)) or ch < 1 for ch in channels):
             raise ValueError("channel numbers are one-based positive integers")
-        if a.sample_rate < 8_000 or a.block_size < 16:
+        if a.sample_rate < 8_000 or (a.block_size != 0 and a.block_size < 16):
             raise ValueError("sample_rate or block_size is unrealistically small")
         if self.general.action not in {"play", "record", "play_record"}:
             raise ValueError("general.action must be play, record, or play_record")

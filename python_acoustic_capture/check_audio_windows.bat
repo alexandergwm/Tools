@@ -2,6 +2,9 @@
 chcp 65001 >nul
 setlocal
 
+rem 确保设备列表和正式采集使用 sounddevice 随附的 ASIO 版 PortAudio。
+if not "%ACOUSTIC_CAPTURE_ENABLE_ASIO%"=="0" set "SD_ENABLE_ASIO=1"
+
 cd /d "%~dp0"
 set "PYTHON_EXE=.venv\Scripts\python.exe"
 
@@ -24,6 +27,18 @@ echo ============================================================
 if errorlevel 1 (
     echo.
     echo 声卡检查失败。请在 GUI 中选择正确的 RME 输入、输出设备后保存配置。
+    pause
+    exit /b 1
+)
+
+echo.
+echo ============================================================
+echo 用数字静音打开 1 秒 ASIO 同步播录流
+echo ============================================================
+"%PYTHON_EXE%" -m acoustic_capture check-duplex configs\rme_ucx.yaml --duration 1
+if errorlevel 1 (
+    echo.
+    echo 静音双工检查失败。请确认输入和输出选择同一个 RME ASIO 设备，并关闭占用 ASIO 的 DAW。
     pause
     exit /b 1
 )

@@ -5,7 +5,8 @@ audio:
   input_device: "ASIO Fireface USB"
   output_device: "ASIO Fireface USB"
   sample_rate: 48000
-  block_size: 1024
+  # 0 表示让 ASIO/PortAudio 使用声卡最合适的缓冲粒度，可降低额外缓冲和丢帧风险。
+  block_size: 0
   input_channels: [1, 2]
   target_output_channel: 1
   interferer_output_channel: 2

@@ -2,7 +2,9 @@
 
 ## 第一次启动
 
-1. 安装 RME 官方驱动，连接 Fireface UCX，并在 RME 设置中固定为 48 kHz。
+1. 从 [RME 官方下载页](https://rme-audio.de/downloads.html) 安装 Windows 10/11 Fireface USB
+   驱动，连接 Fireface UCX，并在 RME 设置中固定为 48 kHz。
+   本工具推荐使用 64 位 Intel/AMD Python 3.12；启动脚本会拒绝误装的 32 位 Python。
 2. 双击 `start_gui_windows.bat`。脚本会建立 `.venv`、安装本项目并打开中文版 GUI。
 3. 点击“查看音频设备”，优先选择主机接口标为 `ASIO` 的 RME 设备。
 4. 分别把“录制设备”和“播放设备”设为该 RME 设备；录制通道填写 `1,2`。
@@ -10,6 +12,12 @@
 
 如果设备列表里没有 RME ASIO，但能看到 RME WDM/WASAPI 设备，可以先用后者做低风险功能验证；
 正式同步多通道采集前，应确认所用 PortAudio 安装能够访问 RME ASIO。
+
+启动脚本已设置 `SD_ENABLE_ASIO=1`，让通过 pip 安装的 `sounddevice` 加载其 ASIO 版
+PortAudio DLL。设备列表中必须真正显示“主机接口：ASIO”才代表当前正在走 ASIO；仅设备名称中
+含有 ASIO 字样不算验证通过。不要用 Conda 环境替换脚本创建的 `.venv`，Conda 的 PortAudio
+通常不包含 ASIO。若 ASIO DLL 在个别机器上无法初始化，可临时设置
+`ACOUSTIC_CAPTURE_ENABLE_ASIO=0` 做故障定位，但不建议用这个状态采正式数据。
 
 ## TotalMix 路由
 
@@ -24,10 +32,16 @@
 双击 `check_audio_windows.bat`。它会：
 
 1. 列出 PortAudio 设备及主机接口；
-2. 检查所选设备是否支持 48 kHz、输入通道 1/2 和输出通道 1/2；
-3. 经人工确认后进行 5 秒双麦克风仅录制，并把完整结果保存到 `runs`。
+2. 检查所选设备是否支持 48 kHz、输入通道 1/2 和输出通道 1/2，并确认同步播录的输入/输出属于同一主机接口；
+3. 播放 1 秒数字静音，实际打开一次 RME ASIO 同步双工流；
+4. 经人工确认后进行 5 秒双麦克风仅录制，并把完整结果保存到 `runs`。
 
 检查录音波形不是全零、没有削波、左右通道与物理麦克风对应后，再开始扫频或正式场景采集。
+正式采集结果还会保存 PortAudio 的输入溢出/输出欠载状态；出现“音频丢帧”时，RIR 会拒绝该次，
+语音数据标签会标为异常。此时先提高 RME 驱动缓冲区，再重新采集。
+
+ASIO 通常会被单个程序独占。运行检查与正式采集前，请退出 DAW、测量软件以及其他正在使用
+RME ASIO 驱动的程序；Windows 系统声音可路由到别的设备，避免提示音混入实验。
 
 ## 安全顺序
 

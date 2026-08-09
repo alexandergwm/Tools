@@ -7,7 +7,7 @@ import json
 import sys
 
 from .audio import check_hardware_settings, create_backend, format_hardware_status, list_devices
-from .check import capture_input_check
+from .check import capture_input_check, capture_silent_duplex_check
 from .config import load_config
 from .demo import generate_demo_audio
 from .general import capture_general_io
@@ -28,6 +28,9 @@ def build_parser() -> argparse.ArgumentParser:
     check = sub.add_parser("check-input", help="进行一次不播放的短时麦克风录制检查")
     check.add_argument("config")
     check.add_argument("--duration", type=float, default=5.0)
+    duplex = sub.add_parser("check-duplex", help="播放数字静音并检查同步双工音频流")
+    duplex.add_argument("config")
+    duplex.add_argument("--duration", type=float, default=1.0)
     hardware = sub.add_parser("hardware-check", help="检查真实声卡的设备、通道和采样率")
     hardware.add_argument("config")
     io = sub.add_parser("io", help="执行仅播放、仅录制或同步播录")
@@ -66,6 +69,14 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "hardware-check":
             config = load_config(args.config)
             print(format_hardware_status(check_hardware_settings(config.audio)))
+        elif args.command == "check-duplex":
+            config = load_config(args.config)
+            store = capture_silent_duplex_check(config, create_backend(config.audio), args.duration)
+            print(store.root)
+            warnings = store.manifest.get("summary", {}).get("warnings", [])
+            if warnings:
+                print("质量警告：" + "；".join(warnings), file=sys.stderr)
+                return 2
         elif args.command == "io":
             config = load_config(args.config)
             if args.action:

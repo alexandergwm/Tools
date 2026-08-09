@@ -30,6 +30,18 @@ class FakeSoundDevice:
             "default_samplerate": 48_000.0,
         }
 
+    def get_status(self):
+        class Status:
+            input_underflow = False
+            input_overflow = True
+            output_underflow = False
+            output_overflow = False
+
+            def __str__(self):
+                return "input overflow"
+
+        return Status()
+
 
 def test_hardware_check_uses_highest_configured_rme_channels(monkeypatch):
     fake = FakeSoundDevice()
@@ -67,3 +79,5 @@ def test_play_record_keeps_only_selected_input_channels(monkeypatch):
     assert result.microphones.shape == (16, 2)
     assert np.allclose(result.microphones[:, 0], 1.0)
     assert np.allclose(result.microphones[:, 1], 3.0)
+    assert result.status["xrun"] is True
+    assert result.status["callback_status"]["input_overflow"] is True

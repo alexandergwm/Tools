@@ -125,6 +125,8 @@ def _relative(path: Path | None, root: Path) -> str:
 
 
 def _quality_flag(metrics_by_item: dict[str, dict]) -> str:
+    if any(bool(metrics.get("backend_status", {}).get("xrun")) for metrics in metrics_by_item.values()):
+        return "音频丢帧"
     channels = [
         channel
         for item, metrics in metrics_by_item.items()

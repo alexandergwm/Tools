@@ -65,6 +65,10 @@ def capture_general_io(
             warning = "录制信号所有通道均为全零，请检查麦克风权限、输入设备、通道路由或硬件静音状态。"
             summary["warnings"] = [warning]
             log(f"警告：{warning}")
+        if summary.get("backend_status", {}).get("xrun"):
+            warning = "本次音频流发生输入溢出或输出欠载，数据可能包含丢帧，不建议用于正式数据集。"
+            summary.setdefault("warnings", []).append(warning)
+            log(f"警告：{warning}")
         store.write_json("metrics/summary.json", summary)
         store.finish(summary)
         log(f"基础播录结果已保存到：{store.root}")
