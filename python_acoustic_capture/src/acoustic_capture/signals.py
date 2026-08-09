@@ -6,7 +6,15 @@ from pathlib import Path
 
 import numpy as np
 import soundfile as sf
-from scipy.signal import chirp, resample_poly
+from scipy.signal import resample_poly
+
+
+ESS_FORMULA = (
+    "瞬时频率：f(t) = f₀ · (f₁/f₀)^(t/T)\n"
+    "相位：φ(t) = 2π f₀T / ln(f₁/f₀) · [(f₁/f₀)^(t/T) − 1]\n"
+    "扫频：s(t) = 10^(L/20) · w(t) · sin(φ(t))\n"
+    "播放序列：x(t) = 前静默 ⊕ s(t) ⊕ 后静默，0 ≤ t < T"
+)
 
 
 def db_to_gain(db: float) -> float:
@@ -21,9 +29,28 @@ def exponential_sweep(
     fade_s: float,
     level_dbfs: float,
 ) -> np.ndarray:
+    """Generate an ESS directly from its analytic phase equation.
+
+    For start frequency f0, end frequency f1 and duration T:
+
+        f(t)   = f0 * (f1 / f0) ** (t / T)
+        phi(t) = 2*pi*f0*T/log(f1/f0) * ((f1/f0)**(t/T) - 1)
+        s(t)   = 10**(level_dbfs/20) * window(t) * sin(phi(t))
+
+    ``measurement_signal`` then concatenates configurable pre/post silence.
+    """
     count = round(sample_rate * duration_s)
     time = np.arange(count, dtype=np.float64) / sample_rate
-    signal = chirp(time, f0=start_hz, f1=end_hz, t1=duration_s, method="logarithmic")
+    log_ratio = np.log(end_hz / start_hz)
+    phase = (
+        2.0
+        * np.pi
+        * start_hz
+        * duration_s
+        / log_ratio
+        * (np.exp(log_ratio * time / duration_s) - 1.0)
+    )
+    signal = np.sin(phase)
     fade_n = min(round(fade_s * sample_rate), count // 2)
     if fade_n:
         ramp = np.sin(np.linspace(0, np.pi / 2, fade_n, endpoint=True)) ** 2

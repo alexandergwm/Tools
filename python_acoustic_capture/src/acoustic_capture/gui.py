@@ -19,7 +19,8 @@ from .audio import (
 from .config import ExperimentConfig, load_config, save_config
 from .general import capture_general_io
 from .rir import capture_rir
-from .scene import capture_scene_block
+from .scene import capture_scene_block, discover_source_pairs
+from .signals import ESS_FORMULA
 from .viewer import ResultsViewer
 
 
@@ -42,18 +43,29 @@ FIELDS = [
     ("sweep.duration_s", "扫频持续时间（秒）", float, "rir"),
     ("sweep.pre_silence_s", "扫频前静音（秒）", float, "rir"),
     ("sweep.post_silence_s", "扫频后静音（秒）", float, "rir"),
+    ("sweep.fade_s", "扫频淡入淡出（秒）", float, "rir"),
     ("sweep.level_dbfs", "扫频播放电平（满刻度分贝）", float, "rir"),
     ("sweep.rir_duration_s", "脉冲响应长度（秒）", float, "rir"),
+    ("sweep.pre_peak_s", "脉冲峰值前保留时间（秒）", float, "rir"),
     ("repeats.minimum", "最少脉冲响应采集次数", int, "rir"),
     ("repeats.maximum", "最多脉冲响应采集次数", int, "rir"),
     ("repeats.correlation_threshold", "脉冲响应相关性阈值", float, "rir"),
-    ("scene.target_file", "目标语音文件", str, "speech"),
-    ("scene.interferer_file", "干扰声音文件", str, "speech"),
-    ("scene.duration_s", "场景时长（留空取较短文件）", lambda x: None if not x else float(x), "speech"),
+    ("scene.source_mode", "语音来源模式", str, "speech"),
+    ("scene.duration_s", "每条片段时长（秒，推荐 4）", lambda x: None if not x else float(x), "speech"),
+    ("scene.target_file", "单文件模式：目标语音", str, "speech"),
+    ("scene.interferer_file", "单文件模式：干扰声音", str, "speech"),
+    ("scene.target_folder", "文件夹模式：目标语音目录", str, "speech"),
+    ("scene.interferer_folder", "文件夹模式：干扰声音目录", str, "speech"),
+    ("scene.pairing_mode", "目标与干扰配对方式", str, "speech"),
+    ("scene.file_extensions", "扫描扩展名（逗号分隔）", lambda x: [v.strip() for v in x.split(",") if v.strip()], "speech"),
+    ("scene.label_prefix", "标签前缀", str, "speech"),
+    ("scene.dataset_split", "数据集划分标签", str, "speech"),
     ("scene.target_level_dbfs", "目标播放电平（满刻度分贝）", float, "speech"),
     ("scene.interferer_level_dbfs", "干扰播放电平（满刻度分贝）", float, "speech"),
     ("scene.repetitions", "场景重复次数", int, "speech"),
+    ("scene.ambient_duration_s", "环境底噪时长（秒）", float, "speech"),
     ("scene.countdown_s", "每项开始前倒计时（秒）", float, "speech"),
+    ("scene.gap_s", "每项结束后间隔（秒）", float, "speech"),
     ("storage.root", "结果保存目录", str, "common"),
     ("storage.session_name", "测试名称", str, "common"),
 ]
@@ -62,6 +74,12 @@ ACTION_TO_LABEL = {"play_record": "同步播放并录制", "play": "仅播放", 
 LABEL_TO_ACTION = {label: action for action, label in ACTION_TO_LABEL.items()}
 BACKEND_TO_LABEL = {"sounddevice": "真实声卡", "simulated": "模拟声卡"}
 LABEL_TO_BACKEND = {label: backend for backend, label in BACKEND_TO_LABEL.items()}
+SOURCE_MODE_TO_LABEL = {"single": "单个文件", "folders": "文件夹批量"}
+LABEL_TO_SOURCE_MODE = {label: value for value, label in SOURCE_MODE_TO_LABEL.items()}
+PAIRING_MODE_TO_LABEL = {"cycle": "按顺序循环配对", "cartesian": "全部组合配对"}
+LABEL_TO_PAIRING_MODE = {label: value for value, label in PAIRING_MODE_TO_LABEL.items()}
+FILE_PATH_FIELDS = {"general.source_file", "scene.target_file", "scene.interferer_file"}
+FOLDER_PATH_FIELDS = {"scene.target_folder", "scene.interferer_folder", "storage.root"}
 SCENE_LABELS = {
     "ambient": "环境底噪",
     "target_only": "仅目标声源",
@@ -183,14 +201,51 @@ class CaptureGUI(tk.Tk):
                     values=list(ACTION_TO_LABEL.values()),
                     state="readonly",
                 )
+            elif name == "scene.source_mode":
+                input_widget = ttk.Combobox(
+                    body,
+                    textvariable=self.variables[name],
+                    values=list(SOURCE_MODE_TO_LABEL.values()),
+                    state="readonly",
+                )
+                input_widget.bind("<<ComboboxSelected>>", lambda _: self._update_scene_source_fields())
+            elif name == "scene.pairing_mode":
+                input_widget = ttk.Combobox(
+                    body,
+                    textvariable=self.variables[name],
+                    values=list(PAIRING_MODE_TO_LABEL.values()),
+                    state="readonly",
+                )
             elif name in {"audio.input_device", "audio.output_device"}:
                 input_widget = ttk.Combobox(body, textvariable=self.variables[name])
                 self.device_boxes.append(input_widget)
+            elif name in FILE_PATH_FIELDS | FOLDER_PATH_FIELDS:
+                input_widget = ttk.Frame(body)
+                ttk.Entry(input_widget, textvariable=self.variables[name], width=54).pack(
+                    side="left", fill="x", expand=True
+                )
+                ttk.Button(
+                    input_widget,
+                    text="选择文件夹" if name in FOLDER_PATH_FIELDS else "选择文件",
+                    command=lambda field=name: self._browse_path(field),
+                ).pack(side="left", padx=(5, 0))
             else:
                 input_widget = ttk.Entry(body, textvariable=self.variables[name], width=65)
             input_widget.grid(row=row, column=1, sticky="ew", pady=2)
             self.field_rows[name] = (label_widget, input_widget)
         row = len(FIELDS)
+        ess_title = ttk.Label(body, text="ESS 生成公式", font=("TkDefaultFont", 10, "bold"))
+        ess_title.grid(row=row, column=0, sticky="nw", pady=(8, 2))
+        ess_formula = ttk.Label(
+            body,
+            text=ESS_FORMULA,
+            justify="left",
+            foreground="#24415c",
+            wraplength=720,
+        )
+        ess_formula.grid(row=row, column=1, sticky="ew", pady=(8, 2))
+        self.ess_widgets = (ess_title, ess_formula)
+        row += 1
         ttk.Label(body, text="场景采集项目").grid(row=row, column=0, sticky="nw", pady=6)
         checks = ttk.Frame(body)
         checks.grid(row=row, column=1, sticky="w")
@@ -207,6 +262,7 @@ class CaptureGUI(tk.Tk):
         actions.pack(fill="x", pady=(0, 5))
         self.rir_button = ttk.Button(actions, text="开始脉冲响应采集", command=lambda: self.run("rir"))
         self.scene_button = ttk.Button(actions, text="开始语音增强数据采集", command=lambda: self.run("scene"))
+        self.scene_scan_button = ttk.Button(actions, text="扫描并预览文件", command=self.scan_scene_sources)
         self.basic_button = ttk.Button(actions, text="开始基础播录", command=lambda: self.run("io"))
         self.actions = actions
         self.log = tk.Text(controls, height=9, state="disabled", bg="#151515", fg="#dddddd")
@@ -259,6 +315,10 @@ class CaptureGUI(tk.Tk):
                 shown = ACTION_TO_LABEL.get(value, _display(value))
             elif name == "audio.backend":
                 shown = BACKEND_TO_LABEL.get(value, _display(value))
+            elif name == "scene.source_mode":
+                shown = SOURCE_MODE_TO_LABEL.get(value, _display(value))
+            elif name == "scene.pairing_mode":
+                shown = PAIRING_MODE_TO_LABEL.get(value, _display(value))
             else:
                 shown = _display(value)
             self.variables[name].set(shown)
@@ -266,6 +326,7 @@ class CaptureGUI(tk.Tk):
             variable.set(name in self.config_data.scene.items)
         self.metadata.delete("1.0", "end")
         self.metadata.insert("1.0", json.dumps(self.config_data.metadata, ensure_ascii=False, indent=2))
+        self._update_scene_source_fields()
 
     def _apply_values(self) -> ExperimentConfig:
         for name, _, converter, _ in FIELDS:
@@ -274,6 +335,10 @@ class CaptureGUI(tk.Tk):
                 value = LABEL_TO_ACTION.get(raw, raw)
             elif name == "audio.backend":
                 value = LABEL_TO_BACKEND.get(raw, raw)
+            elif name == "scene.source_mode":
+                value = LABEL_TO_SOURCE_MODE.get(raw, raw)
+            elif name == "scene.pairing_mode":
+                value = LABEL_TO_PAIRING_MODE.get(raw, raw)
             else:
                 value = converter(raw)
             # Numeric strings are allowed as sounddevice indices.
@@ -333,6 +398,40 @@ class CaptureGUI(tk.Tk):
         text_widget.pack(fill="both", expand=True)
         text_widget.insert("1.0", list_devices())
 
+    def _browse_path(self, field: str):
+        current = self.variables[field].get().strip()
+        current_path = Path(current).expanduser() if current else Path.cwd()
+        initial = str(current_path if current_path.is_dir() else current_path.parent)
+        if field in FOLDER_PATH_FIELDS:
+            selected = filedialog.askdirectory(title="选择文件夹", initialdir=initial)
+        else:
+            selected = filedialog.askopenfilename(
+                title="选择音频文件",
+                initialdir=initial,
+                filetypes=[("音频文件", "*.wav *.flac *.aiff *.aif"), ("所有文件", "*.*")],
+            )
+        if selected:
+            self.variables[field].set(selected)
+
+    def scan_scene_sources(self):
+        try:
+            config = self._apply_values()
+            pairs = discover_source_pairs(config.scene)
+            preview = [
+                f"{index:04d}  目标：{pair.target.name if pair.target else '不使用'}"
+                f"  |  干扰：{pair.interferer.name if pair.interferer else '不使用'}"
+                for index, pair in enumerate(pairs[:30], 1)
+            ]
+            suffix = "" if len(pairs) <= 30 else f"\n……另有 {len(pairs) - 30} 组未显示"
+            messagebox.showinfo(
+                "语音文件扫描结果",
+                f"共形成 {len(pairs)} 组采集任务，每条按配置时长处理。\n\n"
+                + "\n".join(preview)
+                + suffix,
+            )
+        except Exception as exc:
+            messagebox.showerror("扫描失败", str(exc))
+
     def check_hardware(self):
         try:
             config = self._apply_values()
@@ -371,6 +470,7 @@ class CaptureGUI(tk.Tk):
         state = "disabled" if busy else "normal"
         self.rir_button.configure(state=state)
         self.scene_button.configure(state=state)
+        self.scene_scan_button.configure(state=state)
         self.basic_button.configure(state=state)
 
     def _set_mode(self):
@@ -383,10 +483,36 @@ class CaptureGUI(tk.Tk):
                 widget.grid() if group in visible_groups else widget.grid_remove()
         for widget in self.scene_widgets:
             widget.grid() if mode == "speech" else widget.grid_remove()
-        for button in (self.basic_button, self.rir_button, self.scene_button):
+        for widget in self.ess_widgets:
+            widget.grid() if mode == "rir" else widget.grid_remove()
+        for button in (self.basic_button, self.rir_button, self.scene_button, self.scene_scan_button):
             button.pack_forget()
         selected = {"basic": self.basic_button, "rir": self.rir_button, "speech": self.scene_button}[mode]
         selected.pack(side="left", padx=4)
+        if mode == "speech":
+            self.scene_scan_button.pack(side="left", padx=4)
+        self._update_scene_source_fields()
+
+    def _update_scene_source_fields(self):
+        source_mode = LABEL_TO_SOURCE_MODE.get(
+            self.variables.get("scene.source_mode", tk.StringVar(value="单个文件")).get(),
+            "single",
+        )
+        single_fields = {"scene.target_file", "scene.interferer_file"}
+        folder_fields = {
+            "scene.target_folder",
+            "scene.interferer_folder",
+            "scene.pairing_mode",
+            "scene.file_extensions",
+        }
+        for field in single_fields | folder_fields:
+            for widget in self.field_rows.get(field, ()):
+                if self.mode_var.get() != "speech":
+                    widget.grid_remove()
+                elif (field in single_fields) == (source_mode == "single"):
+                    widget.grid()
+                else:
+                    widget.grid_remove()
 
     def _append(self, message: str):
         self.log.configure(state="normal")

@@ -5,29 +5,30 @@ audio:
   output_device: null
   sample_rate: 48000
   block_size: 1024
-  input_channels:
-  - 1
-  - 2
+  input_channels: [1, 2]
   target_output_channel: 1
   interferer_output_channel: 2
   latency: high
   dtype: float32
+
 general:
   action: play_record
   source_file: ../audio/source.wav
-  duration_s: 1
+  duration_s: 4.0
   level_dbfs: -24
   output_channel: 1
+
 sweep:
-  start_hz: 40.0
-  end_hz: 22000.0
-  duration_s: 2.0
+  start_hz: 40
+  end_hz: 22000
+  duration_s: 2
   pre_silence_s: 0.2
   post_silence_s: 0.5
   fade_s: 0.02
-  level_dbfs: -18.0
+  level_dbfs: -24
   rir_duration_s: 0.5
   pre_peak_s: 0.01
+
 repeats:
   minimum: 2
   maximum: 4
@@ -37,34 +38,34 @@ repeats:
   reject_clipped: true
   clip_threshold: 0.999
   pause_s: 0
+
 scene:
-  items:
-  - ambient
-  - target_only
-  - interferer_only
-  - mixture
-  source_mode: single
-  duration_s: 1.0
-  ambient_duration_s: 1
+  items: [ambient, target_only, interferer_only, mixture]
+  source_mode: folders
+  duration_s: 4.0
+  ambient_duration_s: 1.0
   target_file: ../audio/target.wav
   interferer_file: ../audio/interferer.wav
   target_folder: ../audio/targets
   interferer_folder: ../audio/interferers
   pairing_mode: cycle
   file_extensions: [.wav, .flac]
-  label_prefix: simulator
+  label_prefix: simulated_batch
   dataset_split: train
-  target_level_dbfs: -24.0
-  interferer_level_dbfs: -24.0
+  target_level_dbfs: -24
+  interferer_level_dbfs: -24
   repetitions: 1
-  countdown_s: 0.0
+  countdown_s: 0
   gap_s: 0
+
 storage:
   root: ../runs
-  session_name: simulated_demo
+  session_name: simulated_4s_folder_batch
   wav_subtype: FLOAT
   save_playback_reference: true
   compute_sha256: true
+
 metadata:
+  purpose: 4 秒文件夹批量采集与标签表验收
   artificial_head_id: simulator
   wearing_id: fixed

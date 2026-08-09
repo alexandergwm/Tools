@@ -61,7 +61,7 @@ APPLESCRIPT
         exit 1
     fi
 
-    if [[ ! -f "$PROJECT_DIR/audio/target.wav" ]]; then
+    if [[ ! -f "$PROJECT_DIR/audio/targets/demo_target_001.wav" ]]; then
         echo "正在生成无版权的流程验收音频……"
         if ! "$PYTHON_EXE" -m acoustic_capture demo-audio --output-dir "$PROJECT_DIR/audio"; then
             show_error "无法生成流程验收音频。"

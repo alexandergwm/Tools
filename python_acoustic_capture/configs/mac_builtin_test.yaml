@@ -42,10 +42,17 @@ scene:
   - target_only
   - interferer_only
   - mixture
+  source_mode: single
   duration_s: null
   ambient_duration_s: 10.0
   target_file: ../audio/target.wav
   interferer_file: ../audio/interferer.wav
+  target_folder: ../audio/targets
+  interferer_folder: ../audio/interferers
+  pairing_mode: cycle
+  file_extensions: [.wav, .flac]
+  label_prefix: mac_test
+  dataset_split: test
   target_level_dbfs: -26.0
   interferer_level_dbfs: -26.0
   repetitions: 1

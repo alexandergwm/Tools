@@ -10,6 +10,17 @@ def test_sweep_level_and_length():
     assert np.isclose(np.max(np.abs(sweep)), 10 ** (-12 / 20), rtol=1e-4)
 
 
+def test_ess_analytic_phase_starts_at_zero_and_reaches_requested_band():
+    sample_rate = 48_000
+    start_hz, end_hz, duration_s = 80.0, 12_000.0, 1.0
+    sweep = exponential_sweep(sample_rate, start_hz, end_hz, duration_s, 0.0, 0.0)
+    assert sweep[0] == 0.0
+    # Zero crossings in the final window must be much denser than at the start.
+    early = np.count_nonzero(np.diff(np.signbit(sweep[:4_800])))
+    late = np.count_nonzero(np.diff(np.signbit(sweep[-4_800:])))
+    assert late > early * 20
+
+
 def test_output_routing_is_one_based():
     signal = np.ones(10, dtype=np.float32)
     routed = route_outputs({2: signal})

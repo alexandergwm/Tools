@@ -1,4 +1,5 @@
 from pathlib import Path
+import csv
 
 import numpy as np
 import soundfile as sf
@@ -81,6 +82,56 @@ def test_selectable_scene_block(tmp_path: Path):
     )
     assert target_playback.shape[1] == mixture_playback.shape[1] == 2
     assert np.allclose(target_playback[:, 1], 0)
+    assert store.path("labels.xlsx").is_file()
+    assert store.path("labels.csv").is_file()
+    assert store.path("labels.jsonl").is_file()
+
+
+def test_folder_scene_batch_cycles_files_and_writes_labels(tmp_path: Path):
+    fs = 16_000
+    target_folder = tmp_path / "targets"
+    interferer_folder = tmp_path / "interferers"
+    target_folder.mkdir()
+    interferer_folder.mkdir()
+    time_axis = np.arange(fs // 20) / fs
+    for index, frequency in enumerate((220, 330, 440), 1):
+        sf.write(target_folder / f"speaker_{index}.wav", np.sin(2 * np.pi * frequency * time_axis), fs)
+    for index, frequency in enumerate((700, 900), 1):
+        sf.write(interferer_folder / f"noise_{index}.wav", np.sin(2 * np.pi * frequency * time_axis), fs)
+
+    cfg = ExperimentConfig()
+    cfg.audio.backend = "simulated"
+    cfg.audio.sample_rate = fs
+    cfg.scene.source_mode = "folders"
+    cfg.scene.target_folder = str(target_folder)
+    cfg.scene.interferer_folder = str(interferer_folder)
+    cfg.scene.pairing_mode = "cycle"
+    cfg.scene.duration_s = 0.05
+    cfg.scene.ambient_duration_s = 0.05
+    cfg.scene.items = ["target_only", "interferer_only", "mixture"]
+    cfg.scene.countdown_s = 0
+    cfg.scene.gap_s = 0
+    cfg.scene.label_prefix = "batch"
+    cfg.storage.root = str(tmp_path / "runs")
+    cfg.storage.compute_sha256 = False
+    store = capture_scene_block(cfg, SimulatedBackend(cfg.audio), log=lambda _: None)
+
+    with store.path("labels.csv").open(encoding="utf-8-sig", newline="") as handle:
+        labels = list(csv.DictReader(handle))
+    assert len(labels) == 3
+    assert [Path(row["target_source"]).name for row in labels] == [
+        "speaker_1.wav",
+        "speaker_2.wav",
+        "speaker_3.wav",
+    ]
+    assert [Path(row["interferer_source"]).name for row in labels] == [
+        "noise_1.wav",
+        "noise_2.wav",
+        "noise_1.wav",
+    ]
+    assert all(row["automatic_label"].startswith("batch_") for row in labels)
+    assert all(row["duration_s"] == "0.05" for row in labels)
+    assert store.manifest["summary"]["label_rows"] == 3
 
 
 def test_basic_io_actions(tmp_path: Path):

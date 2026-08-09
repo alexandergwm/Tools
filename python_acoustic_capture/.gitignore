@@ -7,4 +7,5 @@ audio/
 mac_gui_launcher.log
 build/
 dist/
+outputs/
 *.egg-info/

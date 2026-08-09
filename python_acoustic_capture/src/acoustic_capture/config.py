@@ -72,10 +72,17 @@ class SceneConfig:
             "mixture",
         ]
     )
-    duration_s: float | None = None
+    source_mode: str = "single"  # single | folders
+    duration_s: float | None = 4.0
     ambient_duration_s: float = 10.0
     target_file: str = "audio/target.wav"
     interferer_file: str = "audio/interferer.wav"
+    target_folder: str = "audio/targets"
+    interferer_folder: str = "audio/interferers"
+    pairing_mode: str = "cycle"  # cycle | cartesian
+    file_extensions: list[str] = field(default_factory=lambda: [".wav", ".flac"])
+    label_prefix: str = ""
+    dataset_split: str = "train"
     target_level_dbfs: float = -20.0
     interferer_level_dbfs: float = -20.0
     repetitions: int = 1
@@ -123,6 +130,10 @@ class ExperimentConfig:
             raise ValueError("sweep frequencies must satisfy 0 < start < end < Nyquist")
         if min(s.duration_s, s.pre_silence_s, s.post_silence_s, s.rir_duration_s) <= 0:
             raise ValueError("sweep durations must be positive")
+        if s.fade_s < 0 or s.fade_s * 2 > s.duration_s:
+            raise ValueError("sweep.fade_s must be non-negative and no longer than half the sweep")
+        if s.pre_peak_s < 0 or s.pre_peak_s >= s.rir_duration_s:
+            raise ValueError("sweep.pre_peak_s must be within the saved RIR duration")
         if not 1 <= r.minimum <= r.maximum:
             raise ValueError("repeats must satisfy 1 <= minimum <= maximum")
         if not -100 <= s.level_dbfs <= 0:
@@ -133,6 +144,14 @@ class ExperimentConfig:
             raise ValueError(f"unknown scene items: {sorted(unknown)}")
         if self.scene.repetitions < 1:
             raise ValueError("scene.repetitions must be at least one")
+        if self.scene.source_mode not in {"single", "folders"}:
+            raise ValueError("scene.source_mode must be single or folders")
+        if self.scene.pairing_mode not in {"cycle", "cartesian"}:
+            raise ValueError("scene.pairing_mode must be cycle or cartesian")
+        if not self.scene.file_extensions:
+            raise ValueError("scene.file_extensions cannot be empty")
+        if self.scene.duration_s is not None and self.scene.duration_s <= 0:
+            raise ValueError("scene.duration_s must be positive or null")
         if self.scene.countdown_s < 0 or self.scene.gap_s < 0:
             raise ValueError("scene countdown and gap cannot be negative")
 
@@ -162,6 +181,8 @@ def load_config(path: str | Path) -> ExperimentConfig:
         (cfg.general, "source_file"),
         (cfg.scene, "target_file"),
         (cfg.scene, "interferer_file"),
+        (cfg.scene, "target_folder"),
+        (cfg.scene, "interferer_folder"),
     ):
         value = Path(getattr(section, attr))
         if not value.is_absolute():

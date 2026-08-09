@@ -44,9 +44,16 @@ repeats:
 scene:
   # GUI 中可选择任意子集；正式完整采集建议保留下列四项。
   items: [ambient, target_only, interferer_only, mixture]
-  duration_s: null
+  source_mode: folders
+  duration_s: 4.0
   target_file: ../audio/target.wav
   interferer_file: ../audio/interferer.wav
+  target_folder: ../audio/targets
+  interferer_folder: ../audio/interferers
+  pairing_mode: cycle
+  file_extensions: [.wav, .flac]
+  label_prefix: headA_wearing01
+  dataset_split: train
   target_level_dbfs: -26
   interferer_level_dbfs: -26
   repetitions: 1

@@ -23,7 +23,7 @@ echo [声学采集工具] 正在安装或更新本地程序……
 "%PYTHON_EXE%" -m pip install -e .
 if errorlevel 1 goto :failed
 
-if not exist "audio\target.wav" (
+if not exist "audio\targets\demo_target_001.wav" (
     echo [声学采集工具] 正在生成无版权的流程验收音频……
     "%PYTHON_EXE%" -m acoustic_capture demo-audio --output-dir audio
     if errorlevel 1 goto :failed

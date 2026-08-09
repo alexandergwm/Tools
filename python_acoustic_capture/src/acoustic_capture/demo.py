@@ -56,14 +56,31 @@ def generate_demo_audio(
     def normalized(signal: np.ndarray, peak: float = 0.5) -> np.ndarray:
         return (signal * peak / max(float(np.max(np.abs(signal))), 1e-12)).astype(np.float32)
 
+    target_folder = root / "targets"
+    interferer_folder = root / "interferers"
+    target_folder.mkdir(parents=True, exist_ok=True)
+    interferer_folder.mkdir(parents=True, exist_ok=True)
     files = {
         "target": root / "target.wav",
         "interferer": root / "interferer.wav",
         "source": root / "source.wav",
+        "target_folder_1": target_folder / "demo_target_001.wav",
+        "target_folder_2": target_folder / "demo_target_002.wav",
+        "interferer_folder_1": interferer_folder / "demo_interferer_001.wav",
+        "interferer_folder_2": interferer_folder / "demo_interferer_002.wav",
     }
     target = normalized(target)
     interferer = normalized(interferer)
     sf.write(files["target"], target, sample_rate, subtype="FLOAT")
     sf.write(files["interferer"], interferer, sample_rate, subtype="FLOAT")
     sf.write(files["source"], target, sample_rate, subtype="FLOAT")
+    sf.write(files["target_folder_1"], target, sample_rate, subtype="FLOAT")
+    sf.write(files["target_folder_2"], np.roll(target, round(0.13 * sample_rate)), sample_rate, subtype="FLOAT")
+    sf.write(files["interferer_folder_1"], interferer, sample_rate, subtype="FLOAT")
+    sf.write(
+        files["interferer_folder_2"],
+        np.roll(interferer, round(0.19 * sample_rate)),
+        sample_rate,
+        subtype="FLOAT",
+    )
     return files

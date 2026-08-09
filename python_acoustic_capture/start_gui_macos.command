@@ -20,7 +20,7 @@ fi
 echo "[声学采集工具] 正在安装或更新本地程序……"
 "$PYTHON_EXE" -m pip install -e .
 
-if [[ ! -f "audio/target.wav" ]]; then
+if [[ ! -f "audio/targets/demo_target_001.wav" ]]; then
     echo "[声学采集工具] 正在生成无版权的流程验收音频……"
     "$PYTHON_EXE" -m acoustic_capture demo-audio --output-dir audio
 fi

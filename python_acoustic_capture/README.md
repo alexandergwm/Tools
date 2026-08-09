@@ -139,6 +139,25 @@ acoustic-capture rir configs/simulated.yaml
 `countdown_s` 会在每一项开始前留出准备时间，GUI 日志会显示当前项目。
 分别录制的 target/interferer 相加不保证严格等于真实 mixture，因此三者都应保留。
 
+### 4 秒文件夹批量模式
+
+在“语音增强数据采集”模式中，把“语音来源模式”设为“文件夹批量”，然后分别选择目标语音目录
+和干扰声音目录。程序递归扫描配置的扩展名，并支持：
+
+- `cycle`：按排序顺序循环配对，数量较少的一侧循环使用；
+- `cartesian`：目标与干扰做全部组合。
+
+`scene.duration_s` 建议设为 `4.0`。长文件截取前 4 秒，短文件在末尾补零，不会重复语音内容。
+每个源文件组合会依次执行所勾选的仅目标、仅干扰和真实混合播录。环境底噪在每次 repetition
+开始时只录一次，供该 repetition 下的全部样本引用。
+
+运行目录会额外保存：
+
+- `labels.jsonl`：适合 Python/PyTorch 数据加载；
+- `labels.csv`：UTF-8 BOM，便于通用表格工具读取；
+- `labels.xlsx`：包含“标签”“采集参数”“文件索引”“汇总”“字段说明”五个工作表，可填写人工标签、
+  数据集划分、是否有效和备注，并记录所有源文件、录音、播放参考和指标文件的相对路径。
+
 ## 6. RIR 重复与平均
 
 默认最少 4 次、最多 10 次。达到最少次数后，最近若干次满足相关性和峰值漂移条件会自动
@@ -152,6 +171,21 @@ acoustic-capture rir configs/simulated.yaml
 - `metrics/summary.json`：接受和拒绝的 take 编号。
 
 “重新佩戴”必须建立新的 session，不能作为同一个 RIR 的重复 take 参与平均。
+
+### ESS 生成公式
+
+设扫频起始频率为 $f_0$、终止频率为 $f_1$、扫频时间为 $T$、数字峰值电平为 $L$ dBFS：
+
+```text
+f(t) = f0 · (f1/f0)^(t/T)
+φ(t) = 2π f0 T / ln(f1/f0) · [(f1/f0)^(t/T) - 1]
+s(t) = 10^(L/20) · w(t) · sin(φ(t)),  0 ≤ t < T
+x(t) = 前静默 ⊕ s(t) ⊕ 后静默
+```
+
+`w(t)` 是由 `fade_s` 控制的正弦平方淡入淡出窗。GUI 可直接修改 `start_hz`、`end_hz`、
+`duration_s`、`pre_silence_s`、`post_silence_s`、`fade_s`、`level_dbfs` 和最终 RIR 截取长度。
+实现位于 `signals.py`，直接按上述解析相位公式生成，不依赖黑盒扫频调用。
 
 ## 7. 每次运行的归档
 
