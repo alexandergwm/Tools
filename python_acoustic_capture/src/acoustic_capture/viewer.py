@@ -37,6 +37,37 @@ def display_points(data: np.ndarray, sample_rate: int, limit: int = 16_000):
     return indices / sample_rate, data[indices]
 
 
+def minmax_envelope(
+    signal: np.ndarray, sample_rate: int, bins: int = 4_000
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Downsample a waveform for display without hiding fast oscillations.
+
+    A fixed-step plot aliases an ESS once its instantaneous frequency approaches
+    the plotting sample rate.  Keeping the minimum and maximum from each time
+    bucket preserves the visible amplitude envelope instead.
+    """
+    values = np.asarray(signal).reshape(-1)
+    if sample_rate <= 0:
+        raise ValueError("sample_rate must be positive")
+    if bins <= 0:
+        raise ValueError("bins must be positive")
+    if len(values) == 0:
+        empty = np.empty(0, dtype=np.float64)
+        return empty, empty, empty
+
+    bucket_count = min(int(bins), len(values))
+    edges = np.linspace(0, len(values), bucket_count + 1, dtype=np.int64)
+    centers = np.empty(bucket_count, dtype=np.float64)
+    lows = np.empty(bucket_count, dtype=np.float64)
+    highs = np.empty(bucket_count, dtype=np.float64)
+    for index, (start, stop) in enumerate(zip(edges[:-1], edges[1:])):
+        chunk = values[start:stop]
+        centers[index] = (start + stop - 1) / (2.0 * sample_rate)
+        lows[index] = float(np.min(chunk))
+        highs[index] = float(np.max(chunk))
+    return centers, lows, highs
+
+
 def select_audio_channel(data: np.ndarray, selection: str) -> tuple[np.ndarray, str]:
     """Select one signal for listening or spectrogram display."""
     if data.ndim != 2 or data.shape[1] == 0:
@@ -123,6 +154,7 @@ class ResultsViewer(ttk.Frame):
         self.summary_var = tk.StringVar(value="完成一次测试后，这里会显示本次结果。")
         self._x_bounds: dict[object, tuple[float, float]] = {}
         self._drag_state: tuple[object, float, tuple[float, float]] | None = None
+        self.preview_spec: dict[str, float] | None = None
         self._build()
 
     def _build(self):
@@ -152,7 +184,7 @@ class ResultsViewer(ttk.Frame):
         ttk.Button(plot_options, text="恢复完整时间范围", command=self.reset_view).pack(side="left", padx=8)
         ttk.Label(
             plot_options,
-            text="提示：鼠标移到图上，按住 Ctrl 或 Command 滚轮缩放；按住左键水平拖动",
+            text="提示：鼠标移到图上，按住 Ctrl 滚轮缩放；按住左键水平拖动",
             foreground="#555555",
         ).pack(side="right")
 
@@ -231,12 +263,107 @@ class ResultsViewer(ttk.Frame):
         if path:
             self.load_run(path)
 
+    def show_sweep_preview(
+        self,
+        played: np.ndarray,
+        sweep: np.ndarray,
+        sample_rate: int,
+        start_hz: float,
+        end_hz: float,
+        duration_s: float,
+        pre_silence_s: float,
+        post_silence_s: float,
+        level_dbfs: float,
+    ) -> None:
+        """Show the ESS that would be played before a measurement starts."""
+        self.run_dir = None
+        self.preview_spec = {
+            "sample_rate": float(sample_rate),
+            "start_hz": float(start_hz),
+            "end_hz": float(end_hz),
+            "duration_s": float(duration_s),
+            "pre_silence_s": float(pre_silence_s),
+            "post_silence_s": float(post_silence_s),
+            "level_dbfs": float(level_dbfs),
+        }
+        self.files = {"playback": [], "recording": [], "rir": []}
+        self.path_by_label.clear()
+        for category, variable in (
+            ("playback", self.playback_var),
+            ("recording", self.recording_var),
+            ("rir", self.rir_var),
+        ):
+            variable.set("")
+            getattr(self, f"_{category}_box").configure(values=[])
+        self.run_label.configure(text="ESS 扫频实时预览（修改左侧参数后自动更新）")
+        self._x_bounds.clear()
+        self._drag_state = None
+
+        envelope_times, envelope_lows, envelope_highs = minmax_envelope(played, sample_rate)
+        detail_duration = min(duration_s, max(0.02, 8.0 / start_hz))
+        detail_samples = min(len(sweep), max(2, int(round(detail_duration * sample_rate))))
+        detail_times = pre_silence_s + np.arange(detail_samples) / sample_rate
+        frequency_times = np.linspace(0.0, duration_s, min(2000, max(2, len(sweep))))
+        frequencies = start_hz * (end_hz / start_hz) ** (frequency_times / duration_s)
+
+        for axis in self.axes:
+            axis.clear()
+            axis.grid(True, alpha=0.25)
+        self.axes[0].fill_between(
+            envelope_times,
+            envelope_lows,
+            envelope_highs,
+            linewidth=0.0,
+            color="#1f77b4",
+            alpha=0.9,
+        )
+        self.axes[0].axhline(0.0, linewidth=0.5, color="#555555", alpha=0.5)
+        self.axes[0].set_title("实际播放序列波形包络：前静音 + ESS + 后静音（已避免高频显示混叠）")
+        self.axes[0].set_ylabel("幅度")
+        self.axes[0].set_xlabel("时间（秒）")
+        full_duration = len(played) / sample_rate
+        self.axes[0].set_xlim(0.0, max(full_duration, 1.0 / sample_rate))
+        self._x_bounds[self.axes[0]] = self.axes[0].get_xlim()
+
+        self.axes[1].plot(detail_times, sweep[:detail_samples], linewidth=1.0, color="#ff7f0e")
+        self.axes[1].axhline(0.0, linewidth=0.5, color="#555555", alpha=0.5)
+        self.axes[1].set_title(
+            f"ESS 起始 {detail_duration * 1000.0:.0f} ms 原始连续波形（约 8 个起始周期）"
+        )
+        self.axes[1].set_ylabel("幅度")
+        self.axes[1].set_xlabel("播放时间（秒）")
+        detail_bounds = (
+            pre_silence_s,
+            pre_silence_s + max(detail_samples - 1, 1) / sample_rate,
+        )
+        self.axes[1].set_xlim(detail_bounds)
+        self._x_bounds[self.axes[1]] = detail_bounds
+
+        absolute_frequency_times = frequency_times + pre_silence_s
+        self.axes[2].semilogy(absolute_frequency_times, frequencies, linewidth=1.6, color="#2ca02c")
+        self.axes[2].set_title("ESS 瞬时频率轨迹")
+        self.axes[2].set_ylabel("频率（Hz，对数坐标）")
+        self.axes[2].set_xlabel("播放时间（秒）")
+        sweep_bounds = (pre_silence_s, pre_silence_s + duration_s)
+        self.axes[2].set_xlim(sweep_bounds)
+        self.axes[2].set_ylim(max(1.0, start_hz * 0.8), end_hz * 1.2)
+        self._x_bounds[self.axes[2]] = sweep_bounds
+
+        peak = float(np.max(np.abs(sweep))) if len(sweep) else 0.0
+        self.summary_var.set(
+            f"扫频预览：{start_hz:g} → {end_hz:g} Hz，扫频 {duration_s:g} 秒，"
+            f"总播放 {full_duration:g} 秒，电平 {level_dbfs:g} dBFS，峰值 {peak:.4f}；"
+            "上图为逐时间桶最小/最大包络，不是对播放信号重新采样"
+        )
+        self.canvas.draw_idle()
+
     def load_run(self, run_dir: str | Path):
         root = Path(run_dir).resolve()
         if not (root / "manifest.json").is_file():
             messagebox.showerror("结果目录无效", "所选目录中没有 manifest.json。")
             return
         self.run_dir = root
+        self.preview_spec = None
         self.files = discover_audio_files(root)
         self.path_by_label.clear()
         for category, paths in self.files.items():
@@ -362,7 +489,7 @@ class ResultsViewer(ttk.Frame):
     def _modifier_pressed(event) -> bool:
         key = str(event.key or "").lower()
         modifiers = {str(item).lower() for item in (getattr(event, "modifiers", None) or ())}
-        names = ("control", "ctrl", "cmd", "command", "super")
+        names = ("control", "ctrl")
         return any(name in key for name in names) or any(name in modifiers for name in names)
 
     def _on_scroll(self, event):

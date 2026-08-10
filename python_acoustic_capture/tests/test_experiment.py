@@ -1,0 +1,140 @@
+import csv
+import json
+from pathlib import Path
+
+import soundfile as sf
+import yaml
+
+from acoustic_capture.audio import SimulatedBackend
+from acoustic_capture.config import ExperimentConfig, load_config, save_config
+from acoustic_capture.experiment import (
+    compile_rir_dataset,
+    experiment_id,
+    expand_experiment_plan,
+    load_experiment_plan,
+)
+from acoustic_capture.rir import capture_rir
+
+
+def _experiment(wearing_id: str, split: str) -> dict:
+    return {
+        "headset_model_id": "model_a",
+        "headset_unit_id": "hs01",
+        "wearing_id": wearing_id,
+        "boom_pose_id": "b00_nominal",
+        "source_role": "mouth",
+        "source_id": "mouth01",
+        "azimuth_deg": 0,
+        "elevation_deg": 0,
+        "source_height_cm": 140,
+        "distance_cm": 5,
+        "dataset_split": split,
+        "output_channel": 1,
+    }
+
+
+def _write_plan(tmp_path: Path) -> Path:
+    base = ExperimentConfig()
+    base.audio.backend = "simulated"
+    base.sweep.duration_s = 0.08
+    base.sweep.pre_silence_s = 0.02
+    base.sweep.post_silence_s = 0.03
+    base.sweep.rir_duration_s = 0.04
+    base.repeats.minimum = 1
+    base.repeats.maximum = 1
+    base.repeats.required_stable_takes = 1
+    base.repeats.pause_s = 0
+    base.storage.compute_sha256 = False
+    save_config(base, tmp_path / "base.yaml")
+    plan = {
+        "schema_version": 1,
+        "project": {"project_id": "test_project", "dataset_version": "v1"},
+        "paths": {
+            "base_config": "base.yaml",
+            "generated_configs": "generated",
+            "runs_root": "runs",
+            "dataset_root": "dataset",
+        },
+        "experiments": [_experiment("w01", "train"), _experiment("w02", "test")],
+    }
+    path = tmp_path / "plan.yaml"
+    path.write_text(yaml.safe_dump(plan, sort_keys=False), encoding="utf-8")
+    return path
+
+
+def test_experiment_id_is_stable_and_windows_safe():
+    first = experiment_id(_experiment("W 01", "train"))
+    second = experiment_id(_experiment("W 01", "train"))
+    assert first == second
+    assert " " not in first
+    assert "azp000" in first
+
+
+def test_manual_experiment_id_keeps_chinese_name_and_removes_path_punctuation():
+    assert experiment_id({"experiment_id": "耳机A / 角度 90°"}) == "耳机a-角度-90"
+
+
+def test_matrix_plan_expands_to_experiment_configs(tmp_path: Path):
+    plan_path = _write_plan(tmp_path)
+    plan = yaml.safe_load(plan_path.read_text(encoding="utf-8"))
+    plan["matrix"] = {
+        "headset_units": [{"headset_model_id": "m", "headset_unit_id": "h1"}],
+        "wearings": [{"wearing_id": "w1", "dataset_split": "train"}],
+        "source_sets": [
+            {
+                "source_role": "mouth",
+                "source_id": "mouth",
+                "output_channel": 1,
+                "boom_poses": ["nominal", "up"],
+                "poses": [
+                    {
+                        "azimuth_deg": 0,
+                        "elevation_deg": 0,
+                        "source_height_cm": 140,
+                        "distance_cm": 5,
+                    }
+                ],
+            }
+        ],
+    }
+    plan.pop("experiments")
+    plan_path.write_text(yaml.safe_dump(plan, sort_keys=False), encoding="utf-8")
+
+    loaded = load_experiment_plan(plan_path)
+    written = expand_experiment_plan(plan_path)
+
+    assert len(loaded["experiments"]) == len(written) == 2
+    generated = load_config(written[0])
+    assert generated.metadata["project_id"] == "test_project"
+    assert generated.metadata["experiment_id"] == generated.storage.session_name
+
+
+def test_compile_rir_dataset_exports_one_mean_ir_per_microphone_without_cross_experiment_mean(
+    tmp_path: Path,
+):
+    plan_path = _write_plan(tmp_path)
+    generated = expand_experiment_plan(plan_path)
+    for config_path in generated:
+        config = load_config(config_path)
+        store = capture_rir(config, SimulatedBackend(config.audio), log=lambda _: None)
+        assert store.path("processed/average_rir_mic_01.wav").is_file()
+        assert store.path("processed/average_rir_mic_02.wav").is_file()
+
+    dataset_root = compile_rir_dataset(plan_path)
+    manifest = json.loads((dataset_root / "dataset_manifest.json").read_text(encoding="utf-8"))
+    with (dataset_root / "indexes/rir_experiments.csv").open(
+        encoding="utf-8-sig", newline=""
+    ) as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert manifest["planned_experiments"] == manifest["completed_experiments"] == 2
+    assert manifest["cross_experiment_averaging"] is False
+    assert all(row["status"] == "completed" for row in rows)
+    assert not (dataset_root / "rir/groups").exists()
+    for row in rows:
+        dual, sample_rate = sf.read(dataset_root / row["mean_ir_2ch"], always_2d=True)
+        mic_1, _ = sf.read(dataset_root / row["mean_ir_mic_01"], always_2d=True)
+        mic_2, _ = sf.read(dataset_root / row["mean_ir_mic_02"], always_2d=True)
+        assert dual.shape[1] == 2
+        assert mic_1.shape[1] == mic_2.shape[1] == 1
+        assert sample_rate == 48_000

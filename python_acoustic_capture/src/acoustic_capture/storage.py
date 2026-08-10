@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import platform
+import re
 import socket
 import subprocess
 from dataclasses import dataclass
@@ -20,7 +21,14 @@ from .config import ExperimentConfig
 
 
 def _safe_name(value: str) -> str:
-    return "_".join(value.strip().replace("/", "-").replace("\\", "-").split()) or "measurement"
+    text = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "-", value.strip())
+    text = "_".join(text.split()).strip(" .")
+    if not text:
+        return "measurement"
+    # Leave room for timestamp/kind and nested artifact names on Windows.
+    text = text[:120].rstrip(" .")
+    reserved = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+    return f"_{text}" if text.upper() in reserved else text
 
 
 def sha256(path: str | Path) -> str:

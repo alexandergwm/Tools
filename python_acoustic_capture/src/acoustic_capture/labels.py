@@ -10,11 +10,15 @@ from typing import Any
 
 LABEL_COLUMNS = [
     ("sample_id", "样本编号", "一次播录样本的稳定唯一编号"),
+    ("scene_id", "物理场景编号", "佩戴、麦杆、干扰源位置等固定的一次物理场景"),
     ("manual_label", "人工标签", "留给人工填写或修订的标签"),
     ("automatic_label", "自动标签", "由标签前缀和源文件名自动生成"),
     ("dataset_split", "数据集划分", "train、valid 或 test"),
     ("valid", "是否有效", "人工质检开关：是或否"),
     ("quality_flag", "质量标记", "自动质检结果"),
+    ("supervision_ready", "监督训练可用", "混合录音是否具有样本级对齐的仅目标标签"),
+    ("capture_strategy", "采集策略", "single_stream_paired_sequence 表示同一声卡流内配对采集"),
+    ("target_mixture_sample_aligned", "目标与混合样本对齐", "仅目标与混合的目标片段是否使用同一源、起点和长度"),
     ("repetition", "重复编号", "同一物理条件下的重复编号"),
     ("target_source", "目标源文件", "目标干净语音源文件"),
     ("interferer_source", "干扰源文件", "干扰声音源文件"),
@@ -32,6 +36,9 @@ LABEL_COLUMNS = [
     ("target_playback", "目标播放参考", "两路输出矩阵，未使用通道为零"),
     ("interferer_playback", "干扰播放参考", "两路输出矩阵，未使用通道为零"),
     ("mixture_playback", "混合播放参考", "目标与干扰播放矩阵之和"),
+    ("paired_sequence_recording", "配对序列完整录音", "一次连续声卡流的完整麦克风录音"),
+    ("paired_sequence_playback", "配对序列完整播放", "一次连续声卡流的完整播放矩阵"),
+    ("segment_layout", "片段边界文件", "各配对片段在连续声卡流中的起止采样点"),
     ("metrics_files", "指标文件", "各场景指标 JSON 路径"),
     ("metadata_json", "实验元数据", "人工头、佩戴、位置等 JSON"),
     ("notes", "备注", "可人工补充"),
@@ -39,11 +46,14 @@ LABEL_COLUMNS = [
 
 CORE_LABEL_KEYS = [
     "sample_id",
+    "scene_id",
     "manual_label",
     "automatic_label",
     "dataset_split",
     "valid",
     "quality_flag",
+    "supervision_ready",
+    "target_mixture_sample_aligned",
     "repetition",
     "duration_s",
     "notes",
@@ -51,6 +61,7 @@ CORE_LABEL_KEYS = [
 
 CAPTURE_PARAMETER_KEYS = [
     "sample_id",
+    "capture_strategy",
     "sample_rate_hz",
     "microphone_channels",
     "target_output_channel",
@@ -70,6 +81,9 @@ FILE_INDEX_KEYS = [
     "target_playback",
     "interferer_playback",
     "mixture_playback",
+    "paired_sequence_recording",
+    "paired_sequence_playback",
+    "segment_layout",
     "metrics_files",
     "metadata_json",
 ]
@@ -113,6 +127,15 @@ def _cell_value(value: Any):
     if isinstance(value, (dict, list, tuple)):
         return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
     return value
+
+
+def _excel_column(index: int) -> str:
+    value = index + 1
+    letters = ""
+    while value:
+        value, remainder = divmod(value - 1, 26)
+        letters = chr(65 + remainder) + letters
+    return letters
 
 
 def _write_xlsx(path: Path, rows: list[dict[str, Any]], metadata: dict[str, Any]) -> None:
@@ -170,11 +193,14 @@ def _write_xlsx(path: Path, rows: list[dict[str, Any]], metadata: dict[str, Any]
 
     last_row = max(1, len(rows))
     last_column = len(keys) - 1
+    split_column = keys.index("dataset_split")
+    valid_column = keys.index("valid")
+    quality_column = keys.index("quality_flag")
     sheet.autofilter(0, 0, last_row, last_column)
-    sheet.data_validation(1, 3, max(last_row, 1000), 3, {"validate": "list", "source": ["train", "valid", "test"]})
-    sheet.data_validation(1, 4, max(last_row, 1000), 4, {"validate": "list", "source": ["是", "否"]})
-    sheet.conditional_format(1, 4, max(last_row, 1000), 4, {"type": "text", "criteria": "containing", "value": "否", "format": bad})
-    sheet.conditional_format(1, 5, max(last_row, 1000), 5, {"type": "text", "criteria": "not containing", "value": "通过", "format": warning})
+    sheet.data_validation(1, split_column, max(last_row, 1000), split_column, {"validate": "list", "source": ["train", "valid", "test"]})
+    sheet.data_validation(1, valid_column, max(last_row, 1000), valid_column, {"validate": "list", "source": ["是", "否"]})
+    sheet.conditional_format(1, valid_column, max(last_row, 1000), valid_column, {"type": "text", "criteria": "containing", "value": "否", "format": bad})
+    sheet.conditional_format(1, quality_column, max(last_row, 1000), quality_column, {"type": "text", "criteria": "not containing", "value": "通过", "format": warning})
 
     widths = {
         0: 34,
@@ -226,9 +252,11 @@ def _write_xlsx(path: Path, rows: list[dict[str, Any]], metadata: dict[str, Any]
     summary.write("A3", "样本总数")
     summary.write_formula("B3", f"=COUNTA('标签'!A2:A{len(rows) + 1})", None, len(rows))
     summary.write("A4", "标记有效样本")
-    summary.write_formula("B4", f'=COUNTIF(\'标签\'!E2:E{len(rows) + 1},"是")', None, len(rows))
+    valid_letter = _excel_column(valid_column)
+    split_letter = _excel_column(split_column)
+    summary.write_formula("B4", f'=COUNTIF(\'标签\'!{valid_letter}2:{valid_letter}{len(rows) + 1},"是")', None, len(rows))
     summary.write("A5", "训练集样本")
-    summary.write_formula("B5", f'=COUNTIF(\'标签\'!D2:D{len(rows) + 1},"train")', None, sum(row.get("dataset_split") == "train" for row in rows))
+    summary.write_formula("B5", f'=COUNTIF(\'标签\'!{split_letter}2:{split_letter}{len(rows) + 1},"train")', None, sum(row.get("dataset_split") == "train" for row in rows))
     summary.write("A7", "实验元数据", section)
     summary.write("A8", json.dumps(metadata, ensure_ascii=False, indent=2), note)
     summary.set_row(7, 120)

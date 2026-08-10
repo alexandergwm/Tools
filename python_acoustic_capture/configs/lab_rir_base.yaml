@@ -1,0 +1,54 @@
+# 实验室 RIR 基础配置。不要在这里填写某一次佩戴/声源角度/高度；
+# 每个独立实验由 lab_rir_experiment_plan.yaml 展开后写入 metadata。
+audio:
+  backend: sounddevice
+  device: null
+  input_device: "ASIO Fireface USB"
+  output_device: "ASIO Fireface USB"
+  sample_rate: 48000
+  block_size: 0
+  input_channels: [1, 2]
+  target_output_channel: 1
+  interferer_output_channel: 2
+  latency: high
+  dtype: float32
+
+sweep:
+  start_hz: 40
+  end_hz: 22000
+  duration_s: 8
+  pre_silence_s: 1
+  post_silence_s: 3
+  fade_s: 0.02
+  level_dbfs: -20
+  rir_duration_s: 2
+  pre_peak_s: 0.01
+
+repeats:
+  # 同一实验内至少获得 5 个有效 take；重新佩戴/改变角度/改变高度都必须进入下一实验。
+  minimum: 5
+  maximum: 10
+  correlation_threshold: 0.90
+  peak_drift_samples: 2
+  minimum_sweep_snr_db: 6.0
+  required_stable_takes: 1
+  reject_clipped: true
+  clip_threshold: 0.999
+  pause_s: 1
+
+storage:
+  root: ../runs
+  session_name: generated_by_experiment_plan
+  wav_subtype: FLOAT
+  save_playback_reference: true
+  compute_sha256: true
+
+metadata:
+  artificial_head_id: head01
+  microphone_1: left
+  microphone_2: right
+  capture_mode: real_rme_asio
+  rme_input_gain_ch1_db: null
+  rme_input_gain_ch2_db: null
+  playback_calibration_spl_db: null
+  room_id: lab01

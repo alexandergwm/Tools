@@ -4,8 +4,9 @@ __pycache__/
 .pytest_cache/
 runs/
 audio/
-mac_gui_launcher.log
 build/
 dist/
 outputs/
+datasets/
+configs/generated/
 *.egg-info/

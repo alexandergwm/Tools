@@ -1,0 +1,67 @@
+schema_version: 1
+
+project:
+  project_id: headset_rir_generalization_v1
+  dataset_version: v1
+  operator: ""
+  coordinate_system: "人工头正前方为 az=0；从上向下看逆时针为正；耳中心高度为 el=0"
+  head_center_height_cm: 140
+  notes: "距离和高度为示例值，明天先按实验室实测尺寸修改"
+
+paths:
+  base_config: lab_rir_base.yaml
+  generated_configs: generated/lab_rir_v1
+  runs_root: ../runs
+  dataset_root: ../datasets/headset_rir_generalization_v1
+
+# 该矩阵会生成：2 个耳机 × 3 次重新佩戴 ×
+# （人工嘴 3 个麦杆位置 + 干扰源 3 个角度×2 个高度）= 54 次独立实验。
+# 若时间允许，把 w04/w05 加入 wearings；每个佩戴/角度/高度都是新实验，不能继续追加 take。
+matrix:
+  headset_units:
+    - headset_model_id: model_a
+      headset_unit_id: hs01
+    - headset_model_id: model_b
+      headset_unit_id: hs02
+
+  wearings:
+    - wearing_id: w01
+      dataset_split: train
+    - wearing_id: w02
+      dataset_split: valid
+    - wearing_id: w03
+      dataset_split: test
+
+  source_sets:
+    # 人工嘴：固定声源，只改变麦杆位置，用于独立观察麦杆泛化。
+    - source_role: mouth
+      source_id: artificial_mouth_01
+      output_channel: 1
+      boom_poses:
+        - boom_pose_id: b00_nominal
+          boom_pose_label: nominal
+        - boom_pose_id: b01_up
+          boom_pose_label: "相对 nominal 向上；实测偏移写入 notes"
+        - boom_pose_id: b02_down
+          boom_pose_label: "相对 nominal 向下；实测偏移写入 notes"
+      poses:
+        - azimuth_deg: 0
+          elevation_deg: 0
+          source_height_cm: 140
+          distance_cm: 5
+
+    # 干扰源：先固定麦杆 nominal，再改变声源角度和高度，避免变量完全混在一起。
+    - source_role: interferer
+      source_id: interferer_speaker_01
+      output_channel: 2
+      boom_poses: [b00_nominal]
+      poses:
+        - {azimuth_deg: -90, elevation_deg: -17, source_height_cm: 110, distance_cm: 100}
+        - {azimuth_deg: 0,   elevation_deg: -17, source_height_cm: 110, distance_cm: 100}
+        - {azimuth_deg: 90,  elevation_deg: -17, source_height_cm: 110, distance_cm: 100}
+        - {azimuth_deg: -90, elevation_deg: 17,  source_height_cm: 170, distance_cm: 100}
+        - {azimuth_deg: 0,   elevation_deg: 17,  source_height_cm: 170, distance_cm: 100}
+        - {azimuth_deg: 90,  elevation_deg: 17,  source_height_cm: 170, distance_cm: 100}
+
+# 不配置跨实验 aggregation。唯一允许的均值是一次实验内部有效 take 的均值；
+# 双麦分别输出 mic_01 和 mic_02 两个 mean IR，同时保留一个双通道 WAV。

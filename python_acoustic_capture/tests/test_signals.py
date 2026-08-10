@@ -1,6 +1,7 @@
 import numpy as np
 
 from acoustic_capture.quality import normalized_correlation
+from acoustic_capture.rir import align_rir_to_reference
 from acoustic_capture.signals import exponential_sweep, route_outputs
 
 
@@ -40,3 +41,17 @@ def test_output_routing_can_keep_a_fixed_hardware_width():
 def test_correlation():
     data = np.arange(20, dtype=np.float32)
     assert normalized_correlation(data, data) > 0.9999
+
+
+def test_rir_residual_alignment_handles_each_microphone_independently():
+    rng = np.random.default_rng(4)
+    reference = rng.normal(size=(2048, 2)).astype(np.float32)
+    shifted = np.zeros_like(reference)
+    shifted[7:, 0] = reference[:-7, 0]
+    shifted[:-11, 1] = reference[11:, 1]
+
+    aligned, shifts, correlations = align_rir_to_reference(shifted, reference, 16)
+
+    assert shifts == [-7, 11]
+    assert min(correlations) > 0.99
+    assert np.allclose(aligned[16:-16], reference[16:-16])

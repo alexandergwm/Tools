@@ -5,7 +5,7 @@ GUI 分离；同一份 YAML 配置既能在命令行使用，也能在图形界�
 
 ## 1. 安装
 
-建议在 Windows PowerShell 中使用 Python 3.10–3.12：
+建议在 Windows PowerShell 中使用 64 位 Python 3.10–3.12：
 
 ```powershell
 cd python_acoustic_capture
@@ -43,21 +43,14 @@ acoustic-capture devices
 ### 双击启动
 
 - Windows：双击 `start_gui_windows.bat`
-- macOS（推荐）：双击 `声学采集工具.app`
-- macOS（终端备用）：双击 `start_gui_macos.command`
 
 启动器第一次运行时会在项目目录创建 `.venv`、安装程序，然后打开 GUI；后续双击仍会同步
-本地代码更新。macOS 可用于查看界面、编辑配置以及使用 `simulated` 后端演练流程，但 RME
-ASIO 实际采集需要在 Windows/RME 环境验证。
+本地代码更新。RME ASIO 实际采集需要在 Windows/RME 环境验证。
 
 Windows 首次启动还会在缺少示例文件时生成一组无版权的合成流程验收音频。正式采集前必须在
 GUI 中把它们换成自己的干净语音和干扰素材。RME 接线、TotalMix 路由和上机检查步骤见
 [`WINDOWS_RME_GUIDE.md`](WINDOWS_RME_GUIDE.md)；双击 `check_audio_windows.bat` 可以检查设备、
 48 kHz、输入/输出通道，并在确认后进行 5 秒双麦克风录制。
-
-`.app` 启动器不读取交互式 `.zshrc`，因此不会被 oh-my-zsh 更新提示打断。首次打开会显示
-初始化通知，安装日志保存在 `mac_gui_launcher.log`。如果 macOS 提示文件来自未知开发者，
-可在 Finder 中右键该 `.app` 并选择“打开”。
 
 ### 命令启动
 
@@ -88,7 +81,7 @@ GUI 顶部提供三个模式，底层关系是“一个通用 I/O 引擎 + 两�
 - 三个下拉框可切换本次运行中的其他 take、场景项目或参考文件；
 - “试听播放信号”和“试听录制信号”可试听原始及录制信号；
 - 试听支持自动选择有效通道、全部通道混音或指定单个通道，并默认衰减 12 dB；
-- 鼠标停在任意结果图上时，按住 `Ctrl`（macOS 也支持 `Command`）并滚动滚轮可围绕鼠标位置缩放时间轴；
+- 鼠标停在任意结果图上时，按住 `Ctrl` 并滚动滚轮可围绕鼠标位置缩放时间轴；
 - 放大后按住鼠标左键左右拖动，可以平移当前时间范围；
 - 勾选“显示语谱图”可在波形和语谱图之间切换，语谱图使用“监听/语谱图通道”中的选择；
 - “打开历史结果”可以查看过去保存的测试结果。
@@ -96,8 +89,11 @@ GUI 顶部提供三个模式，底层关系是“一个通用 I/O 引擎 + 两�
 `audio.input_channels` 支持一个或多个输入，例如 `[1, 2, 3, 4]`。采集、RIR 计算、质量指标、
 WAV 保存和结果图会自动跟随通道数扩展。
 
-实验元数据使用 JSON 格式。建议每次改变人工头、重新佩戴或移动声源时更新
-`session_name`、`wearing_id` 和几何参数。
+点击“开始新的 RIR 实验（自动多次采集）”后，GUI 会先强制输入本次实验名称，再开始扫频。
+一次点击会按照 `repeats.minimum/maximum` 自动采集多次 IR、质检，并只对本实验中的有效 IR
+求均值。改变角度、高度、重新佩戴或移动麦杆后，再点击同一个开始按钮并输入新的自由名称；
+不会与上一次实验求平均。语音增强实验同样在点击开始时命名。名称会同时写入运行目录、
+`experiment_id`、`scene_id` 和清单元数据。
 
 ## 4. 命令行
 
@@ -136,8 +132,15 @@ acoustic-capture rir configs/simulated.yaml
 `target_only + mixture`；如果需要分析或重构真实混合，保留全部四项。
 
 `repetitions` 表示整个所选序列重复几次。各项之间物理位置和输入增益必须保持不变。
-`countdown_s` 会在每一项开始前留出准备时间，GUI 日志会显示当前项目。
-分别录制的 target/interferer 相加不保证严格等于真实 mixture，因此三者都应保留。
+`capture_strategy: paired_sequence` 会把 `target_only → interferer_only → mixture` 拼成一次连续
+全双工声卡流，中间插入 `gap_s` 秒数字静音，然后按同一个采样时间轴切回三个双麦片段。
+`countdown_s` 只在整组配对序列开始前执行一次。
+
+其中 target-only 和 mixture 会重复播放完全相同的目标语音样本、起点和长度；两者共享一次
+ASIO 流的硬件延迟，因此 target-only 可以作为 mixture 的样本级对齐监督标签。若配置中包含
+`mixture`，默认必须同时包含 `target_only`，否则配置检查失败。只采纯目标或纯干扰仍然允许，
+但标签中的 `supervision_ready` 会是“否”。分别录制的 target/interferer 相加不保证严格等于
+真实 mixture，因此三种实采录音仍应保留。
 
 ### 4 秒文件夹批量模式
 
@@ -148,8 +151,8 @@ acoustic-capture rir configs/simulated.yaml
 - `cartesian`：目标与干扰做全部组合。
 
 `scene.duration_s` 建议设为 `4.0`。长文件截取前 4 秒，短文件在末尾补零，不会重复语音内容。
-每个源文件组合会依次执行所勾选的仅目标、仅干扰和真实混合播录。环境底噪在每次 repetition
-开始时只录一次，供该 repetition 下的全部样本引用。
+每个源文件组合会在一次连续播录中完成所勾选的仅目标、仅干扰和真实混合片段。环境底噪在
+每次 repetition 开始时单独录一次，供该 repetition 下的全部样本引用。
 
 运行目录会额外保存：
 
@@ -157,11 +160,19 @@ acoustic-capture rir configs/simulated.yaml
 - `labels.csv`：UTF-8 BOM，便于通用表格工具读取；
 - `labels.xlsx`：包含“标签”“采集参数”“文件索引”“汇总”“字段说明”五个工作表，可填写人工标签、
   数据集划分、是否有效和备注，并记录所有源文件、录音、播放参考和指标文件的相对路径。
+- `raw/*_paired_sequence_mics.wav`：未切分的一次连续双麦录音；
+- `references/*_paired_sequence_playback.wav`：未切分的连续播放矩阵；
+- `metrics/*_paired_sequence_layout.json`：三个片段的精确起止采样点和对齐方式。
+
+多耳机、多次佩戴、麦杆姿态和干扰源几何位置的 `scene_id` 命名、三类现场 YAML 以及
+服务器聚合规则见 [SPEECH_DATASET_DESIGN.md](SPEECH_DATASET_DESIGN.md)。
 
 ## 6. RIR 重复与平均
 
 默认最少 4 次、最多 10 次。达到最少次数后，最近若干次满足相关性和峰值漂移条件会自动
 停止。每次原始录音和反卷积结果都会保存；削波或相关性不合格的 take 会被拒绝但不会删除。
+正式 RME 配置使用至少 5 次有效 IR；任一麦克风的扫频相对前置底噪低于
+`minimum_sweep_snr_db`、发生丢帧/削波、相关性不足或峰值漂移超限时，该 take 不进入均值。
 
 输出包括：
 
@@ -211,6 +222,12 @@ WAV 默认是 48 kHz、双通道、32-bit float。数据集发布时可以再批
 - 固定几何下的随机噪声重复：同一 session 内的 take/repetition。
 - 每个 session 拍摄一张位置照片，并把照片名写入 metadata（照片暂由人工放进运行目录）。
 - 正式批量前使用声级计确定播放电平，并记录声卡数字电平、模拟增益和测点 SPL。
+
+多耳机、多次重新佩戴、麦杆位置和干扰源角度/高度的批量实验，使用
+`configs/lab_rir_experiment_plan.yaml`。`plan-expand` 会生成逐条件 YAML；全部采集后，
+`rir-dataset` 会复制每次独立实验的双通道均值 RIR，并另外导出两个麦克风各自的 mean IR，
+再生成 CSV/JSONL 服务器索引。它不会跨佩戴、角度或高度做均值。完整命名和
+train/valid/test 防泄漏规则见 `EXPERIMENT_DATASET_DESIGN.md`。
 
 ## 9. 测试
 

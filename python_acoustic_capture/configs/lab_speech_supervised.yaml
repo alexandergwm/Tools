@@ -1,13 +1,12 @@
 audio:
   backend: sounddevice
   device: null
-  input_device: 30
-  output_device: 30
+  # 明天在 GUI 中把输入、输出都选择为同一块 RME 的 ASIO 设备。
+  input_device: null
+  output_device: null
   sample_rate: 48000
   block_size: 0
-  input_channels:
-  - 1
-  - 2
+  input_channels: [1, 2]
   target_output_channel: 1
   interferer_output_channel: 2
   latency: high
@@ -29,21 +28,17 @@ sweep:
   rir_duration_s: 2.0
   pre_peak_s: 0.01
 repeats:
-  minimum: 5
-  maximum: 10
-  correlation_threshold: 0.9
+  minimum: 1
+  maximum: 1
+  correlation_threshold: 0.98
   peak_drift_samples: 2
-  minimum_sweep_snr_db: 6.0
   required_stable_takes: 1
   reject_clipped: true
   clip_threshold: 0.999
-  pause_s: 1.0
+  pause_s: 0.5
 scene:
-  items:
-  - ambient
-  - target_only
-  - interferer_only
-  - mixture
+  # 这三个有声片段会在一次连续的全双工流中完成，不会分别重开声卡。
+  items: [ambient, target_only, interferer_only, mixture]
   source_mode: folders
   duration_s: 4.0
   ambient_duration_s: 10.0
@@ -51,11 +46,9 @@ scene:
   interferer_file: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\interferer.wav
   target_folder: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\targets
   interferer_folder: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\interferers
-  pairing_mode: cartesian
-  file_extensions:
-  - .wav
-  - .flac
-  label_prefix: headA_wearing01
+  pairing_mode: cycle
+  file_extensions: [.wav, .flac]
+  label_prefix: speech
   dataset_split: train
   target_level_dbfs: -26.0
   interferer_level_dbfs: -26.0
@@ -66,36 +59,32 @@ scene:
   gap_s: 1.0
 storage:
   root: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\runs
-  session_name: manual_name_entered_in_gui
+  session_name: hs01_w01_b00_int090_h170_supervised
   wav_subtype: FLOAT
   save_playback_reference: true
   compute_sha256: true
 metadata:
+  scene_id: hs01_w01_b00_int090_h170_supervised
+  experiment_type: speech_enhancement
   operator: ''
   room_id: ''
   artificial_head_id: headA
-  device_under_test: ''
-  wearing_id: wearing01
+  headset_model_id: modelA
+  headset_unit_id: hs01
+  wearing_id: w01
+  boom_pose_id: b00_nominal
   microphone_1: left
   microphone_2: right
   target:
-    source_id: artificial_head_mouth
-    azimuth_deg: 0
-    elevation_deg: 0
-    distance_m: null
-    height_m: null
+    active: true
+    source_id: artificial_mouth_01
+    position_id: mouth_fixed
   interferer:
+    active: true
     source_id: interferer_speaker_01
+    position_id: int090_h170_d100
     azimuth_deg: 90
     elevation_deg: 0
-    distance_m: null
-    height_m: null
-  rme:
-    clock_source: internal
-    input_gain_1_db: null
-    input_gain_2_db: null
-    totalmix_snapshot: ''
-  environment:
-    temperature_c: null
-    humidity_percent: null
+    height_m: 1.70
+    distance_m: 1.00
   notes: ''

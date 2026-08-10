@@ -55,6 +55,8 @@ scene:
   target_level_dbfs: -24
   interferer_level_dbfs: -24
   repetitions: 1
+  capture_strategy: paired_sequence
+  require_supervised_pair: true
   countdown_s: 0
   gap_s: 0
 

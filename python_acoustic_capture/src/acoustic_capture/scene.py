@@ -20,6 +20,7 @@ from .signals import load_audio, route_outputs, scale_dbfs
 from .storage import RunStore, sha256
 
 Log = Callable[[str], None]
+PAIRED_ITEM_ORDER = ("target_only", "interferer_only", "mixture")
 
 
 @dataclass(frozen=True)
@@ -107,7 +108,7 @@ def _load_pair(pair: SourcePair, config: ExperimentConfig, samples: int) -> tupl
 
 
 def _safe_label(value: str) -> str:
-    value = re.sub(r"[^0-9A-Za-z_-]+", "_", value.strip())
+    value = re.sub(r"[^\w-]+", "_", value.strip(), flags=re.UNICODE)
     return value.strip("_") or "sample"
 
 
@@ -122,6 +123,50 @@ def _automatic_label(scene: SceneConfig, pair: SourcePair, index: int) -> str:
 
 def _relative(path: Path | None, root: Path) -> str:
     return str(path.relative_to(root)).replace("\\", "/") if path is not None else ""
+
+
+def build_paired_sequence(
+    target: np.ndarray,
+    interferer: np.ndarray,
+    config: ExperimentConfig,
+) -> tuple[np.ndarray, dict[str, dict]]:
+    """Place all requested speech scenes in one continuous output stream.
+
+    The target-only and mixture blocks reuse the exact same target samples.
+    Because the backend is opened only once, every block shares one hardware
+    input/output latency and can be split on a common sample grid.
+    """
+    if len(target) != len(interferer):
+        raise ValueError("target and interferer must have equal lengths")
+    samples = len(target)
+    fs = config.audio.sample_rate
+    gap_samples = round(config.scene.gap_s * fs)
+    items = [item for item in PAIRED_ITEM_ORDER if item in config.scene.items]
+    output_channels = max(
+        config.audio.target_output_channel,
+        config.audio.interferer_output_channel,
+    )
+    total_samples = gap_samples + len(items) * (samples + gap_samples)
+    sequence = np.zeros((total_samples, output_channels), dtype=np.float32)
+    segments: dict[str, dict] = {}
+    cursor = gap_samples
+    for item in items:
+        routed: dict[int, np.ndarray] = {}
+        if item in {"target_only", "mixture"}:
+            routed[config.audio.target_output_channel] = target
+        if item in {"interferer_only", "mixture"}:
+            routed[config.audio.interferer_output_channel] = interferer
+        playback = route_outputs(routed, samples, output_channels=output_channels)
+        start, end = cursor, cursor + samples
+        sequence[start:end] = playback
+        segments[item] = {
+            "start_sample": start,
+            "end_sample": end,
+            "sample_count": samples,
+            "playback": playback,
+        }
+        cursor = end + gap_samples
+    return sequence, segments
 
 
 def _quality_flag(metrics_by_item: dict[str, dict]) -> str:
@@ -175,7 +220,10 @@ def capture_scene_block(
         "pair_count": len(pairs),
         "items": scene.items,
         "repetitions": scene.repetitions,
+        "capture_strategy": scene.capture_strategy,
+        "sample_alignment": "single_continuous_full_duplex_stream",
         "captures": [],
+        "paired_sequences": [],
     }
     label_rows: list[dict] = []
 
@@ -202,6 +250,9 @@ def capture_scene_block(
                 }
                 store.write_json(f"metrics/rep_{repetition:03d}_ambient.json", ambient_metrics)
                 summary["captures"].append(ambient_metrics)
+
+            if not any(item != "ambient" for item in scene.items):
+                continue
 
             for pair_index, pair in enumerate(pairs, 1):
                 samples = _pair_sample_count(pair, config)
@@ -233,29 +284,73 @@ def capture_scene_block(
                 playback_paths: dict[str, Path] = {}
                 metrics_paths: dict[str, Path] = {}
                 metrics_by_item: dict[str, dict] = {}
-                for item in [value for value in scene.items if value != "ambient"]:
-                    item_name = {
-                        "target_only": "仅目标声源",
-                        "interferer_only": "仅干扰声源",
-                        "mixture": "目标与干扰同时播放",
-                    }[item]
-                    log(f"  场景：{item_name}，重复 {repetition}/{scene.repetitions}")
-                    if scene.countdown_s:
-                        log(f"    将在 {scene.countdown_s:g} 秒后开始")
-                        time.sleep(scene.countdown_s)
-                    routed: dict[int, np.ndarray] = {}
-                    if item in {"target_only", "mixture"}:
-                        routed[config.audio.target_output_channel] = target
-                    if item in {"interferer_only", "mixture"}:
-                        routed[config.audio.interferer_output_channel] = interferer
-                    playback = route_outputs(routed, samples, output_channels=output_channels)
-                    capture = backend.play_record(playback)
+                paired_playback, segments = build_paired_sequence(target, interferer, config)
+                sequence_stem = (
+                    f"rep_{repetition:03d}_paired_sequence"
+                    if single_legacy
+                    else f"sample_{pair_index:04d}_rep_{repetition:03d}_paired_sequence"
+                )
+                log(
+                    "  配对序列："
+                    + " → ".join(
+                        {
+                            "target_only": "仅目标",
+                            "interferer_only": "仅干扰",
+                            "mixture": "同时发声",
+                        }[item]
+                        for item in segments
+                    )
+                )
+                if scene.countdown_s:
+                    log(f"    将在 {scene.countdown_s:g} 秒后开始一次连续播录")
+                    time.sleep(scene.countdown_s)
+                capture = backend.play_record(paired_playback)
+                paired_recording_path = store.write_audio(
+                    f"raw/{sequence_stem}_mics.wav", capture.microphones, fs
+                )
+                paired_playback_path: Path | None = None
+                if config.storage.save_playback_reference:
+                    paired_playback_path = store.write_audio(
+                        f"references/{sequence_stem}_playback.wav", paired_playback, fs
+                    )
+                layout = {
+                    "sample_index": pair_index,
+                    "repetition": repetition,
+                    "sample_rate_hz": fs,
+                    "stream_sample_count": len(paired_playback),
+                    "gap_samples": round(scene.gap_s * fs),
+                    "gap_s": scene.gap_s,
+                    "alignment_method": "single_continuous_full_duplex_stream",
+                    "segments": {
+                        item: {
+                            "start_sample": segment["start_sample"],
+                            "end_sample": segment["end_sample"],
+                            "sample_count": segment["sample_count"],
+                        }
+                        for item, segment in segments.items()
+                    },
+                }
+                layout_path = store.write_json(
+                    f"metrics/{sequence_stem}_layout.json", layout
+                )
+                sequence_summary = {
+                    **layout,
+                    "recording": _relative(paired_recording_path, store.root),
+                    "playback": _relative(paired_playback_path, store.root),
+                    "backend_status": capture.status,
+                }
+                summary["paired_sequences"].append(sequence_summary)
+
+                for item, segment in segments.items():
+                    start, end = segment["start_sample"], segment["end_sample"]
+                    playback = segment["playback"]
+                    microphones = capture.microphones[start:end]
                     stem = (
                         f"rep_{repetition:03d}_{item}"
                         if single_legacy
                         else f"sample_{pair_index:04d}_rep_{repetition:03d}_{item}"
                     )
-                    raw_path = store.write_audio(f"raw/{stem}_mics.wav", capture.microphones, fs)
+                    raw_path = store.write_audio(f"raw/{stem}_mics.wav", microphones, fs)
                     recording_paths[item] = raw_path
                     if config.storage.save_playback_reference:
                         playback_paths[item] = store.write_audio(
@@ -267,24 +362,46 @@ def capture_scene_block(
                         "item": item,
                         "repetition": repetition,
                         "file": _relative(raw_path, store.root),
-                        "channels": channel_metrics(capture.microphones),
+                        "paired_stream": sequence_stem,
+                        "segment_start_sample": start,
+                        "segment_end_sample": end,
+                        "channels": channel_metrics(microphones),
                         "backend_status": capture.status,
                     }
                     metrics_path = store.write_json(f"metrics/{stem}.json", metrics)
                     metrics_paths[item] = metrics_path
                     metrics_by_item[item] = metrics
                     summary["captures"].append(metrics)
-                    if scene.gap_s:
-                        time.sleep(scene.gap_s)
+
+                target_mixture_aligned = bool(
+                    "target_only" in segments
+                    and "mixture" in segments
+                    and np.array_equal(
+                        segments["target_only"]["playback"][:, config.audio.target_output_channel - 1],
+                        segments["mixture"]["playback"][:, config.audio.target_output_channel - 1],
+                    )
+                    and segments["target_only"]["sample_count"]
+                    == segments["mixture"]["sample_count"]
+                )
+                quality_flag = _quality_flag(metrics_by_item)
+                supervision_ready = target_mixture_aligned and quality_flag == "通过"
+                scene_id = str(config.metadata.get("scene_id") or config.storage.session_name)
+                sample_id = (
+                    f"{_safe_label(scene_id)}__{automatic_label}_rep{repetition:03d}"
+                )
 
                 label_rows.append(
                     {
-                        "sample_id": f"{automatic_label}_rep{repetition:03d}",
+                        "sample_id": sample_id,
+                        "scene_id": scene_id,
                         "manual_label": "",
                         "automatic_label": automatic_label,
                         "dataset_split": scene.dataset_split,
                         "valid": "是",
-                        "quality_flag": _quality_flag(metrics_by_item),
+                        "quality_flag": quality_flag,
+                        "supervision_ready": "是" if supervision_ready else "否",
+                        "capture_strategy": "single_stream_paired_sequence",
+                        "target_mixture_sample_aligned": "是" if target_mixture_aligned else "否",
                         "repetition": repetition,
                         "target_source": str(pair.target) if pair.target else "",
                         "interferer_source": str(pair.interferer) if pair.interferer else "",
@@ -302,6 +419,13 @@ def capture_scene_block(
                         "target_playback": _relative(playback_paths.get("target_only"), store.root),
                         "interferer_playback": _relative(playback_paths.get("interferer_only"), store.root),
                         "mixture_playback": _relative(playback_paths.get("mixture"), store.root),
+                        "paired_sequence_recording": _relative(
+                            paired_recording_path, store.root
+                        ),
+                        "paired_sequence_playback": _relative(
+                            paired_playback_path, store.root
+                        ),
+                        "segment_layout": _relative(layout_path, store.root),
                         "metrics_files": {
                             item: _relative(path, store.root) for item, path in metrics_paths.items()
                         },
@@ -315,6 +439,9 @@ def capture_scene_block(
             store.add_artifact(path.name)
         summary["labels"] = {name: path.name for name, path in label_files.items()}
         summary["label_rows"] = len(label_rows)
+        summary["supervision_ready_rows"] = sum(
+            row.get("supervision_ready") == "是" for row in label_rows
+        )
         store.write_json("metrics/summary.json", summary)
         store.finish(summary)
         log(f"语音增强场景结果与标签表已保存到：{store.root}")

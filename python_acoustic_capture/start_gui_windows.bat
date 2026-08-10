@@ -1,6 +1,6 @@
-@echo off
+﻿@echo off
 chcp 65001 >nul
-setlocal
+setlocal EnableExtensions EnableDelayedExpansion
 
 rem sounddevice 的 Windows wheel 默认不加载 ASIO DLL；RME 正式采集需要显式开启。
 if not "%ACOUSTIC_CAPTURE_ENABLE_ASIO%"=="0" set "SD_ENABLE_ASIO=1"
@@ -8,36 +8,35 @@ if not "%ACOUSTIC_CAPTURE_ENABLE_ASIO%"=="0" set "SD_ENABLE_ASIO=1"
 cd /d "%~dp0"
 set "VENV_DIR=.venv"
 set "PYTHON_EXE=%VENV_DIR%\Scripts\python.exe"
+set "PYTHON_LAUNCHER="
 set "NEED_INSTALL=0"
 
 if not exist "%PYTHON_EXE%" (
     set "NEED_INSTALL=1"
     echo [声学采集工具] 首次启动，正在创建 Python 虚拟环境……
-    where py >nul 2>nul
-    if errorlevel 1 (
-        echo 错误：未找到 Python 启动器 py。
-        echo 请安装 Python 3.10 到 3.12：https://www.python.org/
+    py -3.12 -c "import sys; assert sys.version_info[:2] == (3, 12)" >nul 2>nul
+    if not errorlevel 1 (
+        set "PYTHON_LAUNCHER=py -3.12"
+    ) else (
+        py -3.11 -c "import sys; assert sys.version_info[:2] == (3, 11)" >nul 2>nul
+        if not errorlevel 1 (
+            set "PYTHON_LAUNCHER=py -3.11"
+        ) else (
+            py -3.10 -c "import sys; assert sys.version_info[:2] == (3, 10)" >nul 2>nul
+            if not errorlevel 1 set "PYTHON_LAUNCHER=py -3.10"
+        )
+    )
+    if not defined PYTHON_LAUNCHER (
+        python -c "import sys; assert (3, 10) ^<= sys.version_info[:2] ^<= (3, 12)" >nul 2>nul
+        if not errorlevel 1 set "PYTHON_LAUNCHER=python"
+    )
+    if not defined PYTHON_LAUNCHER (
+        echo 错误：没有找到 64 位 Python 3.10、3.11 或 3.12。
+        echo 请从 https://www.python.org/ 安装 64 位 Python 3.12，并勾选 Add Python to PATH。
         pause
         exit /b 1
     )
-    py -3.12 -c "import sys" >nul 2>nul
-    if not errorlevel 1 (
-        py -3.12 -m venv "%VENV_DIR%"
-    ) else (
-        py -3.11 -c "import sys" >nul 2>nul
-        if not errorlevel 1 (
-            py -3.11 -m venv "%VENV_DIR%"
-        ) else (
-            py -3.10 -c "import sys" >nul 2>nul
-            if errorlevel 1 (
-                echo 错误：没有找到 Python 3.10、3.11 或 3.12。
-                echo 请从 https://www.python.org/ 安装 64 位 Python 3.12。
-                pause
-                exit /b 1
-            )
-            py -3.10 -m venv "%VENV_DIR%"
-        )
-    )
+    !PYTHON_LAUNCHER! -m venv "%VENV_DIR%"
     if errorlevel 1 goto :failed
 )
 

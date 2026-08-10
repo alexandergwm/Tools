@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 import numpy as np
@@ -16,6 +17,7 @@ from .signals import exponential_sweep, measurement_signal, route_outputs
 from .storage import RunStore
 
 Log = Callable[[str], None]
+Progress = Callable[[Path, int], None]
 
 
 @dataclass
@@ -77,11 +79,84 @@ def align_rir(rir: np.ndarray, peak_samples: list[int], reference_peaks: list[in
     return aligned
 
 
+def align_rir_to_reference(
+    rir: np.ndarray,
+    reference: np.ndarray,
+    max_shift_samples: int = 32,
+) -> tuple[np.ndarray, list[int], list[float]]:
+    """Remove small residual integer delays left after direct-peak cropping.
+
+    ``extract_rir`` aligns the largest deconvolution peak, but a band-limited
+    direct arrival can have several nearly equal samples.  Independent Windows
+    input/output devices can also leave a few samples of residual delay.  The
+    residual must be removed before repeat correlation and averaging.
+    """
+    if rir.shape != reference.shape:
+        raise ValueError("RIR and reference must have the same shape")
+    if max_shift_samples < 0:
+        raise ValueError("max_shift_samples must be non-negative")
+
+    aligned = np.zeros_like(rir)
+    shifts: list[int] = []
+    correlations: list[float] = []
+    for channel in range(rir.shape[1]):
+        best_shift = 0
+        best_signal = rir[:, channel]
+        best_correlation = normalized_correlation(best_signal, reference[:, channel])
+        for shift in range(-max_shift_samples, max_shift_samples + 1):
+            candidate = _shift_with_zeros(rir[:, channel], shift)
+            correlation = normalized_correlation(candidate, reference[:, channel])
+            if correlation > best_correlation:
+                best_shift = shift
+                best_signal = candidate
+                best_correlation = correlation
+        aligned[:, channel] = best_signal
+        shifts.append(best_shift)
+        correlations.append(best_correlation)
+    return aligned, shifts, correlations
+
+
+def _shift_with_zeros(signal: np.ndarray, shift: int) -> np.ndarray:
+    shifted = np.zeros_like(signal)
+    if shift == 0:
+        shifted[:] = signal
+    elif shift > 0 and shift < len(signal):
+        shifted[shift:] = signal[:-shift]
+    elif shift < 0 and -shift < len(signal):
+        shifted[:shift] = signal[-shift:]
+    return shifted
+
+
+def sweep_snr_db(
+    recording: np.ndarray,
+    sample_rate: int,
+    pre_silence_s: float,
+    sweep_samples: int,
+) -> list[float]:
+    """Compare each microphone's sweep-window RMS with its leading noise RMS."""
+    pre_samples = max(1, round(pre_silence_s * sample_rate))
+    active_start = pre_samples
+    active_end = min(len(recording), active_start + sweep_samples)
+    if active_end <= active_start:
+        return [float("-inf")] * recording.shape[1]
+    values = []
+    for channel in range(recording.shape[1]):
+        noise = recording[:pre_samples, channel].astype(np.float64)
+        active = recording[active_start:active_end, channel].astype(np.float64)
+        noise_rms = np.sqrt(np.mean(noise * noise)) if len(noise) else 0.0
+        active_rms = np.sqrt(np.mean(active * active)) if len(active) else 0.0
+        values.append(
+            float(20 * np.log10(max(active_rms, 1e-12) / max(noise_rms, 1e-12)))
+        )
+    return values
+
+
 def capture_rir(
     config: ExperimentConfig,
     backend: AudioBackend,
     output_channel: int | None = None,
     log: Log = print,
+    progress: Progress | None = None,
 ) -> RunStore:
     fs, sweep_cfg, repeat_cfg = config.audio.sample_rate, config.sweep, config.repeats
     output_channel = output_channel or config.audio.target_output_channel
@@ -112,6 +187,12 @@ def capture_rir(
             capture = backend.play_record(output)
             raw = capture.microphones
             raw_metrics = channel_metrics(raw, repeat_cfg.clip_threshold)
+            sweep_snr = sweep_snr_db(
+                raw,
+                fs,
+                sweep_cfg.pre_silence_s,
+                len(sweep),
+            )
             rir, peaks = extract_rir(
                 raw,
                 inverse,
@@ -122,33 +203,46 @@ def capture_rir(
             )
             channel_count = rir.shape[1]
             correlations = [1.0] * channel_count
+            residual_alignment = [0] * channel_count
             drift = [0] * channel_count
             aligned = rir
             if accepted:
                 reference = np.mean([take.rir for take in accepted], axis=0)
                 reference_peaks = accepted[0].peak_samples
-                # extract_rir already places every direct peak at pre_peak_s;
-                # absolute peak positions are retained only as a clock/latency check.
-                aligned = rir
-                correlations = [
-                    normalized_correlation(aligned[:, ch], reference[:, ch])
-                    for ch in range(channel_count)
-                ]
+                aligned, residual_alignment, correlations = align_rir_to_reference(
+                    rir, reference
+                )
                 drift = [peaks[ch] - reference_peaks[ch] for ch in range(channel_count)]
             clipped = any(bool(item["clipped"]) for item in raw_metrics)
             xrun = bool(capture.status.get("xrun"))
-            accepted_now = not xrun and not (repeat_cfg.reject_clipped and clipped)
-            if accepted and min(correlations) < repeat_cfg.correlation_threshold:
-                accepted_now = False
+            low_sweep_snr = min(sweep_snr) < repeat_cfg.minimum_sweep_snr_db
+            drift_ok = not accepted or max(abs(value) for value in drift) <= repeat_cfg.peak_drift_samples
+            correlation_ok = not accepted or min(correlations) >= repeat_cfg.correlation_threshold
+            rejection_reasons = []
+            if xrun:
+                rejection_reasons.append("音频丢帧")
+            if repeat_cfg.reject_clipped and clipped:
+                rejection_reasons.append("削波")
+            if low_sweep_snr:
+                rejection_reasons.append("扫频信噪比不足")
+            if not correlation_ok:
+                rejection_reasons.append("重复相关性不足")
+            if not drift_ok:
+                rejection_reasons.append("峰值漂移超限")
+            accepted_now = not rejection_reasons
             metrics = {
                 "take": take_index,
                 "accepted": accepted_now,
                 "raw_channels": raw_metrics,
+                "sweep_snr_db": sweep_snr,
+                "minimum_sweep_snr_db": repeat_cfg.minimum_sweep_snr_db,
                 "peak_samples": peaks,
                 "peak_drift_samples": drift,
+                "residual_alignment_samples": residual_alignment,
                 "correlation_to_running_average": correlations,
                 "backend_status": capture.status,
                 "audio_xrun": xrun,
+                "rejection_reasons": rejection_reasons,
             }
             store.write_audio(f"raw/take_{take_index:03d}.wav", raw, fs)
             store.write_audio(f"processed/take_{take_index:03d}_rir.wav", aligned, fs)
@@ -156,13 +250,21 @@ def capture_rir(
             all_metrics.append(metrics)
             if accepted_now:
                 accepted.append(RIRTake(take_index, aligned, peaks, True, metrics))
-                drift_ok = max(abs(value) for value in drift) <= repeat_cfg.peak_drift_samples
-                corr_ok = min(correlations) >= repeat_cfg.correlation_threshold
-                stable_count = stable_count + 1 if drift_ok and corr_ok else 0
-                log(f"  已接受；相关性={min(correlations):.4f}，峰值漂移={drift}")
+                stable_count += 1
+                log(
+                    f"  已接受；扫频信噪比={min(sweep_snr):.1f} dB，"
+                    f"相关性={min(correlations):.4f}，峰值漂移={drift}"
+                )
             else:
                 stable_count = 0
-                log(f"  已拒绝；音频丢帧={xrun}，削波={clipped}，相关性={min(correlations):.4f}")
+                log(
+                    f"  已拒绝：{', '.join(rejection_reasons)}；"
+                    f"扫频信噪比={min(sweep_snr):.1f} dB，"
+                    f"相关性={min(correlations):.4f}，峰值漂移={drift}"
+                )
+
+            if progress is not None:
+                progress(store.root, take_index)
 
             enough = len(accepted) >= repeat_cfg.minimum
             stable = stable_count >= repeat_cfg.required_stable_takes
@@ -181,6 +283,11 @@ def capture_rir(
         median = np.median(stack, axis=0).astype(np.float32)
         store.write_audio("processed/average_rir.wav", average, fs)
         store.write_audio("processed/median_rir.wav", median, fs)
+        mean_rir_files = []
+        for channel in range(average.shape[1]):
+            relative = f"processed/average_rir_mic_{channel + 1:02d}.wav"
+            store.write_audio(relative, average[:, channel], fs)
+            mean_rir_files.append(relative)
         summary = {
             "output_channel": output_channel,
             "attempted_takes": len(all_metrics),
@@ -188,6 +295,8 @@ def capture_rir(
             "rejected_takes": [item["take"] for item in all_metrics if not item["accepted"]],
             "sample_rate": fs,
             "rir_samples": len(average),
+            "mean_rir_2ch": "processed/average_rir.wav",
+            "mean_rir_per_microphone": mean_rir_files,
         }
         store.write_json("metrics/summary.json", summary)
         store.finish(summary)

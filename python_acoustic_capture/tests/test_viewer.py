@@ -7,6 +7,7 @@ from acoustic_capture.viewer import (
     ResultsViewer,
     discover_audio_files,
     display_points,
+    minmax_envelope,
     pan_interval,
     select_audio_channel,
     zoom_interval,
@@ -30,6 +31,18 @@ def test_display_points_keeps_multichannel_shape():
     times, shown = display_points(data, 48_000, limit=1_000)
     assert len(times) <= 1_000
     assert shown.shape[1] == 6
+
+
+def test_minmax_envelope_preserves_high_frequency_extrema():
+    sample_rate = 48_000
+    times = np.arange(sample_rate, dtype=np.float64) / sample_rate
+    signal = np.sin(2.0 * np.pi * 10_000.0 * times)
+
+    shown_times, lows, highs = minmax_envelope(signal, sample_rate, bins=1_000)
+
+    assert len(shown_times) == 1_000
+    assert np.median(highs) > 0.95
+    assert np.median(lows) < -0.95
 
 
 def test_select_audio_channel_supports_auto_mix_and_explicit_channel():

@@ -11,6 +11,7 @@ from .check import capture_input_check, capture_silent_duplex_check
 from .config import load_config
 from .demo import generate_demo_audio
 from .general import capture_general_io
+from .experiment import compile_rir_dataset, expand_experiment_plan
 from .rir import capture_rir
 from .scene import capture_scene_block
 
@@ -41,6 +42,10 @@ def build_parser() -> argparse.ArgumentParser:
     rir.add_argument("--output-channel", type=int, help="临时指定扫频输出通道")
     scene = sub.add_parser("scene", help="采集可选的语音增强场景块")
     scene.add_argument("config")
+    expand = sub.add_parser("plan-expand", help="把实验计划展开成逐条件 YAML")
+    expand.add_argument("plan")
+    dataset = sub.add_parser("rir-dataset", help="汇总已完成 RIR 并生成服务器训练索引")
+    dataset.add_argument("plan")
     gui = sub.add_parser("gui", help="打开图形配置工具")
     gui.add_argument("config", nargs="?", help="要打开的 YAML 配置（可选）")
     gui.add_argument("--run-once", choices=["io", "rir", "scene"], help=argparse.SUPPRESS)
@@ -91,6 +96,11 @@ def main(argv: list[str] | None = None) -> int:
             config = load_config(args.config)
             store = capture_scene_block(config, create_backend(config.audio))
             print(store.root)
+        elif args.command == "plan-expand":
+            for path in expand_experiment_plan(args.plan):
+                print(path)
+        elif args.command == "rir-dataset":
+            print(compile_rir_dataset(args.plan))
         elif args.command == "gui":
             from .gui import main as gui_main
 

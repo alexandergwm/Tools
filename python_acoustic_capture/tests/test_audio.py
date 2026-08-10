@@ -1,6 +1,8 @@
 import numpy as np
+import sys
+from types import SimpleNamespace
 
-from acoustic_capture.audio import SoundDeviceBackend, check_hardware_settings
+from acoustic_capture.audio import SoundDeviceBackend, check_hardware_settings, device_choices
 from acoustic_capture.config import AudioConfig
 
 
@@ -81,3 +83,25 @@ def test_play_record_keeps_only_selected_input_channels(monkeypatch):
     assert np.allclose(result.microphones[:, 1], 3.0)
     assert result.status["xrun"] is True
     assert result.status["callback_status"]["input_overflow"] is True
+
+
+def test_gui_device_choices_filter_input_and_output(monkeypatch):
+    fake_module = SimpleNamespace(
+        query_hostapis=lambda: [{"name": "Test API"}],
+        query_devices=lambda: [
+            {"name": "input only", "hostapi": 0, "max_input_channels": 2, "max_output_channels": 0},
+            {"name": "output only", "hostapi": 0, "max_input_channels": 0, "max_output_channels": 2},
+            {"name": "duplex", "hostapi": 0, "max_input_channels": 8, "max_output_channels": 8},
+        ],
+    )
+    monkeypatch.setitem(sys.modules, "sounddevice", fake_module)
+
+    inputs = device_choices("input")
+    outputs = device_choices("output")
+
+    assert any("input only" in choice for choice in inputs)
+    assert not any("output only" in choice for choice in inputs)
+    assert any("output only" in choice for choice in outputs)
+    assert not any("input only" in choice for choice in outputs)
+    assert any("duplex" in choice for choice in inputs)
+    assert any("duplex" in choice for choice in outputs)

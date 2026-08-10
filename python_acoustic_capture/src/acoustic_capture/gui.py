@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import queue
+import sys
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from .audio import (
     check_hardware_settings,
@@ -20,7 +21,7 @@ from .config import ExperimentConfig, load_config, save_config
 from .general import capture_general_io
 from .rir import capture_rir
 from .scene import capture_scene_block, discover_source_pairs
-from .signals import ESS_FORMULA
+from .signals import exponential_sweep, measurement_signal
 from .viewer import ResultsViewer
 
 
@@ -50,6 +51,7 @@ FIELDS = [
     ("repeats.minimum", "最少脉冲响应采集次数", int, "rir"),
     ("repeats.maximum", "最多脉冲响应采集次数", int, "rir"),
     ("repeats.correlation_threshold", "脉冲响应相关性阈值", float, "rir"),
+    ("repeats.minimum_sweep_snr_db", "扫频相对底噪最低信噪比（分贝）", float, "rir"),
     ("scene.source_mode", "语音来源模式", str, "speech"),
     ("scene.duration_s", "每条片段时长（秒，推荐 4）", lambda x: None if not x else float(x), "speech"),
     ("scene.target_file", "单文件模式：目标语音", str, "speech"),
@@ -63,9 +65,16 @@ FIELDS = [
     ("scene.target_level_dbfs", "目标播放电平（满刻度分贝）", float, "speech"),
     ("scene.interferer_level_dbfs", "干扰播放电平（满刻度分贝）", float, "speech"),
     ("scene.repetitions", "场景重复次数", int, "speech"),
+    ("scene.capture_strategy", "配对采集策略", str, "speech"),
+    (
+        "scene.require_supervised_pair",
+        "混合场景强制包含仅目标监督（true/false）",
+        lambda x: str(x).strip().lower() in {"1", "true", "yes", "是"},
+        "speech",
+    ),
     ("scene.ambient_duration_s", "环境底噪时长（秒）", float, "speech"),
-    ("scene.countdown_s", "每项开始前倒计时（秒）", float, "speech"),
-    ("scene.gap_s", "每项结束后间隔（秒）", float, "speech"),
+    ("scene.countdown_s", "每组配对序列开始前倒计时（秒）", float, "speech"),
+    ("scene.gap_s", "配对片段前后及片段间静音（秒）", float, "speech"),
     ("storage.root", "结果保存目录", str, "common"),
     ("storage.session_name", "测试名称", str, "common"),
 ]
@@ -86,7 +95,25 @@ SCENE_LABELS = {
     "interferer_only": "仅干扰声源",
     "mixture": "目标与干扰同时播放",
 }
-
+SECTION_STARTS = {
+    "audio.backend": ("声卡与录制通道", "common"),
+    "general.action": ("基础播录设置", "basic"),
+    "audio.target_output_channel": ("声源输出路由", "rir_speech"),
+    "sweep.start_hz": ("ESS 扫频信号设置", "rir"),
+    "repeats.minimum": ("RIR 重复与质量判定", "rir"),
+    "scene.source_mode": ("语音增强素材与采集序列", "speech"),
+    "storage.root": ("保存位置与实验标识", "common"),
+}
+RIR_PREVIEW_FIELDS = {
+    "audio.sample_rate",
+    "sweep.start_hz",
+    "sweep.end_hz",
+    "sweep.duration_s",
+    "sweep.pre_silence_s",
+    "sweep.post_silence_s",
+    "sweep.fade_s",
+    "sweep.level_dbfs",
+}
 
 def _get(config: ExperimentConfig, dotted: str):
     section, name = dotted.split(".")
@@ -121,15 +148,25 @@ class CaptureGUI(tk.Tk):
         self.variables = {name: tk.StringVar() for name, _, _, _ in FIELDS}
         self.mode_var = tk.StringVar(value="basic")
         self.field_rows: dict[str, tuple[tk.Widget, tk.Widget]] = {}
-        self.device_boxes: list[ttk.Combobox] = []
+        self.section_widgets: list[tuple[tk.Widget, str]] = []
+        self.device_boxes: dict[str, ttk.Combobox] = {}
         self.item_vars = {
             name: tk.BooleanVar(value=True)
             for name in ("ambient", "target_only", "interferer_only", "mixture")
         }
-        self.events: queue.Queue[str] = queue.Queue()
+        self.events: queue.Queue[object] = queue.Queue()
+        self._busy = False
+        self._preview_after_id: str | None = None
         self._build_menu()
         self._build()
         self._load_values()
+        for name in RIR_PREVIEW_FIELDS:
+            self.variables[name].trace_add("write", self._schedule_rir_preview)
+        # A fixed 1500x900 logical size can extend beyond the work area on
+        # Windows machines using 125%/150% display scaling.  Starting maximized
+        # keeps the action buttons and log visible on laboratory laptops.
+        if sys.platform == "win32":
+            self.state("zoomed")
         self.protocol("WM_DELETE_WINDOW", self._close)
         self.after(100, self._poll_events)
         if run_once:
@@ -184,7 +221,18 @@ class CaptureGUI(tk.Tk):
             add="+",
         )
 
-        for row, (name, label, _, _) in enumerate(FIELDS):
+        row = 0
+        for name, label, _, _ in FIELDS:
+            if name in SECTION_STARTS:
+                title, group = SECTION_STARTS[name]
+                section = ttk.Frame(body, padding=(0, 8, 0, 3))
+                ttk.Label(section, text=title, font=("TkDefaultFont", 10, "bold")).pack(
+                    side="left", padx=(0, 8)
+                )
+                ttk.Separator(section, orient="horizontal").pack(side="left", fill="x", expand=True)
+                section.grid(row=row, column=0, columnspan=2, sticky="ew")
+                self.section_widgets.append((section, group))
+                row += 1
             label_widget = ttk.Label(body, text=label, width=31)
             label_widget.grid(row=row, column=0, sticky="w", pady=2)
             if name == "audio.backend":
@@ -218,7 +266,7 @@ class CaptureGUI(tk.Tk):
                 )
             elif name in {"audio.input_device", "audio.output_device"}:
                 input_widget = ttk.Combobox(body, textvariable=self.variables[name])
-                self.device_boxes.append(input_widget)
+                self.device_boxes[name] = input_widget
             elif name in FILE_PATH_FIELDS | FOLDER_PATH_FIELDS:
                 input_widget = ttk.Frame(body)
                 ttk.Entry(input_widget, textvariable=self.variables[name], width=54).pack(
@@ -233,19 +281,7 @@ class CaptureGUI(tk.Tk):
                 input_widget = ttk.Entry(body, textvariable=self.variables[name], width=65)
             input_widget.grid(row=row, column=1, sticky="ew", pady=2)
             self.field_rows[name] = (label_widget, input_widget)
-        row = len(FIELDS)
-        ess_title = ttk.Label(body, text="ESS 生成公式", font=("TkDefaultFont", 10, "bold"))
-        ess_title.grid(row=row, column=0, sticky="nw", pady=(8, 2))
-        ess_formula = ttk.Label(
-            body,
-            text=ESS_FORMULA,
-            justify="left",
-            foreground="#24415c",
-            wraplength=720,
-        )
-        ess_formula.grid(row=row, column=1, sticky="ew", pady=(8, 2))
-        self.ess_widgets = (ess_title, ess_formula)
-        row += 1
+            row += 1
         ttk.Label(body, text="场景采集项目").grid(row=row, column=0, sticky="nw", pady=6)
         checks = ttk.Frame(body)
         checks.grid(row=row, column=1, sticky="w")
@@ -260,11 +296,26 @@ class CaptureGUI(tk.Tk):
         controls.pack(fill="x", side="bottom", before=parameter_area)
         actions = ttk.Frame(controls)
         actions.pack(fill="x", pady=(0, 5))
-        self.rir_button = ttk.Button(actions, text="开始脉冲响应采集", command=lambda: self.run("rir"))
-        self.scene_button = ttk.Button(actions, text="开始语音增强数据采集", command=lambda: self.run("scene"))
+        self.rir_button = ttk.Button(
+            actions,
+            text="开始新的 RIR 实验（自动多次采集）",
+            command=lambda: self.start_named_experiment("rir"),
+        )
+        self.scene_button = ttk.Button(
+            actions,
+            text="开始新的语音增强实验",
+            command=lambda: self.start_named_experiment("scene"),
+        )
         self.scene_scan_button = ttk.Button(actions, text="扫描并预览文件", command=self.scan_scene_sources)
         self.basic_button = ttk.Button(actions, text="开始基础播录", command=lambda: self.run("io"))
         self.actions = actions
+        self.experiment_status = ttk.Label(
+            controls,
+            text="每次点击开始后先手动命名。RIR 实验会自动完成本实验内的多次采集、质检与均值；换角度后再次点击开始并输入新名称。",
+            foreground="#24415c",
+            wraplength=540,
+        )
+        self.experiment_status.pack(fill="x", pady=(0, 5))
         self.log = tk.Text(controls, height=9, state="disabled", bg="#151515", fg="#dddddd")
         self.log.pack(fill="x")
         body.columnconfigure(1, weight=1)
@@ -444,10 +495,62 @@ class CaptureGUI(tk.Tk):
         except Exception as exc:
             messagebox.showerror("声卡检查失败", str(exc))
 
+    def start_named_experiment(self, kind: str):
+        """Require a fresh manual name before starting one physical experiment."""
+        kind_label = "RIR" if kind == "rir" else "语音增强"
+        name = simpledialog.askstring(
+            f"开始新的 {kind_label} 实验",
+            "请输入本次实验的唯一名称。\n"
+            "换角度、高度、佩戴或麦杆姿态后，请使用一个新名称。\n\n"
+            "示例：hs01_w01_b00_interferer_az090_h170",
+            parent=self,
+        )
+        if name is None:
+            return
+        name = name.strip()
+        if not name:
+            messagebox.showwarning("实验名称不能为空", "没有开始采集，请重新点击开始并输入名称。")
+            return
+        existing_runs = []
+        runs_root = Path(self.variables["storage.root"].get().strip()).expanduser()
+        if runs_root.is_dir():
+            for manifest_path in runs_root.glob("*/manifest.json"):
+                try:
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    old_metadata = manifest.get("metadata") or {}
+                    old_name = old_metadata.get("experiment_name") or old_metadata.get("experiment_id")
+                    if (
+                        manifest.get("kind") == kind
+                        and manifest.get("status") == "completed"
+                        and str(old_name) == name
+                    ):
+                        existing_runs.append(manifest_path.parent.name)
+                except (OSError, TypeError, json.JSONDecodeError):
+                    continue
+        if existing_runs and not messagebox.askyesno(
+            "实验名称已经使用",
+            f"名称“{name}”已有 {len(existing_runs)} 个完成结果。\n"
+            "继续会生成一个重复实验名（文件不会覆盖）。是否继续？",
+            parent=self,
+        ):
+            return
+        try:
+            metadata = json.loads(self.metadata.get("1.0", "end").strip() or "{}")
+        except json.JSONDecodeError as exc:
+            messagebox.showerror("实验元数据无效", str(exc))
+            return
+        metadata["experiment_name"] = name
+        metadata["experiment_id"] = name
+        metadata["scene_id"] = name
+        self.metadata.delete("1.0", "end")
+        self.metadata.insert("1.0", json.dumps(metadata, ensure_ascii=False, indent=2))
+        self.variables["storage.session_name"].set(name)
+        self._append(f"本次实验名称：{name}")
+        self.run(kind)
+
     def _refresh_device_choices(self):
-        choices = device_choices()
-        for box in self.device_boxes:
-            box.configure(values=choices)
+        self.device_boxes["audio.input_device"].configure(values=device_choices("input"))
+        self.device_boxes["audio.output_device"].configure(values=device_choices("output"))
 
     def run(self, kind: str):
         if not self.save():
@@ -458,12 +561,22 @@ class CaptureGUI(tk.Tk):
         def worker():
             try:
                 backend = create_backend(config.audio)
-                operation = {
-                    "io": capture_general_io,
-                    "rir": capture_rir,
-                    "scene": capture_scene_block,
-                }[kind]
-                store = operation(config, backend, log=lambda message: self.events.put(str(message)))
+                logger = lambda message: self.events.put(str(message))
+                if kind == "rir":
+                    store = capture_rir(
+                        config,
+                        backend,
+                        log=logger,
+                        progress=lambda path, take: self.events.put(
+                            ("RIR_PROGRESS", str(path), take)
+                        ),
+                    )
+                else:
+                    operation = {
+                        "io": capture_general_io,
+                        "scene": capture_scene_block,
+                    }[kind]
+                    store = operation(config, backend, log=logger)
                 self.events.put(f"__DONE__{store.root}")
             except Exception as exc:
                 self.events.put(f"__ERROR__{exc}")
@@ -471,6 +584,13 @@ class CaptureGUI(tk.Tk):
         threading.Thread(target=worker, daemon=True).start()
 
     def _set_busy(self, busy: bool):
+        self._busy = busy
+        if busy and self._preview_after_id is not None:
+            try:
+                self.after_cancel(self._preview_after_id)
+            except tk.TclError:
+                pass
+            self._preview_after_id = None
         state = "disabled" if busy else "normal"
         self.rir_button.configure(state=state)
         self.scene_button.configure(state=state)
@@ -485,10 +605,10 @@ class CaptureGUI(tk.Tk):
         for name, _, _, group in FIELDS:
             for widget in self.field_rows.get(name, ()):
                 widget.grid() if group in visible_groups else widget.grid_remove()
+        for widget, group in self.section_widgets:
+            widget.grid() if group in visible_groups else widget.grid_remove()
         for widget in self.scene_widgets:
             widget.grid() if mode == "speech" else widget.grid_remove()
-        for widget in self.ess_widgets:
-            widget.grid() if mode == "rir" else widget.grid_remove()
         for button in (self.basic_button, self.rir_button, self.scene_button, self.scene_scan_button):
             button.pack_forget()
         selected = {"basic": self.basic_button, "rir": self.rir_button, "speech": self.scene_button}[mode]
@@ -496,6 +616,59 @@ class CaptureGUI(tk.Tk):
         if mode == "speech":
             self.scene_scan_button.pack(side="left", padx=4)
         self._update_scene_source_fields()
+        if mode == "rir":
+            self._schedule_rir_preview()
+
+    def _schedule_rir_preview(self, *_):
+        if self._busy or self.mode_var.get() != "rir":
+            return
+        if self._preview_after_id is not None:
+            try:
+                self.after_cancel(self._preview_after_id)
+            except tk.TclError:
+                pass
+        self._preview_after_id = self.after(180, self._refresh_rir_preview)
+
+    def _refresh_rir_preview(self):
+        self._preview_after_id = None
+        if self._busy or self.mode_var.get() != "rir":
+            return
+        try:
+            sample_rate = int(self.variables["audio.sample_rate"].get().strip())
+            start_hz = float(self.variables["sweep.start_hz"].get().strip())
+            end_hz = float(self.variables["sweep.end_hz"].get().strip())
+            duration_s = float(self.variables["sweep.duration_s"].get().strip())
+            pre_silence_s = float(self.variables["sweep.pre_silence_s"].get().strip())
+            post_silence_s = float(self.variables["sweep.post_silence_s"].get().strip())
+            fade_s = float(self.variables["sweep.fade_s"].get().strip())
+            level_dbfs = float(self.variables["sweep.level_dbfs"].get().strip())
+            if sample_rate < 8_000:
+                raise ValueError("采样率不能低于 8000 Hz")
+            if not 0 < start_hz < end_hz < sample_rate / 2:
+                raise ValueError("扫频范围必须满足 0 < 起始频率 < 终止频率 < Nyquist")
+            if duration_s <= 0 or pre_silence_s < 0 or post_silence_s < 0:
+                raise ValueError("扫频时长必须为正，前后静音不能为负")
+            if fade_s < 0 or fade_s * 2 > duration_s:
+                raise ValueError("淡入淡出不能为负或超过扫频时长的一半")
+            if not -100 <= level_dbfs <= 0:
+                raise ValueError("播放电平必须在 -100 到 0 dBFS 之间")
+            sweep = exponential_sweep(
+                sample_rate, start_hz, end_hz, duration_s, fade_s, level_dbfs
+            )
+            played = measurement_signal(sweep, sample_rate, pre_silence_s, post_silence_s)
+            self.viewer.show_sweep_preview(
+                played,
+                sweep,
+                sample_rate,
+                start_hz,
+                end_hz,
+                duration_s,
+                pre_silence_s,
+                post_silence_s,
+                level_dbfs,
+            )
+        except Exception as exc:
+            self.viewer.summary_var.set(f"扫频参数暂时无法预览：{exc}")
 
     def _update_scene_source_fields(self):
         source_mode = LABEL_TO_SOURCE_MODE.get(
@@ -530,7 +703,11 @@ class CaptureGUI(tk.Tk):
                 event = self.events.get_nowait()
             except queue.Empty:
                 break
-            if event.startswith("__DONE__"):
+            if isinstance(event, tuple) and event and event[0] == "RIR_PROGRESS":
+                _, path, take = event
+                self._append(f"第 {take} 次 RIR 已完成，正在刷新右侧图形：{path}")
+                self.viewer.load_run(path)
+            elif isinstance(event, str) and event.startswith("__DONE__"):
                 self._set_busy(False)
                 path = event.removeprefix("__DONE__")
                 self._append(f"测试完成：{path}")
@@ -542,13 +719,13 @@ class CaptureGUI(tk.Tk):
                     messagebox.showwarning("测试完成，但存在质量警告", "\n".join(warnings) + f"\n\n结果已保存到：\n{path}")
                 else:
                     messagebox.showinfo("测试完成", f"结果已保存到：\n{path}")
-            elif event.startswith("__ERROR__"):
+            elif isinstance(event, str) and event.startswith("__ERROR__"):
                 self._set_busy(False)
                 error = event.removeprefix("__ERROR__")
                 self._append(f"错误：{error}")
                 messagebox.showerror("测试失败", error)
             else:
-                self._append(event)
+                self._append(str(event))
         self.after(100, self._poll_events)
 
     def _close(self):

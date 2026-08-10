@@ -13,6 +13,11 @@
 如果设备列表里没有 RME ASIO，但能看到 RME WDM/WASAPI 设备，可以先用后者做低风险功能验证；
 正式同步多通道采集前，应确认所用 PortAudio 安装能够访问 RME ASIO。
 
+电脑扬声器和 RME 输入属于两块不共享时钟的音频设备，不能与 RME ASIO 组成可靠的同步播录流。
+它可以用于试听素材，但不应用于正式 RIR 或需要精确对齐的语音增强采集。正式采集时应让播放和
+录制都选择 `ASIO Fireface USB`，并把扬声器接到 RME 输出；当前无 RME 扬声器时可先用
+`configs/simulated.yaml` 验证完整工作流。
+
 启动脚本已设置 `SD_ENABLE_ASIO=1`，让通过 pip 安装的 `sounddevice` 加载其 ASIO 版
 PortAudio DLL。设备列表中必须真正显示“主机接口：ASIO”才代表当前正在走 ASIO；仅设备名称中
 含有 ASIO 字样不算验证通过。不要用 Conda 环境替换脚本创建的 `.venv`，Conda 的 PortAudio

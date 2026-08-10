@@ -326,8 +326,14 @@ def list_devices() -> str:
         return f"查询音频设备失败：{exc}"
 
 
-def device_choices() -> list[str]:
-    """Compact GUI choices; the numeric prefix is accepted by sounddevice."""
+def device_choices(kind: str | None = None) -> list[str]:
+    """Return GUI device choices, optionally filtered for input or output.
+
+    Full-duplex devices are present in both filtered lists.  The numeric prefix
+    is accepted by sounddevice and avoids ambiguous device names.
+    """
+    if kind not in {None, "input", "output"}:
+        raise ValueError("device choice kind must be input, output or None")
     try:
         _enable_windows_asio()
         import sounddevice as sd
@@ -336,6 +342,11 @@ def device_choices() -> list[str]:
             f"{index}: {item['name']} [{host_apis[item['hostapi']]['name']}] "
             f"（输入 {item['max_input_channels']}，输出 {item['max_output_channels']}）"
             for index, item in enumerate(sd.query_devices())
+            if (
+                kind is None
+                or (kind == "input" and item["max_input_channels"] > 0)
+                or (kind == "output" and item["max_output_channels"] > 0)
+            )
         ]
     except Exception:
         return []

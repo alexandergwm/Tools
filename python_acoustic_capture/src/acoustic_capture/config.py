@@ -56,6 +56,7 @@ class RepeatConfig:
     maximum: int = 10
     correlation_threshold: float = 0.98
     peak_drift_samples: int = 2
+    minimum_sweep_snr_db: float = 6.0
     required_stable_takes: int = 3
     reject_clipped: bool = True
     clip_threshold: float = 0.999
@@ -86,6 +87,8 @@ class SceneConfig:
     target_level_dbfs: float = -20.0
     interferer_level_dbfs: float = -20.0
     repetitions: int = 1
+    capture_strategy: str = "paired_sequence"
+    require_supervised_pair: bool = True
     countdown_s: float = 3.0
     gap_s: float = 1.0
 
@@ -136,14 +139,33 @@ class ExperimentConfig:
             raise ValueError("sweep.pre_peak_s must be within the saved RIR duration")
         if not 1 <= r.minimum <= r.maximum:
             raise ValueError("repeats must satisfy 1 <= minimum <= maximum")
+        if r.minimum_sweep_snr_db < 0:
+            raise ValueError("repeats.minimum_sweep_snr_db must be non-negative")
         if not -100 <= s.level_dbfs <= 0:
             raise ValueError("sweep.level_dbfs must be between -100 and 0")
         allowed = {"ambient", "target_only", "interferer_only", "mixture"}
+        if not self.scene.items:
+            raise ValueError("scene.items must contain at least one capture item")
         unknown = set(self.scene.items) - allowed
         if unknown:
             raise ValueError(f"unknown scene items: {sorted(unknown)}")
         if self.scene.repetitions < 1:
             raise ValueError("scene.repetitions must be at least one")
+        if self.scene.capture_strategy != "paired_sequence":
+            raise ValueError("scene.capture_strategy must be paired_sequence")
+        if (
+            self.scene.require_supervised_pair
+            and "mixture" in self.scene.items
+            and "target_only" not in self.scene.items
+        ):
+            raise ValueError(
+                "supervised mixture capture requires target_only in scene.items"
+            )
+        if (
+            "mixture" in self.scene.items
+            and a.target_output_channel == a.interferer_output_channel
+        ):
+            raise ValueError("mixture capture requires different target and interferer output channels")
         if self.scene.source_mode not in {"single", "folders"}:
             raise ValueError("scene.source_mode must be single or folders")
         if self.scene.pairing_mode not in {"cycle", "cartesian"}:
