@@ -10,7 +10,13 @@ from acoustic_capture.check import capture_input_check, capture_silent_duplex_ch
 from acoustic_capture.config import ExperimentConfig
 from acoustic_capture.general import capture_general_io
 from acoustic_capture.rir import capture_rir
-from acoustic_capture.scene import _safe_label, build_paired_sequence, capture_scene_block
+from acoustic_capture.scene import (
+    _safe_label,
+    _shared_hardware_clock,
+    build_paired_sequence,
+    capture_scene_block,
+)
+from acoustic_capture.speech_dataset import compile_speech_dataset
 from acoustic_capture.storage import _safe_name
 
 
@@ -32,6 +38,9 @@ def test_rir_end_to_end(tmp_path: Path):
     average, fs = sf.read(store.path("processed/average_rir.wav"), always_2d=True)
     assert fs == cfg.audio.sample_rate
     assert average.shape == (round(cfg.sweep.rir_duration_s * fs), 2)
+    # The simulator places microphone 2 seven samples later.  RIR averaging
+    # must keep that physical inter-microphone time difference.
+    assert int(np.argmax(np.abs(average[:, 1]))) - int(np.argmax(np.abs(average[:, 0]))) == 7
     assert store.path("processed/average_rir_mic_01.wav").is_file()
     assert store.path("processed/average_rir_mic_02.wav").is_file()
     assert store.manifest["summary"]["mean_rir_per_microphone"] == [
@@ -41,6 +50,39 @@ def test_rir_end_to_end(tmp_path: Path):
     assert store.manifest["summary"]["attempted_takes"] == 5
     assert store.manifest["summary"]["accepted_takes"] == [1, 2, 3, 4, 5]
     assert store.manifest["status"] == "completed"
+
+
+def test_rir_stop_keeps_completed_takes_as_a_partial_average(tmp_path: Path):
+    cfg = ExperimentConfig()
+    cfg.audio.backend = "simulated"
+    cfg.sweep.duration_s = 0.1
+    cfg.sweep.pre_silence_s = 0.02
+    cfg.sweep.post_silence_s = 0.05
+    cfg.sweep.rir_duration_s = 0.05
+    cfg.repeats.minimum = 2
+    cfg.repeats.maximum = 4
+    cfg.repeats.required_stable_takes = 2
+    cfg.repeats.pause_s = 0
+    cfg.storage.root = str(tmp_path)
+    cfg.storage.compute_sha256 = False
+    stopped = False
+
+    def stop_after_first(_path, take):
+        nonlocal stopped
+        stopped = take == 1
+
+    store = capture_rir(
+        cfg,
+        SimulatedBackend(cfg.audio),
+        log=lambda _: None,
+        progress=stop_after_first,
+        stop_requested=lambda: stopped,
+    )
+
+    assert store.manifest["status"] == "cancelled"
+    assert store.manifest["summary"]["accepted_takes"] == [1]
+    assert store.manifest["summary"]["partial_average"] is True
+    assert store.path("processed/average_rir.wav").is_file()
 
 
 def test_rir_supports_more_than_two_microphones(tmp_path: Path):
@@ -207,6 +249,16 @@ def test_supervised_mixture_requires_target_only():
         cfg.validate()
 
 
+def test_supervision_requires_one_verified_duplex_device_clock():
+    cfg = ExperimentConfig()
+    cfg.audio.backend = "sounddevice"
+    cfg.audio.input_device = "RME input"
+    cfg.audio.output_device = "Beosound output"
+    assert not _shared_hardware_clock(cfg)
+    cfg.audio.input_device = cfg.audio.output_device = "ASIO Fireface USB"
+    assert _shared_hardware_clock(cfg)
+
+
 def test_pure_target_and_pure_interferer_scenes_are_supported(tmp_path: Path):
     fs = 16_000
     tone = np.sin(2 * np.pi * 330 * np.arange(800) / fs).astype(np.float32)
@@ -284,6 +336,74 @@ def test_folder_scene_batch_cycles_files_and_writes_labels(tmp_path: Path):
     assert all(row["automatic_label"].startswith("batch_") for row in labels)
     assert all(row["duration_s"] == "0.05" for row in labels)
     assert store.manifest["summary"]["label_rows"] == 3
+
+
+def test_speech_dataset_packages_multichannel_pairs_and_flattened_labels(tmp_path: Path):
+    fs = 16_000
+    time_axis = np.arange(800) / fs
+    target = tmp_path / "target.wav"
+    interferer = tmp_path / "interferer.wav"
+    sf.write(target, np.sin(2 * np.pi * 330 * time_axis), fs)
+    sf.write(interferer, np.sin(2 * np.pi * 770 * time_axis), fs)
+
+    cfg = ExperimentConfig()
+    cfg.audio.backend = "simulated"
+    cfg.audio.sample_rate = fs
+    cfg.audio.input_channels = [1, 2, 3]
+    cfg.scene.items = ["target_only", "interferer_only", "mixture"]
+    cfg.scene.target_file = str(target)
+    cfg.scene.interferer_file = str(interferer)
+    cfg.scene.duration_s = 0.05
+    cfg.scene.countdown_s = 0
+    cfg.scene.gap_s = 0
+    cfg.storage.root = str(tmp_path / "runs")
+    cfg.storage.compute_sha256 = False
+    cfg.metadata = {
+        "project_id": "speech_v1",
+        "scene_id": "head02_hs01_w03_int090_h170",
+        "experiment_id": "head02_hs01_w03_int090_h170",
+        "room_id": "lab_a",
+        "artificial_head_id": "head02",
+        "headset_model_id": "model_a",
+        "headset_unit_id": "hs01",
+        "wearing_id": "w03",
+        "boom_pose_id": "b00_nominal",
+        "microphone_1": "left",
+        "microphone_2": "right",
+        "microphone_3": "reference",
+        "target": {"source_id": "mouth01", "position_id": "mouth_fixed"},
+        "interferer": {
+            "source_id": "speaker01",
+            "position_id": "az090_h170",
+            "azimuth_deg": 90,
+            "elevation_deg": 17,
+            "height_m": 1.7,
+            "distance_m": 1.0,
+        },
+    }
+    store = capture_scene_block(cfg, SimulatedBackend(cfg.audio), log=lambda _: None)
+
+    with store.path("labels.csv").open(encoding="utf-8-sig", newline="") as handle:
+        label = next(csv.DictReader(handle))
+    assert label["capture_type"] == "supervised_pair"
+    assert label["supervision_pair_id"] == label["sample_id"]
+    assert label["artificial_head_id"] == "head02"
+    assert label["interferer_azimuth_deg"] == "90"
+    assert label["microphone_channels"] == "1,2,3"
+    assert store.path("supervised_pairs.csv").is_file()
+
+    dataset = compile_speech_dataset(tmp_path / "runs", tmp_path / "speech_dataset")
+    manifest = json.loads((dataset / "dataset_manifest.json").read_text(encoding="utf-8"))
+    with (dataset / "indexes" / "supervised_pairs.csv").open(
+        encoding="utf-8-sig", newline=""
+    ) as handle:
+        pair = next(csv.DictReader(handle))
+    packaged_mixture, _ = sf.read(dataset / pair["mixture_recording"], always_2d=True)
+    packaged_target, _ = sf.read(dataset / pair["target_recording"], always_2d=True)
+    assert manifest["supervised_pair_count"] == 1
+    assert pair["dataset_supervision_ready"] == "是"
+    assert packaged_mixture.shape == packaged_target.shape == (800, 3)
+    assert (dataset / "indexes" / "speech_dataset.xlsx").is_file()
 
 
 def test_basic_io_actions(tmp_path: Path):

@@ -5,9 +5,13 @@
 1. 从 [RME 官方下载页](https://rme-audio.de/downloads.html) 安装 Windows 10/11 Fireface USB
    驱动，连接 Fireface UCX，并在 RME 设置中固定为 48 kHz。
    本工具推荐使用 64 位 Intel/AMD Python 3.12；启动脚本会拒绝误装的 32 位 Python。
-2. 双击 `start_gui_windows.bat`。脚本会建立 `.venv`、安装本项目并打开中文版 GUI。
-3. 点击“查看音频设备”，优先选择主机接口标为 `ASIO` 的 RME 设备。
-4. 分别把“录制设备”和“播放设备”设为该 RME 设备；录制通道填写 `1,2`。
+2. 双击 `start_gui_windows.bat`。首次启动会要求选择 64 位 Python 3.10 或更高版本的
+   `python.exe`，并询问是建立项目 `.venv`（推荐）还是直接使用所选环境。需要更换解释器时
+   双击 `choose_python_windows.bat`。
+3. 在“音频协议 / 主机接口”中选择 `ASIO`。如果列表中没有 ASIO，说明当前 Python/PortAudio
+   或 RME 驱动尚未提供 ASIO，不能根据 MME 编号猜测。
+4. 协议选为 ASIO 后，录制设备列表只显示具有输入通道的 ASIO 设备，播放设备列表只显示具有
+   输出通道的 ASIO 设备；两项都选择 `ASIO Fireface USB`，录制通道填写 `1,2`。
 5. 目标声源输出通道默认是 1，干扰声源输出通道默认是 2。它们是声卡输出编号，不是麦克风编号。
 
 如果设备列表里没有 RME ASIO，但能看到 RME WDM/WASAPI 设备，可以先用后者做低风险功能验证；
@@ -20,8 +24,8 @@
 
 启动脚本已设置 `SD_ENABLE_ASIO=1`，让通过 pip 安装的 `sounddevice` 加载其 ASIO 版
 PortAudio DLL。设备列表中必须真正显示“主机接口：ASIO”才代表当前正在走 ASIO；仅设备名称中
-含有 ASIO 字样不算验证通过。不要用 Conda 环境替换脚本创建的 `.venv`，Conda 的 PortAudio
-通常不包含 ASIO。若 ASIO DLL 在个别机器上无法初始化，可临时设置
+含有 ASIO 字样不算验证通过。正式 RME 采集推荐选择项目 `.venv` 模式；若直接选择 Conda
+环境，必须再次确认该环境中的 PortAudio 确实能列出 ASIO。若 ASIO DLL 在个别机器上无法初始化，可临时设置
 `ACOUSTIC_CAPTURE_ENABLE_ASIO=0` 做故障定位，但不建议用这个状态采正式数据。
 
 ## TotalMix 路由

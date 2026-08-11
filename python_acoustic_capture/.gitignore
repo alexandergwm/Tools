@@ -1,4 +1,5 @@
 .venv/
+.python-selection.json
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -6,7 +7,11 @@ runs/
 audio/
 build/
 dist/
+!portable_release/dist/
+!portable_release/dist/AcousticCapturePortable.exe
 outputs/
 datasets/
 configs/generated/
 *.egg-info/
+!portable_assets/audio/
+!portable_assets/audio/**

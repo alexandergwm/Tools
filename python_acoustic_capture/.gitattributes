@@ -1,0 +1,2 @@
+portable_release/*.zip filter=lfs diff=lfs merge=lfs -text
+portable_release/dist/*.exe filter=lfs diff=lfs merge=lfs -text

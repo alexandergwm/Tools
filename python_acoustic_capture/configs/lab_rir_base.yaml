@@ -2,6 +2,7 @@
 # 每个独立实验由 lab_rir_experiment_plan.yaml 展开后写入 metadata。
 audio:
   backend: sounddevice
+  host_api: ASIO
   device: null
   input_device: "ASIO Fireface USB"
   output_device: "ASIO Fireface USB"
@@ -19,7 +20,8 @@ sweep:
   duration_s: 8
   pre_silence_s: 1
   post_silence_s: 3
-  fade_s: 0.02
+  fade_in_s: 0.08
+  fade_out_s: 0.005
   level_dbfs: -20
   rir_duration_s: 2
   pre_peak_s: 0.01
@@ -44,9 +46,20 @@ storage:
   compute_sha256: true
 
 metadata:
+  capture_profile: standard
+  task_type: rir_for_neural_beamforming
   artificial_head_id: head01
   microphone_1: left
   microphone_2: right
+  array:
+    array_id: headset_array_template
+    coordinate_system: head_center_x_forward_y_left_z_up_m
+    reference_point: artificial_head_center
+    reference_channel: 1
+    geometry_required: false
+    channels:
+      - {recording_channel: 1, microphone_id: left, x_m: null, y_m: null, z_m: null, polarity: 1}
+      - {recording_channel: 2, microphone_id: right, x_m: null, y_m: null, z_m: null, polarity: 1}
   capture_mode: real_rme_asio
   rme_input_gain_ch1_db: null
   rme_input_gain_ch2_db: null

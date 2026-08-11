@@ -9,14 +9,6 @@ import soundfile as sf
 from scipy.signal import resample_poly
 
 
-ESS_FORMULA = (
-    "瞬时频率：f(t) = f₀ · (f₁/f₀)^(t/T)\n"
-    "相位：φ(t) = 2π f₀T / ln(f₁/f₀) · [(f₁/f₀)^(t/T) − 1]\n"
-    "扫频：s(t) = 10^(L/20) · w(t) · sin(φ(t))\n"
-    "播放序列：x(t) = 前静默 ⊕ s(t) ⊕ 后静默，0 ≤ t < T"
-)
-
-
 def db_to_gain(db: float) -> float:
     return float(10.0 ** (db / 20.0))
 
@@ -26,10 +18,11 @@ def exponential_sweep(
     start_hz: float,
     end_hz: float,
     duration_s: float,
-    fade_s: float,
     level_dbfs: float,
+    fade_in_s: float = 0.08,
+    fade_out_s: float = 0.005,
 ) -> np.ndarray:
-    """Generate an ESS directly from its analytic phase equation.
+    """Generate an upward ESS compatible with MATLAB ``sweeptone``.
 
     For start frequency f0, end frequency f1 and duration T:
 
@@ -37,8 +30,17 @@ def exponential_sweep(
         phi(t) = 2*pi*f0*T/log(f1/f0) * ((f1/f0)**(t/T) - 1)
         s(t)   = 10**(level_dbfs/20) * window(t) * sin(phi(t))
 
-    ``measurement_signal`` then concatenates configurable pre/post silence.
+    MATLAB R2024b uses an 80 ms sine fade-in and a 5 ms sine fade-out for
+    upward sweeps. ``measurement_signal`` additionally adds configurable
+    leading and trailing silence for the physical measurement workflow.
     """
+    # Compatibility with configs/tests from releases where the last two
+    # positional arguments were (fade_s, level_dbfs).
+    if fade_in_s < 0 <= level_dbfs:
+        legacy_fade_s = level_dbfs
+        level_dbfs = fade_in_s
+        fade_in_s = legacy_fade_s
+        fade_out_s = legacy_fade_s
     count = round(sample_rate * duration_s)
     time = np.arange(count, dtype=np.float64) / sample_rate
     log_ratio = np.log(end_hz / start_hz)
@@ -51,12 +53,19 @@ def exponential_sweep(
         * (np.exp(log_ratio * time / duration_s) - 1.0)
     )
     signal = np.sin(phase)
-    fade_n = min(round(fade_s * sample_rate), count // 2)
-    if fade_n:
-        ramp = np.sin(np.linspace(0, np.pi / 2, fade_n, endpoint=True)) ** 2
-        signal[:fade_n] *= ramp
-        signal[-fade_n:] *= ramp[::-1]
-    signal *= db_to_gain(level_dbfs) / max(np.max(np.abs(signal)), 1e-12)
+    fade_in_n = min(int(np.ceil(fade_in_s * sample_rate)), count)
+    if fade_in_n:
+        fade_in = np.sin(
+            np.pi / 2 * np.linspace(0.0, 1.0 - 1.0 / fade_in_n, fade_in_n)
+        )
+        signal[:fade_in_n] *= fade_in
+    fade_out_n = min(int(np.ceil(fade_out_s * sample_rate)), count)
+    if fade_out_n:
+        fade_out = np.sin(
+            np.pi / 2 * np.linspace(1.0 - 1.0 / fade_out_n, 0.0, fade_out_n)
+        )
+        signal[-fade_out_n:] *= fade_out
+    signal *= db_to_gain(level_dbfs)
     return signal.astype(np.float32)
 
 

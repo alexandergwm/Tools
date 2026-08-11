@@ -17,7 +17,8 @@ from matplotlib.figure import Figure
 from matplotlib import rcParams
 from scipy.signal import spectrogram
 
-rcParams["font.sans-serif"] = ["PingFang SC", "Heiti TC", "Microsoft YaHei", "SimHei", "Arial Unicode MS", "DejaVu Sans"]
+rcParams["font.family"] = "DejaVu Sans"
+rcParams["font.sans-serif"] = ["DejaVu Sans"]
 rcParams["axes.unicode_minus"] = False
 
 
@@ -232,11 +233,11 @@ class ResultsViewer(ttk.Frame):
         self.canvas.mpl_connect("motion_notify_event", self._on_motion)
         self.canvas.mpl_connect("button_release_event", self._on_button_release)
         for axis, title in zip(
-            self.axes, ("播放或原始信号", "麦克风录制信号", "计算得到的脉冲响应")
+            self.axes, ("Playback / reference", "Microphone recording", "Estimated impulse response")
         ):
             axis.set_title(title)
-            axis.set_xlabel("时间（秒）")
-            axis.set_ylabel("幅度")
+            axis.set_xlabel("Time (s)")
+            axis.set_ylabel("Amplitude")
             axis.grid(True, alpha=0.25)
         self.canvas.draw_idle()
         ttk.Label(self, textvariable=self.summary_var, anchor="w", justify="left").pack(fill="x", pady=4)
@@ -274,6 +275,8 @@ class ResultsViewer(ttk.Frame):
         pre_silence_s: float,
         post_silence_s: float,
         level_dbfs: float,
+        fade_in_s: float,
+        fade_out_s: float,
     ) -> None:
         """Show the ESS that would be played before a measurement starts."""
         self.run_dir = None
@@ -285,6 +288,8 @@ class ResultsViewer(ttk.Frame):
             "pre_silence_s": float(pre_silence_s),
             "post_silence_s": float(post_silence_s),
             "level_dbfs": float(level_dbfs),
+            "fade_in_s": float(fade_in_s),
+            "fade_out_s": float(fade_out_s),
         }
         self.files = {"playback": [], "recording": [], "rir": []}
         self.path_by_label.clear()
@@ -299,7 +304,6 @@ class ResultsViewer(ttk.Frame):
         self._x_bounds.clear()
         self._drag_state = None
 
-        envelope_times, envelope_lows, envelope_highs = minmax_envelope(played, sample_rate)
         detail_duration = min(duration_s, max(0.02, 8.0 / start_hz))
         detail_samples = min(len(sweep), max(2, int(round(detail_duration * sample_rate))))
         detail_times = pre_silence_s + np.arange(detail_samples) / sample_rate
@@ -309,29 +313,60 @@ class ResultsViewer(ttk.Frame):
         for axis in self.axes:
             axis.clear()
             axis.grid(True, alpha=0.25)
-        self.axes[0].fill_between(
-            envelope_times,
-            envelope_lows,
-            envelope_highs,
-            linewidth=0.0,
-            color="#1f77b4",
-            alpha=0.9,
-        )
-        self.axes[0].axhline(0.0, linewidth=0.5, color="#555555", alpha=0.5)
-        self.axes[0].set_title("实际播放序列波形包络：前静音 + ESS + 后静音（已避免高频显示混叠）")
-        self.axes[0].set_ylabel("幅度")
-        self.axes[0].set_xlabel("时间（秒）")
+
+        # A compressed high-frequency waveform (or a peak envelope) looks like
+        # dropouts even when the ESS is perfectly continuous.  The first panel
+        # therefore shows only the playback *schedule*.  The next two panels
+        # carry the actual waveform and frequency information.
         full_duration = len(played) / sample_rate
+        sweep_start = pre_silence_s
+        sweep_end = pre_silence_s + duration_s
+        timeline = (
+            (0.0, pre_silence_s, "#d9d9d9", f"Pre-silence\n{pre_silence_s:g} s"),
+            (
+                sweep_start,
+                duration_s,
+                "#4c9bd6",
+                f"ESS sweep\n{duration_s:g} s  |  {start_hz:g} -> {end_hz:g} Hz  |  {level_dbfs:g} dBFS",
+            ),
+            (sweep_end, post_silence_s, "#d9d9d9", f"Post-silence\n{post_silence_s:g} s"),
+        )
+        self.axes[0].grid(False)
+        for left, width, color, label in timeline:
+            if width <= 0:
+                continue
+            self.axes[0].barh(
+                0.5,
+                width,
+                left=left,
+                height=0.48,
+                color=color,
+                edgecolor="#4a4a4a",
+                linewidth=0.8,
+            )
+            self.axes[0].text(
+                left + width / 2.0,
+                0.5,
+                label,
+                ha="center",
+                va="center",
+                fontsize=9,
+                color="#202020",
+            )
+        self.axes[0].axvline(sweep_start, color="#235f8f", linewidth=1.0, linestyle="--")
+        self.axes[0].axvline(sweep_end, color="#235f8f", linewidth=1.0, linestyle="--")
+        self.axes[0].set_title("Playback sequence (timeline only - not a waveform)")
+        self.axes[0].set_yticks([])
+        self.axes[0].set_ylim(0.0, 1.0)
+        self.axes[0].set_xlabel("Playback time (s)")
         self.axes[0].set_xlim(0.0, max(full_duration, 1.0 / sample_rate))
         self._x_bounds[self.axes[0]] = self.axes[0].get_xlim()
 
         self.axes[1].plot(detail_times, sweep[:detail_samples], linewidth=1.0, color="#ff7f0e")
         self.axes[1].axhline(0.0, linewidth=0.5, color="#555555", alpha=0.5)
-        self.axes[1].set_title(
-            f"ESS 起始 {detail_duration * 1000.0:.0f} ms 原始连续波形（约 8 个起始周期）"
-        )
-        self.axes[1].set_ylabel("幅度")
-        self.axes[1].set_xlabel("播放时间（秒）")
+        self.axes[1].set_title(f"Actual ESS start: first {detail_duration * 1000.0:.0f} ms")
+        self.axes[1].set_ylabel("Amplitude")
+        self.axes[1].set_xlabel("Playback time (s)")
         detail_bounds = (
             pre_silence_s,
             pre_silence_s + max(detail_samples - 1, 1) / sample_rate,
@@ -341,10 +376,10 @@ class ResultsViewer(ttk.Frame):
 
         absolute_frequency_times = frequency_times + pre_silence_s
         self.axes[2].semilogy(absolute_frequency_times, frequencies, linewidth=1.6, color="#2ca02c")
-        self.axes[2].set_title("ESS 瞬时频率轨迹")
-        self.axes[2].set_ylabel("频率（Hz，对数坐标）")
-        self.axes[2].set_xlabel("播放时间（秒）")
-        sweep_bounds = (pre_silence_s, pre_silence_s + duration_s)
+        self.axes[2].set_title("ESS instantaneous frequency")
+        self.axes[2].set_ylabel("Frequency (Hz, log scale)")
+        self.axes[2].set_xlabel("Playback time (s)")
+        sweep_bounds = (sweep_start, sweep_end)
         self.axes[2].set_xlim(sweep_bounds)
         self.axes[2].set_ylim(max(1.0, start_hz * 0.8), end_hz * 1.2)
         self._x_bounds[self.axes[2]] = sweep_bounds
@@ -352,8 +387,75 @@ class ResultsViewer(ttk.Frame):
         peak = float(np.max(np.abs(sweep))) if len(sweep) else 0.0
         self.summary_var.set(
             f"扫频预览：{start_hz:g} → {end_hz:g} Hz，扫频 {duration_s:g} 秒，"
-            f"总播放 {full_duration:g} 秒，电平 {level_dbfs:g} dBFS，峰值 {peak:.4f}；"
-            "上图为逐时间桶最小/最大包络，不是对播放信号重新采样"
+            f"淡入 {fade_in_s:g} 秒，淡出 {fade_out_s:g} 秒，总播放 {full_duration:g} 秒，"
+            f"电平 {level_dbfs:g} dBFS，峰值 {peak:.4f}；"
+            "第一图只表示前静音 / ESS / 后静音的播放顺序，不是波形，也不用于判断掉音"
+        )
+        self.canvas.draw_idle()
+
+    def show_speech_workflow_guide(self) -> None:
+        """Replace a stale ESS preview with the supervised speech workflow."""
+        self.run_dir = None
+        self.preview_spec = None
+        self.files = {"playback": [], "recording": [], "rir": []}
+        self.path_by_label.clear()
+        for category, variable in (
+            ("playback", self.playback_var),
+            ("recording", self.recording_var),
+            ("rir", self.rir_var),
+        ):
+            variable.set("")
+            getattr(self, f"_{category}_box").configure(values=[])
+        self.run_label.configure(text="语音增强采集：完成后自动显示本次多通道录音")
+        self._x_bounds.clear()
+        self._drag_state = None
+        for axis in self.axes:
+            axis.clear()
+            axis.set_axis_off()
+        self.axes[0].text(
+            0.5,
+            0.5,
+            "TARGET ONLY  >  INTERFERER ONLY  >  MIXTURE",
+            ha="center",
+            va="center",
+            fontsize=11,
+            weight="bold",
+            color="#1F4E78",
+            transform=self.axes[0].transAxes,
+        )
+        self.axes[1].text(
+            0.5,
+            0.55,
+            "One continuous full-duplex audio stream",
+            ha="center",
+            va="center",
+            fontsize=13,
+            transform=self.axes[1].transAxes,
+        )
+        self.axes[1].text(
+            0.5,
+            0.35,
+            "Same target source samples and shared hardware clock",
+            ha="center",
+            va="center",
+            fontsize=11,
+            color="#555555",
+            transform=self.axes[1].transAxes,
+        )
+        self.axes[2].text(
+            0.5,
+            0.5,
+            "TRAINING INPUT: mixture     |     LABEL: target only",
+            ha="center",
+            va="center",
+            fontsize=13,
+            weight="bold",
+            color="#548235",
+            transform=self.axes[2].transAxes,
+        )
+        self.summary_var.set(
+            "标准监督采集会在一次连续声卡流中依次录制纯净目标、纯干扰和同时发声；"
+            "训练输入是 mixture，监督标签是同一行的 target-only。"
         )
         self.canvas.draw_idle()
 
@@ -399,12 +501,12 @@ class ResultsViewer(ttk.Frame):
         for axis, category, title in zip(
             self.axes,
             ("playback", "recording", "rir"),
-            ("播放或原始信号", "麦克风录制信号", "计算得到的脉冲响应"),
+            ("Playback / reference", "Microphone recording", "Estimated impulse response"),
         ):
             axis.clear()
             path = self._selected_path(category)
             if path is None:
-                axis.text(0.5, 0.5, "没有对应文件", ha="center", va="center", transform=axis.transAxes)
+                axis.text(0.5, 0.5, "No file selected", ha="center", va="center", transform=axis.transAxes)
                 axis.set_title(title)
                 continue
             data, sample_rate = sf.read(path, always_2d=True, dtype="float32")
@@ -417,13 +519,13 @@ class ResultsViewer(ttk.Frame):
             else:
                 times, shown = display_points(data, sample_rate)
                 for channel in range(shown.shape[1]):
-                    axis.plot(times, shown[:, channel], linewidth=0.8, label=f"通道 {channel + 1}")
-            axis.set_title(f"{title} — {path.name}")
-            axis.set_xlabel("时间（秒）")
+                    axis.plot(times, shown[:, channel], linewidth=0.8, label=f"Channel {channel + 1}")
+            axis.set_title(title)
+            axis.set_xlabel("Time (s)")
             if self.show_spectrogram.get():
-                axis.set_ylabel("频率（千赫兹）")
+                axis.set_ylabel("Frequency (kHz)")
             else:
-                axis.set_ylabel("幅度")
+                axis.set_ylabel("Amplitude")
                 axis.grid(True, alpha=0.25)
                 if shown.shape[1] <= 12:
                     axis.legend(loc="upper right", ncol=min(4, shown.shape[1]), fontsize=8)
@@ -448,14 +550,14 @@ class ResultsViewer(ttk.Frame):
     @staticmethod
     def _plot_spectrogram(axis, signal: np.ndarray, sample_rate: int):
         if len(signal) < 8:
-            axis.text(0.5, 0.5, "信号过短，无法计算语谱图", ha="center", va="center", transform=axis.transAxes)
+            axis.text(0.5, 0.5, "Signal is too short for a spectrogram", ha="center", va="center", transform=axis.transAxes)
             return
         if float(np.max(np.abs(signal))) <= 1e-10:
             axis.set_facecolor("#111111")
             axis.text(
                 0.5,
                 0.5,
-                "信号全零，无法形成有效语谱图",
+                "The signal is silent",
                 color="white",
                 ha="center",
                 va="center",

@@ -14,10 +14,14 @@ paths:
   runs_root: ../runs
   dataset_root: ../datasets/headset_rir_generalization_v1
 
-# 该矩阵会生成：2 个耳机 × 3 次重新佩戴 ×
+# 当前 1 个人工头时，该矩阵会生成：1 个人工头 × 2 个耳机 × 3 次重新佩戴 ×
 # （人工嘴 3 个麦杆位置 + 干扰源 3 个角度×2 个高度）= 54 次独立实验。
-# 若时间允许，把 w04/w05 加入 wearings；每个佩戴/角度/高度都是新实验，不能继续追加 take。
+# 增加人工头时在 artificial_heads 继续添加；实验数会按人工头数成倍增加。
+# 若时间允许，把 w04/w05 加入 wearings；每个人工头/佩戴/角度/高度都是新实验，不能继续追加 take。
 matrix:
+  artificial_heads:
+    - artificial_head_id: head01
+
   headset_units:
     - headset_model_id: model_a
       headset_unit_id: hs01

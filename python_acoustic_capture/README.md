@@ -44,8 +44,10 @@ acoustic-capture devices
 
 - Windows：双击 `start_gui_windows.bat`
 
-启动器第一次运行时会在项目目录创建 `.venv`、安装程序，然后打开 GUI；后续双击仍会同步
-本地代码更新。RME ASIO 实际采集需要在 Windows/RME 环境验证。
+启动器第一次运行时会弹出文件选择框，要求选择一个 64 位 Python 3.10 或更高版本的
+`python.exe`。随后可选择“用它创建/复用项目 `.venv`”（推荐）或“直接使用所选 venv/Conda
+环境”。选择结果仅保存在本机的 `.python-selection.json`；需要更换时双击
+`choose_python_windows.bat`。启动器会安装缺少的依赖并打开 GUI。
 
 Windows 首次启动还会在缺少示例文件时生成一组无版权的合成流程验收音频。正式采集前必须在
 GUI 中把它们换成自己的干净语音和干扰素材。RME 接线、TotalMix 路由和上机检查步骤见
@@ -63,15 +65,24 @@ acoustic-capture gui
 打开 `configs/rme_ucx.yaml` 后，可以修改声卡、通道、扫频、重复次数、播放电平、源文件、
 保存目录和实验元数据。场景 block 的四项可以独立勾选。点击运行前 GUI 会保存并校验配置；
 采集在后台线程执行，日志显示在窗口底部。
+采集期间“停止当前测试”按钮会立即请求终止音频流。已完整完成的 RIR take 会保留并生成标记为
+`partial_average` 的部分均值；正在播放但未完成的一次不会进入均值。语音增强采集同样会保留
+已经完整写入的配对序列，并把运行状态标记为 `cancelled`。
 
-GUI 顶部提供三个模式，底层关系是“一个通用 I/O 引擎 + 两个专业工作流”：
+GUI 顶部只保留两个入口：
 
-- `基础播录`：选择“仅播放”“仅录制”或“同步播放并录制”，完成一次最基础操作；
-- `房间脉冲响应采集`：复用同时播录，并增加指数扫频、重复、反卷积、质检与平均；
-- `语音增强数据采集`：复用基础播录，并编排环境、目标、干扰和混合场景。
+- `RIR 采集`：默认只显示声卡、输入/输出通道、扫频播放电平、有效 RIR 次数和保存位置。
+  常规实验直接使用默认 ESS；扫频频率、时长、淡入淡出、RIR 截取和质量阈值统一放在
+  “显示高级设置”中。
+- `音频 / 语音采集`：把普通播录和语音增强合并，通过“采集方案”选择标准监督采集、只采
+  干净目标、只采干扰、普通单文件同步播录、仅录制或仅播放。界面只显示当前方案实际需要的
+  文件、声源和通道。
 
-录制设备和播放设备可以分别选择；设备下拉框显示各设备支持的最大输入/输出通道数。
-录制通道使用逗号分隔，例如 `1,2` 或 `1,2,3,4`；各模式的输出通道独立设置。
+先在“音频协议 / 主机接口”中选择 `MME`、`Windows WASAPI`、`Windows WDM-KS` 或 `ASIO`，
+再选择设备。录制设备下拉框只显示该协议下具有输入能力的设备，播放设备下拉框只显示该协议下
+具有输出能力的设备；切换协议时两项会清空，避免沿用另一协议的设备编号。录制通道使用逗号
+分隔，例如 `1,2` 或 `1,2,3,4`；各模式的输出通道独立设置。正式同步采集的输入和输出必须
+属于同一个协议，配置检查也会阻止协议不匹配的设备。
 
 采集完成后，右侧结果面板会自动加载本次运行：
 
@@ -94,6 +105,27 @@ WAV 保存和结果图会自动跟随通道数扩展。
 求均值。改变角度、高度、重新佩戴或移动麦杆后，再点击同一个开始按钮并输入新的自由名称；
 不会与上一次实验求平均。语音增强实验同样在点击开始时命名。名称会同时写入运行目录、
 `experiment_id`、`scene_id` 和清单元数据。
+
+### 现场工作流：Excel 清单或手工命名
+
+GUI 不要求测试工程师逐项评价。现场只有两种主流程：
+
+1. 点击顶部“测试清单 (.xlsx)”，选择清单中的一行。工具自动带入工作流、实验名、佩戴、麦杆、
+   声源角度/高度等条件；采集完成后自动把 `status`、`completed_run` 和完成时间回写到同一个
+   `.xlsx`。Excel 必须在采集结束前关闭，否则 Windows 文件锁会阻止回写，但不会影响 WAV 保存。
+2. 不选择清单，点击开始后手工输入本次实验名。每次重新佩戴、移动角度/高度或改变麦杆姿态，
+   使用一个新实验名。
+
+空白模板随 Portable 一起提供为 `acoustic_capture_checklist_template.xlsx`，也可在 GUI 的“文件”
+菜单新建。RIR YAML 计划可以直接转成预填清单：
+
+```powershell
+acoustic-capture checklist acoustic_capture_checklist.xlsx `
+  --rir-plan configs\lab_rir_experiment_plan.yaml
+```
+
+阵列坐标、校准阈值等专业字段属于项目模板，不需要每次现场填写。默认 `capture_profile: standard`
+只自动提醒；只有项目负责人明确切换为 `production` 后，缺少会破坏训练正确性的条件才会阻止开始。
 
 ## 4. 命令行
 
@@ -142,9 +174,14 @@ ASIO 流的硬件延迟，因此 target-only 可以作为 mixture 的样本级�
 但标签中的 `supervision_ready` 会是“否”。分别录制的 target/interferer 相加不保证严格等于
 真实 mixture，因此三种实采录音仍应保留。
 
+严格监督还要求录制输入和两路扬声器输出使用同一块可验证的双工声卡。正式实验应让人工嘴和
+干扰扬声器都接 RME 输出，并在 GUI 中让输入、输出都选择同一个 `ASIO Fireface USB`。
+如果 RME 负责录音、Beosound 作为另一台 Windows 播放设备，流程可以试跑，但标签中的
+`shared_hardware_clock` 和 `supervision_ready` 会是“否”，不会进入监督训练索引。
+
 ### 4 秒文件夹批量模式
 
-在“语音增强数据采集”模式中，把“语音来源模式”设为“文件夹批量”，然后分别选择目标语音目录
+在“音频 / 语音采集”中选择语音采集方案，把“素材选择方式”设为“文件夹批量”，然后分别选择目标语音目录
 和干扰声音目录。程序递归扫描配置的扩展名，并支持：
 
 - `cycle`：按排序顺序循环配对，数量较少的一侧循环使用；
@@ -158,14 +195,31 @@ ASIO 流的硬件延迟，因此 target-only 可以作为 mixture 的样本级�
 
 - `labels.jsonl`：适合 Python/PyTorch 数据加载；
 - `labels.csv`：UTF-8 BOM，便于通用表格工具读取；
-- `labels.xlsx`：包含“标签”“采集参数”“文件索引”“汇总”“字段说明”五个工作表，可填写人工标签、
-  数据集划分、是否有效和备注，并记录所有源文件、录音、播放参考和指标文件的相对路径。
+- `supervised_pairs.csv/jsonl`：只包含已经通过对齐与质量检查的 mixture/target-only 监督对；
+- `labels.xlsx`：包含“标签”“采集参数”“实验条件”“监督配对”“文件索引”“汇总”“字段说明”，
+  人工头、耳机、佩戴、麦杆和声源几何均为独立列，不必从 JSON 中解析；
 - `raw/*_paired_sequence_mics.wav`：未切分的一次连续双麦录音；
 - `references/*_paired_sequence_playback.wav`：未切分的连续播放矩阵；
 - `metrics/*_paired_sequence_layout.json`：三个片段的精确起止采样点和对齐方式。
 
 多耳机、多次佩戴、麦杆姿态和干扰源几何位置的 `scene_id` 命名、三类现场 YAML 以及
 服务器聚合规则见 [SPEECH_DATASET_DESIGN.md](SPEECH_DATASET_DESIGN.md)。
+
+全部语音实验完成后，可生成可搬到服务器的统一多通道数据集：
+
+```powershell
+acoustic-capture speech-dataset runs datasets\headset_speech_generalization_v1 `
+  --project-id headset_speech_generalization_v1
+```
+
+程序会把每个被引用的多通道 WAV 只复制一次，生成 `speech_samples.csv/jsonl`、
+`supervised_pairs.csv/jsonl`、`speech_dataset.xlsx` 和数据集 manifest，并再次检查监督对的采样率、
+帧数和通道数完全一致。只想在原位置建立索引时可加 `--index-only`。
+
+汇总器还会生成 `split_leakage_report.json`，自动检查相同目标音频内容或同一物理佩戴条件是否同时
+出现在 train/valid/test；Excel 中的“划分泄漏检查”工作表给测试工程师直接查看。每组监督采集还会
+自动计算 `mixture` 与 `target_only + interferer_only` 的分通道相关性、相对残差和估计 SIR。该指标
+用于发现接线、播放或场景变化异常，不要求现场人工评分，也不会默认用一个武断阈值拒绝真实录音。
 
 ## 6. RIR 重复与平均
 
@@ -181,7 +235,16 @@ ASIO 流的硬件延迟，因此 target-only 可以作为 mixture 的样本级�
 - `metrics/take_NNN.json`：削波、峰值、漂移、相关性和后端状态；
 - `metrics/summary.json`：接受和拒绝的 take 编号。
 
+去卷积使用与 MATLAB `impzest` 同类的频率相关 Kirkeby 正则化逆滤波，降低扫频带外噪声被
+反向放大的风险。第 1 个麦克风的直达峰提供每次 take 的公共裁剪和对齐基准；所有麦克风只做
+同一个时间平移，因此麦克风之间真实的到达时差（ITD）会保留。每次还会保存未裁剪的
+`take_NNN_full_ir.wav` 以及各麦克风相对麦克风 1 的峰值偏移。
+
 “重新佩戴”必须建立新的 session，不能作为同一个 RIR 的重复 take 参与平均。
+
+RIR 模式右侧的 ESS 预览分为三张图：第一张只是“前静音 → ESS → 后静音”的播放时间轴，
+不表示音频振幅，也不能据此判断掉音；第二张显示 ESS 起始段的真实连续波形；第三张显示扫频瞬时频率的
+对数轨迹。实际测试完成后，右侧才会自动切换为播放参考、麦克风录音和计算所得 RIR。
 
 ### ESS 生成公式
 
@@ -194,9 +257,10 @@ s(t) = 10^(L/20) · w(t) · sin(φ(t)),  0 ≤ t < T
 x(t) = 前静默 ⊕ s(t) ⊕ 后静默
 ```
 
-`w(t)` 是由 `fade_s` 控制的正弦平方淡入淡出窗。GUI 可直接修改 `start_hz`、`end_hz`、
-`duration_s`、`pre_silence_s`、`post_silence_s`、`fade_s`、`level_dbfs` 和最终 RIR 截取长度。
-实现位于 `signals.py`，直接按上述解析相位公式生成，不依赖黑盒扫频调用。
+`w(t)` 使用正弦窗。默认向上扫频淡入 80 ms、淡出 5 ms，与 MATLAB R2024b `sweeptone`
+一致；GUI 中分别对应 `fade_in_s` 和 `fade_out_s`。GUI 还可直接修改 `start_hz`、`end_hz`、
+`duration_s`、`pre_silence_s`、`post_silence_s`、`level_dbfs` 和最终 RIR 截取长度。实现位于
+`signals.py`，直接按上述解析相位公式生成。
 
 ## 7. 每次运行的归档
 
@@ -224,10 +288,21 @@ WAV 默认是 48 kHz、双通道、32-bit float。数据集发布时可以再批
 - 正式批量前使用声级计确定播放电平，并记录声卡数字电平、模拟增益和测点 SPL。
 
 多耳机、多次重新佩戴、麦杆位置和干扰源角度/高度的批量实验，使用
-`configs/lab_rir_experiment_plan.yaml`。`plan-expand` 会生成逐条件 YAML；全部采集后，
-`rir-dataset` 会复制每次独立实验的双通道均值 RIR，并另外导出两个麦克风各自的 mean IR，
+`configs/lab_rir_experiment_plan.yaml`。矩阵中的 `artificial_heads`、耳机、佩戴、麦杆和声源姿态
+共同决定独立实验；`plan-expand` 会生成逐条件 YAML。全部采集后，`rir-dataset` 会复制每次
+独立实验的多通道均值 RIR，并另外导出每个麦克风各自的 mean IR，
 再生成 CSV/JSONL 服务器索引。它不会跨佩戴、角度或高度做均值。完整命名和
 train/valid/test 防泄漏规则见 `EXPERIMENT_DATASET_DESIGN.md`。
+
+如果按 GUI 中“每次开始时手动命名实验”的方式采集，不需要先维护计划矩阵，使用：
+
+```powershell
+acoustic-capture rir-collect runs datasets\rir_manual `
+  --project-id headset_rir_generalization_v1
+```
+
+它把每一个完成的运行视为独立实验，即使两个手动名称相同也绝不会跨运行求均值；输出包括
+多通道 mean IR、每麦单通道 mean IR、CSV/JSONL 索引和 `rir_dataset.xlsx` 汇总表。
 
 ## 9. 测试
 
@@ -240,6 +315,25 @@ pytest
 归档结构。它不能替代 UCX 上的人工验收：首次上机仍需检查通道映射、延迟、削波和 TotalMix
 路由。
 
+## 10. Windows Portable EXE
+
+无需 Python 的 Portable 版本可通过以下脚本重新生成：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build_portable_windows.ps1
+```
+
+构建输出：
+
+- `portable_release/dist/AcousticCapturePortable/AcousticCapture.exe`：推荐的文件夹版，启动快；
+- `portable_release/AcousticCapturePortable-folder.zip`：可直接复制到实验室电脑并解压；
+- `portable_release/dist/AcousticCapturePortable.exe`：单 EXE 版，首次启动会稍慢。
+
+首次启动会在 EXE 同目录释放相对路径配置、示例音频、`runs`、`datasets` 和 `logs`，不会要求
+选择 Python 解释器。RME 驱动仍需由实验室电脑安装；打包文件已经包含支持 ASIO 的 PortAudio。
+
+Portable 首次启动还会释放 `acoustic_capture_checklist_template.xlsx`，可直接编辑后由 GUI 选行采集。
+
 ## 模块索引
 
 - `config.py`：所有可修改参数和校验规则
@@ -248,6 +342,8 @@ pytest
 - `rir.py`：反卷积、重复质检和平均
 - `scene.py`：可选语音 block
 - `quality.py`：通用指标
+- `professional.py`：可选的项目级专业预检、阵列定义和配置指纹
+- `checklist.py`：Excel 测试清单读取、选行应用和完成状态回写
 - `storage.py`：目录、manifest 和哈希
 - `cli.py`：命令行入口
 - `gui.py`：只负责参数编辑和启动任务

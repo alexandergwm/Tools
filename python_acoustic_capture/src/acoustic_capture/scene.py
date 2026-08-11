@@ -14,13 +14,39 @@ import soundfile as sf
 
 from .audio import AudioBackend
 from .config import ExperimentConfig, SceneConfig
-from .labels import write_label_files
-from .quality import channel_metrics
+from .labels import flatten_experiment_metadata, write_label_files
+from .quality import (
+    channel_metrics,
+    evaluate_supervision_quality_gate,
+    mixture_additivity_metrics,
+    multichannel_health_metrics,
+)
 from .signals import load_audio, route_outputs, scale_dbfs
 from .storage import RunStore, sha256
 
 Log = Callable[[str], None]
+StopRequested = Callable[[], bool]
 PAIRED_ITEM_ORDER = ("target_only", "interferer_only", "mixture")
+
+
+class _CaptureCancelled(Exception):
+    pass
+
+
+def _check_cancelled(stop_requested: StopRequested | None) -> None:
+    if stop_requested is not None and stop_requested():
+        raise _CaptureCancelled
+
+
+def _wait_or_cancel(seconds: float, stop_requested: StopRequested | None) -> None:
+    if stop_requested is None:
+        time.sleep(seconds)
+        return
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        _check_cancelled(stop_requested)
+        time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
+    _check_cancelled(stop_requested)
 
 
 @dataclass(frozen=True)
@@ -180,17 +206,71 @@ def _quality_flag(metrics_by_item: dict[str, dict]) -> str:
     ]
     if any(bool(channel.get("clipped")) for channel in channels):
         return "削波"
+    if any(
+        metrics.get("array_health", {}).get("exact_duplicate_channel_pairs")
+        for item, metrics in metrics_by_item.items()
+        if item != "ambient"
+    ):
+        return "录制通道完全重复"
     if channels and max(float(channel.get("peak", 0.0)) for channel in channels) <= 1e-12:
         return "全零录音"
     return "通过"
+
+
+def _capture_type(items: set[str]) -> str:
+    if {"target_only", "mixture"}.issubset(items):
+        return "supervised_pair"
+    if items == {"target_only"}:
+        return "target_only"
+    if items == {"interferer_only"}:
+        return "interferer_only"
+    return "+".join(sorted(items))
+
+
+def _shared_hardware_clock(config: ExperimentConfig) -> bool:
+    """Return true only when a common duplex device clock is verifiable."""
+    if config.audio.backend == "simulated":
+        return True
+    input_device = config.audio.input_device
+    output_device = config.audio.output_device
+    if input_device in (None, "") or output_device in (None, ""):
+        return False
+    return str(input_device).strip().casefold() == str(output_device).strip().casefold()
+
+
+def _finish_scene(
+    store: RunStore,
+    label_rows: list[dict],
+    summary: dict,
+    metadata: dict,
+    *,
+    status: str,
+) -> None:
+    label_files = write_label_files(store.root, label_rows, metadata)
+    for path in label_files.values():
+        store.add_artifact(path.name)
+    summary["labels"] = {name: path.name for name, path in label_files.items()}
+    summary["label_rows"] = len(label_rows)
+    summary["supervision_ready_rows"] = sum(
+        row.get("supervision_ready") == "是" for row in label_rows
+    )
+    summary["cancelled"] = status == "cancelled"
+    store.write_json("metrics/summary.json", summary)
+    store.finish(summary, status=status)
 
 
 def capture_scene_block(
     config: ExperimentConfig,
     backend: AudioBackend,
     log: Log = print,
+    stop_requested: StopRequested | None = None,
 ) -> RunStore:
     fs, scene = config.audio.sample_rate, config.scene
+    if (
+        "mixture" in scene.items
+        and config.audio.target_output_channel == config.audio.interferer_output_channel
+    ):
+        raise ValueError("mixture capture requires different target and interferer output channels")
     pairs = discover_source_pairs(scene)
     store = RunStore.create(config, "scene")
     output_channels = max(
@@ -226,16 +306,20 @@ def capture_scene_block(
         "paired_sequences": [],
     }
     label_rows: list[dict] = []
+    metadata_columns = flatten_experiment_metadata(config.metadata)
+    shared_hardware_clock = _shared_hardware_clock(config)
 
     try:
         for repetition in range(1, scene.repetitions + 1):
+            _check_cancelled(stop_requested)
             ambient_path: Path | None = None
             if "ambient" in scene.items:
                 log(f"场景：环境底噪，重复 {repetition}/{scene.repetitions}")
                 if scene.countdown_s:
                     log(f"  将在 {scene.countdown_s:g} 秒后开始")
-                    time.sleep(scene.countdown_s)
+                    _wait_or_cancel(scene.countdown_s, stop_requested)
                 capture = backend.record(round(scene.ambient_duration_s * fs))
+                _check_cancelled(stop_requested)
                 ambient_path = store.write_audio(
                     f"raw/rep_{repetition:03d}_ambient_mics.wav",
                     capture.microphones,
@@ -255,6 +339,7 @@ def capture_scene_block(
                 continue
 
             for pair_index, pair in enumerate(pairs, 1):
+                _check_cancelled(stop_requested)
                 samples = _pair_sample_count(pair, config)
                 target, interferer = _load_pair(pair, config, samples)
                 automatic_label = _automatic_label(scene, pair, pair_index)
@@ -284,6 +369,7 @@ def capture_scene_block(
                 playback_paths: dict[str, Path] = {}
                 metrics_paths: dict[str, Path] = {}
                 metrics_by_item: dict[str, dict] = {}
+                microphones_by_item: dict[str, np.ndarray] = {}
                 paired_playback, segments = build_paired_sequence(target, interferer, config)
                 sequence_stem = (
                     f"rep_{repetition:03d}_paired_sequence"
@@ -303,8 +389,9 @@ def capture_scene_block(
                 )
                 if scene.countdown_s:
                     log(f"    将在 {scene.countdown_s:g} 秒后开始一次连续播录")
-                    time.sleep(scene.countdown_s)
+                    _wait_or_cancel(scene.countdown_s, stop_requested)
                 capture = backend.play_record(paired_playback)
+                _check_cancelled(stop_requested)
                 paired_recording_path = store.write_audio(
                     f"raw/{sequence_stem}_mics.wav", capture.microphones, fs
                 )
@@ -352,6 +439,7 @@ def capture_scene_block(
                     )
                     raw_path = store.write_audio(f"raw/{stem}_mics.wav", microphones, fs)
                     recording_paths[item] = raw_path
+                    microphones_by_item[item] = microphones
                     if config.storage.save_playback_reference:
                         playback_paths[item] = store.write_audio(
                             f"references/{stem}_playback.wav", playback, fs
@@ -366,6 +454,7 @@ def capture_scene_block(
                         "segment_start_sample": start,
                         "segment_end_sample": end,
                         "channels": channel_metrics(microphones),
+                        "array_health": multichannel_health_metrics(microphones),
                         "backend_status": capture.status,
                     }
                     metrics_path = store.write_json(f"metrics/{stem}.json", metrics)
@@ -383,16 +472,78 @@ def capture_scene_block(
                     and segments["target_only"]["sample_count"]
                     == segments["mixture"]["sample_count"]
                 )
+                interferer_mixture_aligned = bool(
+                    "interferer_only" in segments
+                    and "mixture" in segments
+                    and np.array_equal(
+                        segments["interferer_only"]["playback"][:, config.audio.interferer_output_channel - 1],
+                        segments["mixture"]["playback"][:, config.audio.interferer_output_channel - 1],
+                    )
+                    and segments["interferer_only"]["sample_count"]
+                    == segments["mixture"]["sample_count"]
+                )
+                additivity: dict[str, object] = {}
+                if {"target_only", "interferer_only", "mixture"}.issubset(
+                    microphones_by_item
+                ):
+                    additivity = mixture_additivity_metrics(
+                        microphones_by_item["target_only"],
+                        microphones_by_item["interferer_only"],
+                        microphones_by_item["mixture"],
+                    )
+                quality_gate = evaluate_supervision_quality_gate(
+                    additivity, config.metadata
+                )
+                if quality_gate["enabled"] and not additivity:
+                    quality_gate["passed"] = False
+                    quality_gate["reasons"] = [
+                        "target_only, interferer_only and mixture are all required for additivity QC"
+                    ]
+                supervision_metrics_path: Path | None = None
+                if additivity or quality_gate["enabled"]:
+                    supervision_metrics_path = store.write_json(
+                        f"metrics/{sequence_stem}_supervision_quality.json",
+                        {"additivity": additivity, "quality_gate": quality_gate},
+                    )
+                    summary.setdefault("supervision_quality", []).append(
+                        {
+                            "sample_index": pair_index,
+                            "repetition": repetition,
+                            "metrics_file": _relative(
+                                supervision_metrics_path, store.root
+                            ),
+                            "residual_db_max": additivity.get(
+                                "residual_db_max", ""
+                            ),
+                            "correlation_min": additivity.get(
+                                "correlation_min", ""
+                            ),
+                            "quality_gate": quality_gate,
+                        }
+                    )
                 quality_flag = _quality_flag(metrics_by_item)
-                supervision_ready = target_mixture_aligned and quality_flag == "通过"
+                if quality_gate["enabled"] and not quality_gate["passed"]:
+                    quality_flag = "监督一致性未通过"
+                supervision_ready = (
+                    target_mixture_aligned
+                    and shared_hardware_clock
+                    and quality_flag == "通过"
+                    and bool(quality_gate["passed"])
+                )
                 scene_id = str(config.metadata.get("scene_id") or config.storage.session_name)
                 sample_id = (
                     f"{_safe_label(scene_id)}__{automatic_label}_rep{repetition:03d}"
                 )
+                segment_items = set(segments)
+                source_hashes = source_info[pair_index - 1]
 
                 label_rows.append(
                     {
+                        **metadata_columns,
+                        "run_id": store.root.name,
                         "sample_id": sample_id,
+                        "supervision_pair_id": sample_id if target_mixture_aligned else "",
+                        "capture_type": _capture_type(segment_items),
                         "scene_id": scene_id,
                         "manual_label": "",
                         "automatic_label": automatic_label,
@@ -401,10 +552,43 @@ def capture_scene_block(
                         "quality_flag": quality_flag,
                         "supervision_ready": "是" if supervision_ready else "否",
                         "capture_strategy": "single_stream_paired_sequence",
+                        "shared_hardware_clock": "是" if shared_hardware_clock else "否",
                         "target_mixture_sample_aligned": "是" if target_mixture_aligned else "否",
+                        "interferer_mixture_sample_aligned": (
+                            "是" if interferer_mixture_aligned else "否"
+                        ),
+                        "supervision_contract": (
+                            "same_source_samples+single_continuous_full_duplex_stream"
+                            if target_mixture_aligned and shared_hardware_clock
+                            else ""
+                        ),
+                        "quality_gate_enabled": (
+                            "是" if quality_gate["enabled"] else "否"
+                        ),
+                        "quality_gate_passed": (
+                            "未启用"
+                            if not quality_gate["enabled"]
+                            else "是"
+                            if quality_gate["passed"]
+                            else "否"
+                        ),
+                        "mixture_consistency_residual_db_max": additivity.get(
+                            "residual_db_max", ""
+                        ),
+                        "mixture_consistency_correlation_min": additivity.get(
+                            "correlation_min", ""
+                        ),
+                        "mixture_consistency_metrics_json": additivity,
+                        "supervision_quality_metrics": _relative(
+                            supervision_metrics_path, store.root
+                        ),
                         "repetition": repetition,
                         "target_source": str(pair.target) if pair.target else "",
                         "interferer_source": str(pair.interferer) if pair.interferer else "",
+                        "target_source_sha256": source_hashes["target"]["sha256"] or "",
+                        "interferer_source_sha256": (
+                            source_hashes["interferer"]["sha256"] or ""
+                        ),
                         "duration_s": samples / fs,
                         "sample_rate_hz": fs,
                         "microphone_channels": ",".join(map(str, config.audio.input_channels)),
@@ -426,6 +610,12 @@ def capture_scene_block(
                             paired_playback_path, store.root
                         ),
                         "segment_layout": _relative(layout_path, store.root),
+                        "target_segment_start_sample": (
+                            segments.get("target_only", {}).get("start_sample", "")
+                        ),
+                        "mixture_segment_start_sample": (
+                            segments.get("mixture", {}).get("start_sample", "")
+                        ),
                         "metrics_files": {
                             item: _relative(path, store.root) for item, path in metrics_paths.items()
                         },
@@ -434,18 +624,17 @@ def capture_scene_block(
                     }
                 )
 
-        label_files = write_label_files(store.root, label_rows, config.metadata)
-        for path in label_files.values():
-            store.add_artifact(path.name)
-        summary["labels"] = {name: path.name for name, path in label_files.items()}
-        summary["label_rows"] = len(label_rows)
-        summary["supervision_ready_rows"] = sum(
-            row.get("supervision_ready") == "是" for row in label_rows
-        )
-        store.write_json("metrics/summary.json", summary)
-        store.finish(summary)
+        _finish_scene(store, label_rows, summary, config.metadata, status="completed")
         log(f"语音增强场景结果与标签表已保存到：{store.root}")
         return store
+    except _CaptureCancelled:
+        _finish_scene(store, label_rows, summary, config.metadata, status="cancelled")
+        log(f"语音增强采集已停止；已完成的数据保存在：{store.root}")
+        return store
     except Exception as exc:
+        if stop_requested is not None and stop_requested():
+            _finish_scene(store, label_rows, summary, config.metadata, status="cancelled")
+            log(f"语音增强采集已停止；已完成的数据保存在：{store.root}")
+            return store
         store.finish({"error": str(exc), **summary}, status="failed")
         raise

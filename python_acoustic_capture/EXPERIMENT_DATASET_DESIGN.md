@@ -6,17 +6,18 @@
 
 ```text
 project
-└─ experiment_id             # 一个确定的佩戴、麦杆、声源角度和高度
+└─ experiment_id             # 一个确定的人工头、佩戴、麦杆、声源角度和高度
    ├─ take_001 ... take_005  # 实验内部重复 ESS
    ├─ mean_ir_mic_01.wav     # 麦克风 1 的实验内均值 IR
-   └─ mean_ir_mic_02.wav     # 麦克风 2 的实验内均值 IR
+   ├─ mean_ir_mic_02.wav     # 麦克风 2 的实验内均值 IR
+   └─ mean_ir_mic_NN.wav     # 若录制更多麦克风，继续按通道输出
 ```
 
-- `experiment`：一次确定的耳机单体、佩戴、麦杆和声源几何，是数据集基本单元。
+- `experiment`：一次确定的人工头、耳机单体、佩戴、麦杆和声源几何，是数据集基本单元。
 - `take`：只是在该实验内部固定全部物理条件后重复播放 ESS。
 - 仅在同一 `experiment_id` 内对通过质检的 take 对齐并求均值。
-- 跨 `wearing_id`、角度、高度、麦杆或耳机单体都不做波形均值，也不生成跨实验 stack。
-- 双麦录音分别形成 `mean_ir_mic_01` 和 `mean_ir_mic_02`；双通道 WAV 只是这两个 IR 的容器。
+- 跨人工头、`wearing_id`、角度、高度、麦杆或耳机单体都不做波形均值，也不生成跨实验 stack。
+- 每个麦克风分别形成 `mean_ir_mic_NN`；多通道 WAV 只是这些 IR 的同步容器。
 
 ## 2. 推荐采集设计
 
@@ -28,10 +29,11 @@ project
 4. 距离、人工头高度、输入增益、数字播放电平和测点 SPL 必须记录且在一个比较组内固定。
 5. 每个物理条件至少保存 5 个通过质检的 ESS take。
 
-`configs/lab_rir_experiment_plan.yaml` 默认生成 54 个条件：2 个耳机、3 次佩戴、人工嘴 3 个麦杆位置、干扰源 6 个位置。若增加到 5 次佩戴，只需在 `matrix.wearings` 添加 `w04` 和 `w05`。
+`configs/lab_rir_experiment_plan.yaml` 当前用 1 个人工头生成 54 个条件：2 个耳机、3 次佩戴、人工嘴 3 个麦杆位置、干扰源 6 个位置。增加人工头时在 `matrix.artificial_heads` 添加条目；若增加到 5 次佩戴，在 `matrix.wearings` 添加 `w04` 和 `w05`。
 
 ## 3. 坐标和编号
 
+- `artificial_head_id`：人工头个体，例如 `head01`、`head02`。
 - `headset_model_id`：型号，不写自然语言长名称，例如 `model_a`。
 - `headset_unit_id`：实物单体编号，例如 `hs01`、`hs02`；同型号的两个实物也必须不同。
 - `wearing_id`：`w01`、`w02`；取下再戴才递增。
@@ -44,7 +46,7 @@ project
 实验编号由工具自动生成，例如：
 
 ```text
-hm-model-a__hu-hs01__w-w03__b-b00-nominal__src-interferer-interferer-speaker-01__azp090__elp017__d100
+ah-head01__hm-model-a__hu-hs01__w-w03__b-b00-nominal__src-interferer-interferer-speaker-01__azp090__elp017__d100
 ```
 
 时间戳只属于运行目录，不进入稳定的实验编号。若重测同一实验，数据集汇总器选取最新的已完成运行，并在索引中记录重复运行数。
@@ -67,6 +69,14 @@ hm-model-a__hu-hs01__w-w03__b-b00-nominal__src-interferer-interferer-speaker-01_
    .\.venv\Scripts\python.exe -m acoustic_capture rir-dataset configs\lab_rir_experiment_plan.yaml
    ```
 
+如果现场采用 GUI 每次手动命名、没有使用计划矩阵，则改用：
+
+```powershell
+.\.venv\Scripts\python.exe -m acoustic_capture rir-collect runs datasets\rir_manual
+```
+
+此模式一条完成的 run 就是一条独立实验；手动名称即使重复也不会跨运行求均值。
+
 ## 5. 服务器数据包
 
 ```text
@@ -74,12 +84,14 @@ datasets/headset_rir_generalization_v1/
 ├─ dataset_manifest.json
 ├─ indexes/
 │  ├─ rir_experiments.csv
-│  └─ rir_experiments.jsonl
+│  ├─ rir_experiments.jsonl
+│  └─ rir_dataset.xlsx
 └─ rir/
    └─ experiments/{train,valid,test}/
-      ├─ <experiment_id>__mean-ir-2ch.wav
+      ├─ <experiment_id>__mean-ir-multichannel.wav
       ├─ <experiment_id>__mean-ir-mic-01.wav
-      └─ <experiment_id>__mean-ir-mic-02.wav
+      ├─ <experiment_id>__mean-ir-mic-02.wav
+      └─ <experiment_id>__mean-ir-mic-NN.wav
 ```
 
 训练时读取 `rir_experiments.jsonl`，一行对应一次独立实验。佩戴、角度和高度差异通过多行实验样本体现，训练程序自行采样这些实验，采集工具不再跨实验平均。
@@ -88,8 +100,9 @@ datasets/headset_rir_generalization_v1/
 
 - **实验总览**：计划数、完成数、缺失数、训练/验证/测试数量和关键规则。
 - **采集计划**：一行一个 experiment，供现场按顺序执行。
-- **RIR 实验索引**：一行一个独立实验，分别记录两个麦克风的 mean IR 路径。
+- **RIR 实验索引**：一行一个独立实验，记录多通道 mean IR 和每个麦克风的 mean IR 路径。
 - **实验统计**：按耳机、佩戴、声源角色统计完成数量，只统计条数，不计算任何波形均值。
 - **字段说明**：字段类型、单位和是否进入文件名。
 
-Excel 用来查看和现场管理，训练程序应以 JSONL 为权威索引；任何人工修订都应同步回计划 YAML，而不是只在 Excel 中改颜色。
+现场可以把 Excel 测试清单作为采集输入：每行一次独立实验，GUI 选行后自动命名并回写完成状态。
+数据集导出后的 Excel 只用于查看和质检，训练程序仍应以 JSONL/CSV 为权威索引；不要只用单元格颜色编码质量结论。

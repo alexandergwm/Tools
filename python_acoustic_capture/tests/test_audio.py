@@ -1,8 +1,14 @@
 import numpy as np
+import pytest
 import sys
 from types import SimpleNamespace
 
-from acoustic_capture.audio import SoundDeviceBackend, check_hardware_settings, device_choices
+from acoustic_capture.audio import (
+    SoundDeviceBackend,
+    check_hardware_settings,
+    device_choices,
+    host_api_choices,
+)
 from acoustic_capture.config import AudioConfig
 
 
@@ -31,6 +37,10 @@ class FakeSoundDevice:
             "max_output_channels": 8,
             "default_samplerate": 48_000.0,
         }
+
+    def query_hostapis(self, index=None):
+        values = [{"name": "MME"}, {"name": "WASAPI"}, {"name": "Test API"}]
+        return values if index is None else values[index]
 
     def get_status(self):
         class Status:
@@ -64,6 +74,19 @@ def test_hardware_check_uses_highest_configured_rme_channels(monkeypatch):
     assert status["output_device"]["name"] == "RME 输出"
 
 
+def test_hardware_check_rejects_device_outside_selected_protocol(monkeypatch):
+    fake = FakeSoundDevice()
+    monkeypatch.setattr(SoundDeviceBackend, "_module", lambda self: fake)
+    config = AudioConfig(
+        backend="sounddevice",
+        host_api="MME",
+        input_device="RME input",
+        output_device="RME output",
+    )
+    with pytest.raises(RuntimeError, match="不属于所选音频协议 MME"):
+        check_hardware_settings(config)
+
+
 def test_play_record_keeps_only_selected_input_channels(monkeypatch):
     fake = FakeSoundDevice()
 
@@ -87,11 +110,11 @@ def test_play_record_keeps_only_selected_input_channels(monkeypatch):
 
 def test_gui_device_choices_filter_input_and_output(monkeypatch):
     fake_module = SimpleNamespace(
-        query_hostapis=lambda: [{"name": "Test API"}],
+        query_hostapis=lambda: [{"name": "MME"}, {"name": "ASIO"}],
         query_devices=lambda: [
             {"name": "input only", "hostapi": 0, "max_input_channels": 2, "max_output_channels": 0},
             {"name": "output only", "hostapi": 0, "max_input_channels": 0, "max_output_channels": 2},
-            {"name": "duplex", "hostapi": 0, "max_input_channels": 8, "max_output_channels": 8},
+            {"name": "duplex", "hostapi": 1, "max_input_channels": 8, "max_output_channels": 8},
         ],
     )
     monkeypatch.setitem(sys.modules, "sounddevice", fake_module)
@@ -105,3 +128,13 @@ def test_gui_device_choices_filter_input_and_output(monkeypatch):
     assert not any("input only" in choice for choice in outputs)
     assert any("duplex" in choice for choice in inputs)
     assert any("duplex" in choice for choice in outputs)
+    assert host_api_choices() == ["MME", "ASIO"]
+
+    mme_inputs = device_choices("input", "MME")
+    mme_outputs = device_choices("output", "MME")
+    asio_inputs = device_choices("input", "ASIO")
+    assert any("input only" in choice for choice in mme_inputs)
+    assert not any("duplex" in choice for choice in mme_inputs)
+    assert any("output only" in choice for choice in mme_outputs)
+    assert not any("input only" in choice for choice in mme_outputs)
+    assert len(asio_inputs) == 1 and "duplex" in asio_inputs[0]

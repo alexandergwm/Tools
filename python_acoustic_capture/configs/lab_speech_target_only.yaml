@@ -1,8 +1,9 @@
 audio:
   backend: sounddevice
+  host_api: ASIO
   device: null
-  input_device: null
-  output_device: null
+  input_device: ASIO Fireface USB
+  output_device: ASIO Fireface USB
   sample_rate: 48000
   block_size: 0
   input_channels: [1, 2]
@@ -22,7 +23,8 @@ sweep:
   duration_s: 8.0
   pre_silence_s: 1.0
   post_silence_s: 3.0
-  fade_s: 0.02
+  fade_in_s: 0.08
+  fade_out_s: 0.005
   level_dbfs: -30.0
   rir_duration_s: 2.0
   pre_peak_s: 0.01
@@ -62,6 +64,9 @@ storage:
   save_playback_reference: true
   compute_sha256: true
 metadata:
+  capture_profile: standard
+  task_type: neural_beamforming_and_speech_enhancement
+  project_id: headset_speech_generalization_v1
   scene_id: hs01_w01_b00_targetonly
   experiment_type: speech_enhancement
   operator: ''

@@ -53,6 +53,11 @@ scene:
 - 可用条件：`supervision_ready == 是` 且 `valid == 是`
 - 两个耳机麦克风都保存在同一个双通道 WAV 中，不拆成两个独立实验
 
+这里的严格对齐还依赖同一块硬件时钟：输入和 target/interferer 输出必须都来自同一个可验证的
+双工设备（正式实验使用同一个 RME ASIO 设备）。若输入为 RME、输出为另一台 Windows 播放
+设备，即使不是蓝牙，也不能证明两个设备时钟和延迟一致；程序会把
+`shared_hardware_clock` 与 `supervision_ready` 标成“否”。
+
 不要把另一次独立运行产生的纯净录音当成某个 mixture 的逐样本标签。独立运行的
 target-only 数据可以扩充纯净语料或用于验证，但不具备与旧 mixture 相同的声卡时基和现场噪声。
 
@@ -83,6 +88,8 @@ metadata:
 
 每个源文件对和每次重复产生 `labels.csv`、`labels.xlsx`、`labels.jsonl` 中的一行。
 `sample_id` 以 `scene_id__` 开头，因此不同佩戴和不同干扰位置不会重名。
+人工头、耳机型号/个体、佩戴、麦杆、房间以及 target/interferer 的位置、角度、高度和距离
+同时被展开成普通列；完整原始 metadata 仍保留在 `metadata_json`。
 
 关键文件：
 
@@ -94,11 +101,26 @@ raw/*_target_only_mics.wav                  切出的双通道监督 target
 raw/*_interferer_only_mics.wav              切出的双通道纯干扰
 raw/*_mixture_mics.wav                      切出的双通道混合输入
 labels.csv / labels.xlsx / labels.jsonl     路径、场景元数据和质检状态
+supervised_pairs.csv / supervised_pairs.jsonl  只含本次运行中合格的监督对
 ```
 
-服务器合并时按行拼接各 run 的 `labels.csv` 或 `labels.jsonl`，以 `sample_id` 为主键；
-只筛选 `supervision_ready == 是` 的行进入有监督训练。数据集划分应按 `wearing_id` 或
+推荐不要手工拼路径，而是运行：
+
+```powershell
+acoustic-capture speech-dataset runs datasets\headset_speech_generalization_v1 `
+  --project-id headset_speech_generalization_v1
+```
+
+汇总器为每行生成跨运行唯一的 `dataset_sample_id`，复制所引用的多通道录音，并再次验证
+mixture 与 target-only 的采样率、帧数和通道数。训练只读取统一索引中
+`dataset_supervision_ready == 是` 的行，输入为 `mixture_recording`，标签为同一行的
+`target_recording`。数据集划分应按 `wearing_id` 或
 `scene_id` 分组后再分 train/validation/test，避免同一次佩戴的近重复样本泄漏到不同集合。
+
+工具会自动生成 `split_leakage_report.json`，检查相同目标素材 SHA256 和同一物理采集分组是否跨
+train/valid/test。监督采集还会生成分通道混合可加性残差、相关系数和估计 SIR，用于自动发现路由、
+漏播或场景变化。真实顺序录制会包含环境噪声与微小变化，因此 `target_only` 是严格复用数字源和
+同一连续硬件流的监督参考，不应被误解为与 mixture 内目标声像逐样本完全相等的数学分量。
 
 ## 明天现场检查
 

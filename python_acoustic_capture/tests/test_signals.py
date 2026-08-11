@@ -1,12 +1,12 @@
 import numpy as np
 
 from acoustic_capture.quality import normalized_correlation
-from acoustic_capture.rir import align_rir_to_reference
+from acoustic_capture.rir import align_rir_to_reference, estimate_impulse_response
 from acoustic_capture.signals import exponential_sweep, route_outputs
 
 
 def test_sweep_level_and_length():
-    sweep = exponential_sweep(48_000, 40, 22_000, 1.0, 0.01, -12)
+    sweep = exponential_sweep(48_000, 40, 22_000, 1.0, -12, 0.01, 0.01)
     assert len(sweep) == 48_000
     assert np.isclose(np.max(np.abs(sweep)), 10 ** (-12 / 20), rtol=1e-4)
 
@@ -14,7 +14,7 @@ def test_sweep_level_and_length():
 def test_ess_analytic_phase_starts_at_zero_and_reaches_requested_band():
     sample_rate = 48_000
     start_hz, end_hz, duration_s = 80.0, 12_000.0, 1.0
-    sweep = exponential_sweep(sample_rate, start_hz, end_hz, duration_s, 0.0, 0.0)
+    sweep = exponential_sweep(sample_rate, start_hz, end_hz, duration_s, 0.0, 0.0, 0.0)
     assert sweep[0] == 0.0
     # Zero crossings in the final window must be much denser than at the start.
     early = np.count_nonzero(np.diff(np.signbit(sweep[:4_800])))
@@ -43,15 +43,35 @@ def test_correlation():
     assert normalized_correlation(data, data) > 0.9999
 
 
-def test_rir_residual_alignment_handles_each_microphone_independently():
+def test_rir_residual_alignment_uses_common_shift_and_preserves_microphone_delay():
     rng = np.random.default_rng(4)
     reference = rng.normal(size=(2048, 2)).astype(np.float32)
     shifted = np.zeros_like(reference)
     shifted[7:, 0] = reference[:-7, 0]
-    shifted[:-11, 1] = reference[11:, 1]
+    shifted[7:, 1] = reference[:-7, 1]
 
     aligned, shifts, correlations = align_rir_to_reference(shifted, reference, 16)
 
-    assert shifts == [-7, 11]
+    assert shifts == [-7, -7]
     assert min(correlations) > 0.99
     assert np.allclose(aligned[16:-16], reference[16:-16])
+
+
+def test_regularized_ess_deconvolution_recovers_known_two_channel_fir():
+    sample_rate = 48_000
+    sweep = exponential_sweep(sample_rate, 40, 22_000, 0.5, -12)
+    silence = np.zeros(round(0.2 * sample_rate), dtype=np.float32)
+    excitation = np.concatenate((sweep, silence))
+    responses = []
+    expected_peaks = [173, 180]
+    for peak in expected_peaks:
+        impulse = np.zeros(1200, dtype=np.float32)
+        impulse[peak] = 0.8
+        impulse[peak + 121] = 0.25
+        impulse[peak + 367] = -0.12
+        responses.append(np.convolve(excitation, impulse)[: len(excitation)])
+    estimate = estimate_impulse_response(
+        sweep, np.column_stack(responses), len(silence)
+    )
+    assert np.argmax(np.abs(estimate), axis=0).tolist() == expected_peaks
+    assert np.all(np.isfinite(estimate))

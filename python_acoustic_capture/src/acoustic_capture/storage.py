@@ -8,6 +8,7 @@ import platform
 import re
 import socket
 import subprocess
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +19,7 @@ import yaml
 
 from . import __version__
 from .config import ExperimentConfig
+from .professional import array_geometry_sha256, build_preflight_report, canonical_sha256
 
 
 def _safe_name(value: str) -> str:
@@ -57,8 +59,10 @@ class RunStore:
         root = candidate
         for folder in ("raw", "processed", "references", "metrics", "logs"):
             (root / folder).mkdir(parents=True, exist_ok=True)
+        preflight = build_preflight_report(config, kind)
         manifest = {
-            "schema_version": 1,
+            "schema_version": 2,
+            "run_uuid": str(uuid.uuid4()),
             "software_version": __version__,
             "kind": kind,
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -66,14 +70,24 @@ class RunStore:
             "platform": platform.platform(),
             "python": platform.python_version(),
             "git_commit": _git_commit(),
+            "config_sha256": canonical_sha256(config.to_dict()),
+            "array_geometry_sha256": array_geometry_sha256(config.metadata),
+            "audio_backend": config.audio.backend,
+            "audio_host_api": config.audio.host_api,
+            "audio_input_device": config.audio.input_device,
+            "audio_output_device": config.audio.output_device,
+            "audio_input_channels": config.audio.input_channels,
             "status": "running",
             "metadata": config.metadata,
+            "preflight": preflight.to_dict(),
             "artifacts": [],
         }
         store = cls(root, config, manifest)
         with (root / "config_resolved.yaml").open("w", encoding="utf-8") as handle:
             yaml.safe_dump(config.to_dict(), handle, allow_unicode=True, sort_keys=False)
         store.write_json("manifest.json", manifest)
+        store.add_artifact("config_resolved.yaml")
+        store.write_json("metrics/preflight_report.json", preflight.to_dict())
         return store
 
     def path(self, relative: str) -> Path:

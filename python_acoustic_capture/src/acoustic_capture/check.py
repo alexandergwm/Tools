@@ -6,7 +6,7 @@ import numpy as np
 
 from .audio import AudioBackend
 from .config import ExperimentConfig
-from .quality import channel_metrics
+from .quality import channel_metrics, multichannel_health_metrics
 from .storage import RunStore
 
 
@@ -22,10 +22,17 @@ def capture_input_check(config: ExperimentConfig, backend: AudioBackend, duratio
             warnings.append("所有录制通道均为全零，请检查声卡输入路由、麦克风增益和系统权限")
         if result.status.get("xrun"):
             warnings.append("录制期间发生输入溢出或欠载，请调整声卡缓冲区后重试")
+        array_health = multichannel_health_metrics(result.microphones)
+        if array_health["exact_duplicate_channel_pairs"]:
+            warnings.append(
+                "存在完全相同的录制通道，请检查声卡输入映射："
+                + str(array_health["exact_duplicate_channel_pairs"])
+            )
         summary = {
             "duration_s": duration_s,
             "channels": channels,
             "backend_status": result.status,
+            "array_health": array_health,
             "warnings": warnings,
         }
         store.write_json("metrics/summary.json", summary)

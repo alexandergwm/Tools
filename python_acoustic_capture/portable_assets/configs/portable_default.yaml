@@ -1,0 +1,113 @@
+audio:
+  backend: sounddevice
+  host_api: ASIO
+  device: null
+  input_device: ASIO Fireface USB
+  output_device: ASIO Fireface USB
+  sample_rate: 48000
+  block_size: 0
+  input_channels: [1, 2]
+  target_output_channel: 1
+  interferer_output_channel: 2
+  latency: high
+  dtype: float32
+
+general:
+  action: play_record
+  source_file: ../audio/source.wav
+  duration_s: 5.0
+  level_dbfs: -30.0
+  output_channel: 1
+
+sweep:
+  start_hz: 40.0
+  end_hz: 22000.0
+  duration_s: 8.0
+  pre_silence_s: 1.0
+  post_silence_s: 3.0
+  fade_in_s: 0.08
+  fade_out_s: 0.005
+  level_dbfs: -30.0
+  rir_duration_s: 2.0
+  pre_peak_s: 0.01
+
+repeats:
+  minimum: 5
+  maximum: 10
+  correlation_threshold: 0.90
+  peak_drift_samples: 2
+  minimum_sweep_snr_db: 6.0
+  required_stable_takes: 1
+  reject_clipped: true
+  clip_threshold: 0.999
+  pause_s: 1.0
+
+scene:
+  items: [ambient, target_only, interferer_only, mixture]
+  source_mode: folders
+  duration_s: 4.0
+  ambient_duration_s: 10.0
+  target_file: ../audio/target.wav
+  interferer_file: ../audio/interferer.wav
+  target_folder: ../audio/targets
+  interferer_folder: ../audio/interferers
+  pairing_mode: cycle
+  file_extensions: [.wav, .flac]
+  label_prefix: speech
+  dataset_split: train
+  target_level_dbfs: -30.0
+  interferer_level_dbfs: -30.0
+  repetitions: 1
+  capture_strategy: paired_sequence
+  require_supervised_pair: true
+  countdown_s: 3.0
+  gap_s: 1.0
+
+storage:
+  root: ../runs
+  session_name: new_experiment
+  wav_subtype: FLOAT
+  save_playback_reference: true
+  compute_sha256: true
+
+metadata:
+  capture_profile: standard
+  task_type: neural_beamforming_and_speech_enhancement
+  project_id: headset_capture_v1
+  scene_id: new_experiment
+  experiment_type: acoustic_capture
+  operator: ""
+  room_id: lab01
+  artificial_head_id: head01
+  headset_model_id: model_a
+  headset_unit_id: hs01
+  wearing_id: w01
+  boom_pose_id: b00_nominal
+  microphone_1: left
+  microphone_2: right
+  array:
+    array_id: headset_array_template
+    coordinate_system: head_center_x_forward_y_left_z_up_m
+    reference_point: artificial_head_center
+    reference_channel: 1
+    geometry_required: false
+    channels:
+      - {recording_channel: 1, microphone_id: left, x_m: null, y_m: null, z_m: null, polarity: 1}
+      - {recording_channel: 2, microphone_id: right, x_m: null, y_m: null, z_m: null, polarity: 1}
+  quality_gate:
+    enabled: false
+    max_additivity_residual_db: -6.0
+    min_additivity_correlation: 0.70
+  target:
+    active: true
+    source_id: artificial_mouth_01
+    position_id: mouth_fixed
+  interferer:
+    active: true
+    source_id: interferer_speaker_01
+    position_id: int000_h140_d100
+    azimuth_deg: 0
+    elevation_deg: 0
+    height_m: 1.40
+    distance_m: 1.00
+  notes: ""

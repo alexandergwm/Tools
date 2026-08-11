@@ -15,10 +15,13 @@ from .audio import (
     create_backend,
     device_choices,
     format_hardware_status,
+    host_api_choices,
     list_devices,
 )
 from .config import ExperimentConfig, load_config, save_config
+from .checklist import apply_checklist_row, create_checklist, read_checklist, update_checklist_row
 from .general import capture_general_io
+from .professional import assert_capture_ready, build_preflight_report, format_preflight_report
 from .rir import capture_rir
 from .scene import capture_scene_block, discover_source_pairs
 from .signals import exponential_sweep, measurement_signal
@@ -27,44 +30,46 @@ from .viewer import ResultsViewer
 
 FIELDS = [
     ("audio.backend", "音频后端", str, "common"),
+    ("audio.host_api", "音频协议 / 主机接口", str, "common"),
     ("audio.input_device", "录制设备名称或编号", str, "common"),
     ("audio.output_device", "播放设备名称或编号", str, "common"),
     ("audio.sample_rate", "采样率", int, "common"),
     ("audio.block_size", "缓冲区帧数", int, "common"),
     ("audio.input_channels", "录制通道（逗号分隔）", lambda x: [int(v) for v in x.split(",")], "common"),
     ("general.action", "播录操作", str, "basic"),
-    ("general.source_file", "播放文件", str, "basic"),
+    ("general.source_file", "要播放的音频文件", str, "basic"),
     ("general.duration_s", "持续时间（秒）", float, "basic"),
     ("general.level_dbfs", "播放电平（满刻度分贝）", float, "basic"),
     ("general.output_channel", "播放输出通道", int, "basic"),
-    ("audio.target_output_channel", "目标声源或扫频输出通道", int, "rir_speech"),
-    ("audio.interferer_output_channel", "干扰声源输出通道", int, "speech"),
+    ("audio.target_output_channel", "扫频 / 人工嘴输出通道", int, "rir_speech"),
+    ("audio.interferer_output_channel", "干扰扬声器输出通道", int, "speech"),
     ("sweep.start_hz", "扫频起始频率（赫兹）", float, "rir"),
     ("sweep.end_hz", "扫频终止频率（赫兹）", float, "rir"),
     ("sweep.duration_s", "扫频持续时间（秒）", float, "rir"),
     ("sweep.pre_silence_s", "扫频前静音（秒）", float, "rir"),
     ("sweep.post_silence_s", "扫频后静音（秒）", float, "rir"),
-    ("sweep.fade_s", "扫频淡入淡出（秒）", float, "rir"),
-    ("sweep.level_dbfs", "扫频播放电平（满刻度分贝）", float, "rir"),
+    ("sweep.fade_in_s", "扫频淡入（秒，MATLAB 默认 0.08）", float, "rir"),
+    ("sweep.fade_out_s", "扫频淡出（秒，MATLAB 默认 0.005）", float, "rir"),
+    ("sweep.level_dbfs", "扫频播放电平（dBFS）", float, "rir"),
     ("sweep.rir_duration_s", "脉冲响应长度（秒）", float, "rir"),
     ("sweep.pre_peak_s", "脉冲峰值前保留时间（秒）", float, "rir"),
-    ("repeats.minimum", "最少脉冲响应采集次数", int, "rir"),
-    ("repeats.maximum", "最多脉冲响应采集次数", int, "rir"),
+    ("repeats.minimum", "每次实验的有效 RIR 次数", int, "rir"),
+    ("repeats.maximum", "最多尝试次数", int, "rir"),
     ("repeats.correlation_threshold", "脉冲响应相关性阈值", float, "rir"),
     ("repeats.minimum_sweep_snr_db", "扫频相对底噪最低信噪比（分贝）", float, "rir"),
-    ("scene.source_mode", "语音来源模式", str, "speech"),
+    ("scene.source_mode", "素材选择方式", str, "speech"),
     ("scene.duration_s", "每条片段时长（秒，推荐 4）", lambda x: None if not x else float(x), "speech"),
-    ("scene.target_file", "单文件模式：目标语音", str, "speech"),
-    ("scene.interferer_file", "单文件模式：干扰声音", str, "speech"),
-    ("scene.target_folder", "文件夹模式：目标语音目录", str, "speech"),
-    ("scene.interferer_folder", "文件夹模式：干扰声音目录", str, "speech"),
+    ("scene.target_file", "干净目标音频文件", str, "speech"),
+    ("scene.interferer_file", "干扰音频文件", str, "speech"),
+    ("scene.target_folder", "干净目标音频文件夹", str, "speech"),
+    ("scene.interferer_folder", "干扰音频文件夹", str, "speech"),
     ("scene.pairing_mode", "目标与干扰配对方式", str, "speech"),
     ("scene.file_extensions", "扫描扩展名（逗号分隔）", lambda x: [v.strip() for v in x.split(",") if v.strip()], "speech"),
     ("scene.label_prefix", "标签前缀", str, "speech"),
     ("scene.dataset_split", "数据集划分标签", str, "speech"),
-    ("scene.target_level_dbfs", "目标播放电平（满刻度分贝）", float, "speech"),
-    ("scene.interferer_level_dbfs", "干扰播放电平（满刻度分贝）", float, "speech"),
-    ("scene.repetitions", "场景重复次数", int, "speech"),
+    ("scene.target_level_dbfs", "干净目标播放电平（dBFS）", float, "speech"),
+    ("scene.interferer_level_dbfs", "干扰播放电平（dBFS）", float, "speech"),
+    ("scene.repetitions", "整组采集重复次数", int, "speech"),
     ("scene.capture_strategy", "配对采集策略", str, "speech"),
     (
         "scene.require_supervised_pair",
@@ -111,9 +116,132 @@ RIR_PREVIEW_FIELDS = {
     "sweep.duration_s",
     "sweep.pre_silence_s",
     "sweep.post_silence_s",
-    "sweep.fade_s",
+    "sweep.fade_in_s",
+    "sweep.fade_out_s",
     "sweep.level_dbfs",
 }
+
+AUDIO_PRESETS = {
+    "标准监督采集（推荐）": {
+        "kind": "scene",
+        "items": ["ambient", "target_only", "interferer_only", "mixture"],
+        "help": "自动先录底噪，再用一次连续播录完成纯净目标、纯干扰和同时发声；纯净目标可作为混合录音的监督参考。",
+    },
+    "只采干净目标": {
+        "kind": "scene",
+        "items": ["target_only"],
+        "help": "只让人工嘴/目标扬声器发声并录制麦克风。",
+    },
+    "只采干扰": {
+        "kind": "scene",
+        "items": ["interferer_only"],
+        "help": "人工嘴不发声，只播放干扰源并录制麦克风。",
+    },
+    "普通单文件同步播录": {
+        "kind": "io",
+        "action": "play_record",
+        "help": "从一个输出通道播放单个音频文件，同时录制麦克风。",
+    },
+    "仅录制麦克风": {
+        "kind": "io",
+        "action": "record",
+        "help": "不播放声音，只录制所选麦克风通道。",
+    },
+    "仅播放音频": {
+        "kind": "io",
+        "action": "play",
+        "help": "只播放单个音频文件，不录制麦克风。",
+    },
+    "自定义语音场景（高级）": {
+        "kind": "scene",
+        "items": None,
+        "help": "打开高级设置后，可自行勾选底噪、纯净目标、纯干扰和同时发声。",
+    },
+}
+
+ADVANCED_FIELDS = {
+    "audio.backend",
+    "audio.sample_rate",
+    "audio.block_size",
+    "general.action",
+    "sweep.start_hz",
+    "sweep.end_hz",
+    "sweep.duration_s",
+    "sweep.pre_silence_s",
+    "sweep.post_silence_s",
+    "sweep.fade_in_s",
+    "sweep.fade_out_s",
+    "sweep.rir_duration_s",
+    "sweep.pre_peak_s",
+    "repeats.maximum",
+    "repeats.correlation_threshold",
+    "repeats.minimum_sweep_snr_db",
+    "scene.pairing_mode",
+    "scene.file_extensions",
+    "scene.label_prefix",
+    "scene.dataset_split",
+    "scene.capture_strategy",
+    "scene.require_supervised_pair",
+    "scene.ambient_duration_s",
+    "scene.countdown_s",
+    "scene.gap_s",
+    "storage.session_name",
+}
+
+COMMON_METADATA_FIELDS = [
+    ("project_id", "项目编号", str),
+    ("room_id", "房间编号", str),
+    ("artificial_head_id", "人工头编号", str),
+    ("headset_model_id", "耳机型号", str),
+    ("headset_unit_id", "耳机个体编号", str),
+    ("wearing_id", "本次佩戴编号", str),
+    ("boom_pose_id", "麦杆姿态编号", str),
+    ("microphone_1", "录制通道 1 含义", str),
+    ("microphone_2", "录制通道 2 含义", str),
+]
+RIR_METADATA_FIELDS = [
+    ("source_role", "RIR 声源类型（mouth/interferer）", str),
+    ("source_id", "RIR 声源编号", str),
+    ("azimuth_deg", "声源方位角（度）", float),
+    ("elevation_deg", "声源俯仰角（度）", float),
+    ("source_height_cm", "声源高度（厘米）", float),
+    ("distance_cm", "声源距离（厘米）", float),
+]
+SPEECH_METADATA_FIELDS = [
+    ("target.source_id", "目标声源编号", str),
+    ("target.position_id", "目标位置编号", str),
+    ("target.azimuth_deg", "目标方位角（度）", float),
+    ("target.elevation_deg", "目标俯仰角（度）", float),
+    ("target.height_m", "目标高度（米）", float),
+    ("target.distance_m", "目标距离（米）", float),
+    ("interferer.source_id", "干扰声源编号", str),
+    ("interferer.position_id", "干扰位置编号", str),
+    ("interferer.azimuth_deg", "干扰方位角（度）", float),
+    ("interferer.elevation_deg", "干扰俯仰角（度）", float),
+    ("interferer.height_m", "干扰高度（米）", float),
+    ("interferer.distance_m", "干扰距离（米）", float),
+]
+
+
+def _metadata_get(metadata: dict, dotted: str):
+    value = metadata
+    for part in dotted.split("."):
+        if not isinstance(value, dict):
+            return ""
+        value = value.get(part, "")
+    return value
+
+
+def _metadata_set(metadata: dict, dotted: str, value) -> None:
+    target = metadata
+    parts = dotted.split(".")
+    for part in parts[:-1]:
+        nested = target.get(part)
+        if not isinstance(nested, dict):
+            nested = {}
+            target[part] = nested
+        target = nested
+    target[parts[-1]] = value
 
 def _get(config: ExperimentConfig, dotted: str):
     section, name = dotted.split(".")
@@ -146,16 +274,27 @@ class CaptureGUI(tk.Tk):
         self.config_path: Path | None = Path(initial_config).resolve() if initial_config else None
         self.config_data = load_config(self.config_path) if self.config_path else ExperimentConfig()
         self.variables = {name: tk.StringVar() for name, _, _, _ in FIELDS}
-        self.mode_var = tk.StringVar(value="basic")
+        self.mode_var = tk.StringVar(value="rir")
+        self.audio_preset_var = tk.StringVar(value=next(iter(AUDIO_PRESETS)))
+        self.advanced_var = tk.BooleanVar(value=False)
         self.field_rows: dict[str, tuple[tk.Widget, tk.Widget]] = {}
         self.section_widgets: list[tuple[tk.Widget, str]] = []
         self.device_boxes: dict[str, ttk.Combobox] = {}
+        self.host_api_box: ttk.Combobox | None = None
+        self.audio_preset_widgets: list[tk.Widget] = []
         self.item_vars = {
             name: tk.BooleanVar(value=True)
             for name in ("ambient", "target_only", "interferer_only", "mixture")
         }
+        self.metadata_summary_var = tk.StringVar()
         self.events: queue.Queue[object] = queue.Queue()
         self._busy = False
+        self._stop_event = threading.Event()
+        self._active_backend = None
+        self.checklist_path: Path | None = None
+        self.checklist_row: dict | None = None
+        self.checklist_kind: str | None = None
+        self._logged_preflight_warning_ids: set[str] = set()
         self._preview_after_id: str | None = None
         self._build_menu()
         self._build()
@@ -184,20 +323,51 @@ class CaptureGUI(tk.Tk):
             ("检查配置", self.validate_config),
         ):
             ttk.Button(toolbar, text=text, command=command).pack(side="left", padx=3)
+        ttk.Button(toolbar, text="测试清单 (.xlsx)", command=self.open_checklist).pack(
+            side="left", padx=3
+        )
 
         mode_bar = ttk.Frame(self, padding=(10, 0, 10, 6))
         mode_bar.pack(fill="x")
         ttk.Label(mode_bar, text="测试模式", font=("TkDefaultFont", 11, "bold")).pack(side="left", padx=(0, 8))
         for value, label in (
-            ("basic", "基础播录"),
-            ("rir", "房间脉冲响应采集"),
-            ("speech", "语音增强数据采集"),
+            ("rir", "RIR 采集"),
+            ("audio", "音频 / 语音采集"),
         ):
             ttk.Radiobutton(
                 mode_bar, text=label, value=value, variable=self.mode_var, command=self._set_mode
             ).pack(side="left", padx=8)
+        advanced = ttk.Checkbutton(
+            mode_bar,
+            text="显示高级设置",
+            variable=self.advanced_var,
+            command=self._set_mode,
+        )
+        advanced.pack(side="right")
+
+        preset_bar = ttk.Frame(self, padding=(10, 0, 10, 6))
+        preset_label = ttk.Label(preset_bar, text="采集方案")
+        preset_box = ttk.Combobox(
+            preset_bar,
+            textvariable=self.audio_preset_var,
+            values=list(AUDIO_PRESETS),
+            state="readonly",
+            width=26,
+        )
+        preset_box.bind("<<ComboboxSelected>>", self._audio_preset_changed)
+        self.audio_preset_help = ttk.Label(
+            preset_bar,
+            foreground="#24415c",
+            wraplength=760,
+        )
+        preset_label.pack(side="left")
+        preset_box.pack(side="left", padx=8)
+        self.audio_preset_help.pack(side="left", fill="x", expand=True)
+        self.audio_preset_widgets = [preset_bar]
+        preset_bar.pack(fill="x")
 
         paned = tk.PanedWindow(self, orient=tk.HORIZONTAL, sashwidth=6, sashrelief=tk.RAISED)
+        self.main_paned = paned
         paned.pack(fill="both", expand=True)
         left = ttk.Frame(paned)
         self.viewer = ResultsViewer(paned)
@@ -242,6 +412,14 @@ class CaptureGUI(tk.Tk):
                     values=list(BACKEND_TO_LABEL.values()),
                     state="readonly",
                 )
+            elif name == "audio.host_api":
+                input_widget = ttk.Combobox(
+                    body,
+                    textvariable=self.variables[name],
+                    state="readonly",
+                )
+                input_widget.bind("<<ComboboxSelected>>", self._host_api_changed)
+                self.host_api_box = input_widget
             elif name == "general.action":
                 input_widget = ttk.Combobox(
                     body,
@@ -269,14 +447,14 @@ class CaptureGUI(tk.Tk):
                 self.device_boxes[name] = input_widget
             elif name in FILE_PATH_FIELDS | FOLDER_PATH_FIELDS:
                 input_widget = ttk.Frame(body)
-                ttk.Entry(input_widget, textvariable=self.variables[name], width=54).pack(
-                    side="left", fill="x", expand=True
-                )
                 ttk.Button(
                     input_widget,
                     text="选择文件夹" if name in FOLDER_PATH_FIELDS else "选择文件",
                     command=lambda field=name: self._browse_path(field),
-                ).pack(side="left", padx=(5, 0))
+                ).pack(side="right", padx=(5, 0))
+                ttk.Entry(input_widget, textvariable=self.variables[name], width=20).pack(
+                    side="left", fill="x", expand=True
+                )
             else:
                 input_widget = ttk.Entry(body, textvariable=self.variables[name], width=65)
             input_widget.grid(row=row, column=1, sticky="ew", pady=2)
@@ -287,31 +465,54 @@ class CaptureGUI(tk.Tk):
         checks.grid(row=row, column=1, sticky="w")
         self.scene_widgets = (body.grid_slaves(row=row, column=0)[0], checks)
         for name, variable in self.item_vars.items():
-            ttk.Checkbutton(checks, text=SCENE_LABELS[name], variable=variable).pack(side="left", padx=4)
+            ttk.Checkbutton(
+                checks,
+                text=SCENE_LABELS[name],
+                variable=variable,
+                command=self._set_mode,
+            ).pack(side="left", padx=4)
         row += 1
-        ttk.Label(body, text="实验元数据（JSON）").grid(row=row, column=0, sticky="nw", pady=4)
+        self.metadata_summary_panel = ttk.Frame(body, padding=(0, 8, 0, 4))
+        self.metadata_summary_panel.grid(row=row, column=0, columnspan=2, sticky="ew")
+        ttk.Label(
+            self.metadata_summary_panel,
+            text="实验标签",
+            font=("TkDefaultFont", 10, "bold"),
+        ).pack(side="left")
+        ttk.Label(
+            self.metadata_summary_panel,
+            textvariable=self.metadata_summary_var,
+            foreground="#24415c",
+            wraplength=360,
+        ).pack(side="left", fill="x", expand=True, padx=10)
+        self.edit_metadata_button = ttk.Button(
+            self.metadata_summary_panel,
+            text="编辑实验标签",
+            command=self.edit_experiment_labels,
+        )
+        self.edit_metadata_button.pack(side="right")
+        row += 1
+        self.metadata_label = ttk.Label(body, text="实验元数据（JSON）")
+        self.metadata_label.grid(row=row, column=0, sticky="nw", pady=4)
         self.metadata = tk.Text(body, height=8, width=65)
         self.metadata.grid(row=row, column=1, sticky="ew")
         controls = ttk.Frame(left, padding=(8, 5))
         controls.pack(fill="x", side="bottom", before=parameter_area)
         actions = ttk.Frame(controls)
         actions.pack(fill="x", pady=(0, 5))
-        self.rir_button = ttk.Button(
-            actions,
-            text="开始新的 RIR 实验（自动多次采集）",
-            command=lambda: self.start_named_experiment("rir"),
-        )
-        self.scene_button = ttk.Button(
-            actions,
-            text="开始新的语音增强实验",
-            command=lambda: self.start_named_experiment("scene"),
-        )
+        self.start_button = ttk.Button(actions, command=self.start_current_workflow)
         self.scene_scan_button = ttk.Button(actions, text="扫描并预览文件", command=self.scan_scene_sources)
-        self.basic_button = ttk.Button(actions, text="开始基础播录", command=lambda: self.run("io"))
+        self.stop_button = ttk.Button(
+            actions,
+            text="停止当前测试",
+            command=self.stop_capture,
+            state="disabled",
+        )
+        self.stop_button.pack(side="right", padx=4)
         self.actions = actions
         self.experiment_status = ttk.Label(
             controls,
-            text="每次点击开始后先手动命名。RIR 实验会自动完成本实验内的多次采集、质检与均值；换角度后再次点击开始并输入新名称。",
+            text="RIR 使用默认 ESS 即可；只有需要修改扫频或质量阈值时才打开高级设置。每次改变佩戴、角度、高度或麦杆姿态后，请开始一个新实验并重新命名。",
             foreground="#24415c",
             wraplength=540,
         )
@@ -319,7 +520,6 @@ class CaptureGUI(tk.Tk):
         self.log = tk.Text(controls, height=9, state="disabled", bg="#151515", fg="#dddddd")
         self.log.pack(fill="x")
         body.columnconfigure(1, weight=1)
-        self._refresh_device_choices()
         self._set_mode()
 
     def _build_menu(self):
@@ -328,6 +528,9 @@ class CaptureGUI(tk.Tk):
         file_menu.add_command(label="打开配置", command=self.open_config)
         file_menu.add_command(label="保存配置", command=self.save)
         file_menu.add_command(label="配置另存为", command=self.save_as)
+        file_menu.add_separator()
+        file_menu.add_command(label="打开测试清单 (.xlsx)", command=self.open_checklist)
+        file_menu.add_command(label="新建测试清单模板", command=self.new_checklist_template)
         file_menu.add_separator()
         file_menu.add_command(label="退出", command=self._close)
         menu.add_cascade(label="文件", menu=file_menu)
@@ -375,9 +578,19 @@ class CaptureGUI(tk.Tk):
             self.variables[name].set(shown)
         for name, variable in self.item_vars.items():
             variable.set(name in self.config_data.scene.items)
+        item_set = set(self.config_data.scene.items)
+        inferred = "自定义语音场景（高级）"
+        for label, preset in AUDIO_PRESETS.items():
+            if preset.get("kind") == "scene" and preset.get("items") is not None:
+                if item_set == set(preset["items"]):
+                    inferred = label
+                    break
+        self.audio_preset_var.set(inferred)
         self.metadata.delete("1.0", "end")
         self.metadata.insert("1.0", json.dumps(self.config_data.metadata, ensure_ascii=False, indent=2))
+        self._update_metadata_summary()
         self._update_scene_source_fields()
+        self._refresh_device_choices()
 
     def _apply_values(self) -> ExperimentConfig:
         for name, _, converter, _ in FIELDS:
@@ -399,11 +612,291 @@ class CaptureGUI(tk.Tk):
                     value = int(prefix)
             if name in {"audio.input_device", "audio.output_device"} and raw == "":
                 value = None
+            if name == "audio.host_api" and raw == "":
+                value = None
             _set(self.config_data, name, value)
         self.config_data.scene.items = [name for name, var in self.item_vars.items() if var.get()]
         self.config_data.metadata = json.loads(self.metadata.get("1.0", "end").strip() or "{}")
+        self._update_metadata_summary()
         self.config_data.validate()
         return self.config_data
+
+    def _update_metadata_summary(self):
+        try:
+            metadata = json.loads(self.metadata.get("1.0", "end").strip() or "{}")
+        except json.JSONDecodeError:
+            self.metadata_summary_var.set("JSON 无效，请打开高级设置修正")
+            return
+        parts = [
+            f"人工头={metadata.get('artificial_head_id') or '未填'}",
+            f"耳机={metadata.get('headset_unit_id') or '未填'}",
+            f"佩戴={metadata.get('wearing_id') or '未填'}",
+            f"麦杆={metadata.get('boom_pose_id') or '未填'}",
+        ]
+        if self.checklist_row is not None:
+            parts.insert(0, f"清单#{self.checklist_row.get('_row_number')}")
+        if self.mode_var.get() == "rir":
+            parts.extend(
+                [
+                    f"声源={metadata.get('source_role') or '未填'}",
+                    f"az={metadata.get('azimuth_deg', '未填')}",
+                    f"高度={metadata.get('source_height_cm', '未填')}cm",
+                ]
+            )
+        else:
+            interferer = metadata.get("interferer") or {}
+            parts.extend(
+                [
+                    f"干扰az={interferer.get('azimuth_deg', '未填')}",
+                    f"高度={interferer.get('height_m', '未填')}m",
+                ]
+            )
+        self.metadata_summary_var.set("  |  ".join(parts))
+
+    def edit_experiment_labels(self):
+        """Edit structured labels without requiring users to write JSON."""
+        try:
+            metadata = json.loads(self.metadata.get("1.0", "end").strip() or "{}")
+        except json.JSONDecodeError as exc:
+            messagebox.showerror("实验元数据无效", str(exc))
+            return
+        fields = list(COMMON_METADATA_FIELDS)
+        try:
+            microphone_count = len(
+                [
+                    value
+                    for value in self.variables["audio.input_channels"].get().split(",")
+                    if value.strip()
+                ]
+            )
+        except (KeyError, ValueError):
+            microphone_count = 2
+        fields.extend(
+            (f"microphone_{index}", f"录制通道 {index} 含义", str)
+            for index in range(3, microphone_count + 1)
+        )
+        fields += (
+            RIR_METADATA_FIELDS if self.mode_var.get() == "rir" else SPEECH_METADATA_FIELDS
+        )
+        window = tk.Toplevel(self)
+        window.title("编辑实验标签")
+        window.transient(self)
+        window.geometry("600x720")
+        frame = ttk.Frame(window, padding=14)
+        frame.pack(fill="both", expand=True)
+        canvas = tk.Canvas(frame, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=canvas.yview)
+        body = ttk.Frame(canvas)
+        body.bind("<Configure>", lambda _: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=body, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        variables: dict[str, tk.StringVar] = {}
+        for row, (key, label, _converter) in enumerate(fields):
+            ttk.Label(body, text=label, width=30).grid(row=row, column=0, sticky="w", pady=3)
+            variable = tk.StringVar(value=_display(_metadata_get(metadata, key)))
+            variables[key] = variable
+            if key == "source_role":
+                widget = ttk.Combobox(
+                    body,
+                    textvariable=variable,
+                    values=["mouth", "interferer"],
+                    state="readonly",
+                )
+            else:
+                widget = ttk.Entry(body, textvariable=variable, width=40)
+            widget.grid(row=row, column=1, sticky="ew", pady=3)
+        body.columnconfigure(1, weight=1)
+
+        def apply_labels():
+            try:
+                for key, _label, converter in fields:
+                    raw = variables[key].get().strip()
+                    _metadata_set(metadata, key, "" if not raw else converter(raw))
+            except ValueError as exc:
+                messagebox.showerror("实验标签无效", str(exc), parent=window)
+                return
+            if self.mode_var.get() != "rir":
+                preset = AUDIO_PRESETS[self.audio_preset_var.get()]
+                items = set(preset.get("items") or self.config_data.scene.items)
+                metadata.setdefault("target", {})["active"] = bool(
+                    items & {"target_only", "mixture"}
+                )
+                metadata.setdefault("interferer", {})["active"] = bool(
+                    items & {"interferer_only", "mixture"}
+                )
+            self.metadata.delete("1.0", "end")
+            self.metadata.insert("1.0", json.dumps(metadata, ensure_ascii=False, indent=2))
+            self._update_metadata_summary()
+            window.destroy()
+
+        actions = ttk.Frame(window, padding=10)
+        actions.pack(fill="x")
+        ttk.Button(actions, text="取消", command=window.destroy).pack(side="right", padx=4)
+        ttk.Button(actions, text="保存标签", command=apply_labels).pack(side="right", padx=4)
+        window.grab_set()
+
+    def new_checklist_template(self):
+        path = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[("Excel 测试清单", "*.xlsx")],
+            initialfile="acoustic_capture_checklist.xlsx",
+        )
+        if not path:
+            return
+        try:
+            create_checklist(path)
+            messagebox.showinfo(
+                "测试清单已创建",
+                "已创建空白测试清单。\n\n每一行代表一次独立物理实验；现场只需选择行并开始采集。",
+            )
+        except Exception as exc:
+            messagebox.showerror("创建测试清单失败", str(exc))
+
+    def open_checklist(self):
+        path = filedialog.askopenfilename(
+            filetypes=[("Excel 测试清单", "*.xlsx"), ("所有文件", "*.*")]
+        )
+        if not path:
+            return
+        try:
+            rows = read_checklist(path)
+        except Exception as exc:
+            messagebox.showerror("打开测试清单失败", str(exc))
+            return
+        self.checklist_path = Path(path).resolve()
+        window = tk.Toplevel(self)
+        window.title("选择测试清单实验")
+        window.transient(self)
+        window.geometry("1080x560")
+        frame = ttk.Frame(window, padding=12)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(
+            frame,
+            text="选择一行后，实验名和条件会自动带入；采集完成后 status 会自动更新。也可关闭窗口继续手工命名。",
+            foreground="#24415c",
+        ).pack(fill="x", pady=(0, 8))
+        columns = (
+            "row",
+            "status",
+            "workflow",
+            "experiment_name",
+            "wearing_id",
+            "boom_pose_id",
+            "source",
+        )
+        tree = ttk.Treeview(frame, columns=columns, show="headings", selectmode="browse")
+        headings = {
+            "row": "行",
+            "status": "状态",
+            "workflow": "类型",
+            "experiment_name": "实验名",
+            "wearing_id": "佩戴",
+            "boom_pose_id": "麦杆",
+            "source": "声源/位置",
+        }
+        widths = {
+            "row": 55,
+            "status": 85,
+            "workflow": 110,
+            "experiment_name": 280,
+            "wearing_id": 90,
+            "boom_pose_id": 110,
+            "source": 240,
+        }
+        row_by_item: dict[str, dict] = {}
+        for column in columns:
+            tree.heading(column, text=headings[column])
+            tree.column(column, width=widths[column], stretch=column in {"experiment_name", "source"})
+        for index, row in enumerate(rows):
+            status = str(row.get("status") or "待采集")
+            source = row.get("source_id") or row.get("interferer_position_id") or ""
+            item = tree.insert(
+                "",
+                "end",
+                values=(
+                    row.get("_row_number"),
+                    status,
+                    row.get("workflow", ""),
+                    row.get("experiment_name", ""),
+                    row.get("wearing_id", ""),
+                    row.get("boom_pose_id", ""),
+                    source,
+                ),
+                tags=("completed",) if status == "已完成" else (),
+            )
+            row_by_item[item] = row
+            if index == 0 and status != "已完成":
+                tree.selection_set(item)
+                tree.focus(item)
+        tree.tag_configure("completed", foreground="#777777")
+        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+        tree.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        def choose():
+            selection = tree.selection()
+            if not selection:
+                messagebox.showwarning("尚未选择实验", "请先选择测试清单中的一行。", parent=window)
+                return
+            row = row_by_item[selection[0]]
+            try:
+                kind = apply_checklist_row(self.config_data, row, self.checklist_path)
+            except Exception as exc:
+                messagebox.showerror("清单行无效", str(exc), parent=window)
+                return
+            self.checklist_row = row
+            self.checklist_kind = kind
+            self.mode_var.set("rir" if kind == "rir" else "audio")
+            self._load_values()
+            if kind == "io":
+                io_label = next(
+                    label
+                    for label, preset in AUDIO_PRESETS.items()
+                    if preset.get("kind") == "io"
+                    and preset.get("action") == self.config_data.general.action
+                )
+                self.audio_preset_var.set(io_label)
+            self._set_mode()
+            name = str(row.get("experiment_name") or "")
+            self.experiment_status.configure(
+                text=f"已选择测试清单第 {row['_row_number']} 行：{name}。确认设备后直接点击开始；完成后清单会自动回写。"
+            )
+            self._append(f"已载入测试清单第 {row['_row_number']} 行：{name}")
+            window.destroy()
+
+        actions = ttk.Frame(window, padding=10)
+        actions.pack(fill="x", side="bottom")
+        ttk.Button(actions, text="取消", command=window.destroy).pack(side="right", padx=4)
+        ttk.Button(actions, text="使用所选实验", command=choose).pack(side="right", padx=4)
+        tree.bind("<Double-1>", lambda _event: choose())
+        if not rows:
+            messagebox.showinfo(
+                "测试清单为空",
+                "清单中还没有实验行。请在 Excel 的“采集清单”工作表添加实验后重新打开。",
+                parent=window,
+            )
+
+    def _update_checklist_progress(
+        self, status: str, *, completed_run: str = "", last_error: str = ""
+    ) -> None:
+        if self.checklist_path is None or self.checklist_row is None:
+            return
+        try:
+            update_checklist_row(
+                self.checklist_path,
+                int(self.checklist_row["_row_number"]),
+                status=status,
+                completed_run=completed_run,
+                last_error=last_error,
+            )
+            self._append(
+                f"测试清单第 {self.checklist_row['_row_number']} 行已更新为：{status}"
+            )
+        except Exception as exc:
+            self._append(f"测试清单自动回写失败（采集文件不受影响）：{exc}")
 
     def open_config(self):
         path = filedialog.askopenfilename(filetypes=[("配置文件", "*.yaml *.yml"), ("所有文件", "*.*")])
@@ -436,8 +929,19 @@ class CaptureGUI(tk.Tk):
 
     def validate_config(self):
         try:
-            self._apply_values()
-            messagebox.showinfo("配置检查", "配置有效，可以开始测试。")
+            config = self._apply_values()
+            if self.mode_var.get() == "rir":
+                workflow = "rir"
+            else:
+                workflow = str(AUDIO_PRESETS[self.audio_preset_var.get()]["kind"])
+            report = build_preflight_report(config, workflow)
+            details = format_preflight_report(report)
+            if not report.can_start:
+                messagebox.showerror("专业预检未通过", details)
+            elif report.warnings:
+                messagebox.showwarning("配置可用（有自动提醒）", details)
+            else:
+                messagebox.showinfo("专业预检通过", details)
         except Exception as exc:
             messagebox.showerror("配置无效", str(exc))
 
@@ -497,17 +1001,27 @@ class CaptureGUI(tk.Tk):
 
     def start_named_experiment(self, kind: str):
         """Require a fresh manual name before starting one physical experiment."""
-        kind_label = "RIR" if kind == "rir" else "语音增强"
-        name = simpledialog.askstring(
-            f"开始新的 {kind_label} 实验",
-            "请输入本次实验的唯一名称。\n"
-            "换角度、高度、佩戴或麦杆姿态后，请使用一个新名称。\n\n"
-            "示例：hs01_w01_b00_interferer_az090_h170",
-            parent=self,
-        )
-        if name is None:
-            return
-        name = name.strip()
+        kind_label = {"rir": "RIR", "scene": "语音增强", "io": "音频播录"}[kind]
+        checklist_selected = self.checklist_row is not None
+        if checklist_selected:
+            if self.checklist_kind != kind:
+                messagebox.showerror(
+                    "清单类型不匹配",
+                    f"所选清单行要求 {self.checklist_kind}，当前按钮将运行 {kind}。请重新选择清单行。",
+                )
+                return
+            name = str(self.checklist_row.get("experiment_name") or "").strip()
+        else:
+            name = simpledialog.askstring(
+                f"开始新的 {kind_label} 实验",
+                "请输入本次实验的唯一名称。\n"
+                "换角度、高度、佩戴或麦杆姿态后，请使用一个新名称。\n\n"
+                "示例：hs01_w01_b00_interferer_az090_h170",
+                parent=self,
+            )
+            if name is None:
+                return
+            name = name.strip()
         if not name:
             messagebox.showwarning("实验名称不能为空", "没有开始采集，请重新点击开始并输入名称。")
             return
@@ -519,8 +1033,12 @@ class CaptureGUI(tk.Tk):
                     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
                     old_metadata = manifest.get("metadata") or {}
                     old_name = old_metadata.get("experiment_name") or old_metadata.get("experiment_id")
+                    manifest_kind = str(manifest.get("kind") or "")
+                    same_kind = manifest_kind == kind or (
+                        kind == "io" and manifest_kind.startswith("io_")
+                    )
                     if (
-                        manifest.get("kind") == kind
+                        same_kind
                         and manifest.get("status") == "completed"
                         and str(old_name) == name
                     ):
@@ -546,21 +1064,108 @@ class CaptureGUI(tk.Tk):
         self.metadata.insert("1.0", json.dumps(metadata, ensure_ascii=False, indent=2))
         self.variables["storage.session_name"].set(name)
         self._append(f"本次实验名称：{name}")
+        self._update_metadata_summary()
         self.run(kind)
 
-    def _refresh_device_choices(self):
-        self.device_boxes["audio.input_device"].configure(values=device_choices("input"))
-        self.device_boxes["audio.output_device"].configure(values=device_choices("output"))
+    def _audio_preset_changed(self, _event=None):
+        preset = AUDIO_PRESETS[self.audio_preset_var.get()]
+        if preset.get("kind") == "io":
+            self.variables["general.action"].set(
+                ACTION_TO_LABEL[str(preset["action"])]
+            )
+        elif preset.get("items") is not None:
+            selected = set(preset["items"])
+            for name, variable in self.item_vars.items():
+                variable.set(name in selected)
+        self._set_mode()
+
+    def start_current_workflow(self):
+        if self.mode_var.get() == "rir":
+            self.start_named_experiment("rir")
+            return
+        preset = AUDIO_PRESETS[self.audio_preset_var.get()]
+        if preset["kind"] == "io":
+            self.variables["general.action"].set(
+                ACTION_TO_LABEL[str(preset["action"])]
+            )
+        elif preset.get("items") is not None:
+            selected = set(preset["items"])
+            for name, variable in self.item_vars.items():
+                variable.set(name in selected)
+        selected_items = {
+            name for name, variable in self.item_vars.items() if variable.get()
+        }
+        real_backend = (
+            LABEL_TO_BACKEND.get(
+                self.variables["audio.backend"].get(),
+                self.variables["audio.backend"].get(),
+            )
+            != "simulated"
+        )
+        input_device = self.variables["audio.input_device"].get().strip().casefold()
+        output_device = self.variables["audio.output_device"].get().strip().casefold()
+        if (
+            preset["kind"] == "scene"
+            and "mixture" in selected_items
+            and real_backend
+            and (not input_device or input_device != output_device)
+            and not messagebox.askyesno(
+                "输入输出未共享同一声卡时钟",
+                "当前录制设备与播放设备不是同一个可验证的双工设备。\n\n"
+                "可以继续做流程试采，但本次 mixed/target-only 不会标记为严格监督可用。\n"
+                "正式训练数据应把人工嘴和干扰扬声器都接到 RME，并让输入输出都选择同一个 RME ASIO 设备。\n\n"
+                "是否仍继续？",
+                parent=self,
+            )
+        ):
+            return
+        self.start_named_experiment(str(preset["kind"]))
+
+    def _host_api_changed(self, _event=None):
+        self._refresh_device_choices(clear_devices=True)
+
+    def _refresh_device_choices(self, clear_devices: bool = False):
+        protocols = host_api_choices()
+        if self.host_api_box is not None:
+            self.host_api_box.configure(values=protocols)
+        selected_protocol = self.variables["audio.host_api"].get().strip() or None
+        self.device_boxes["audio.input_device"].configure(
+            values=device_choices("input", selected_protocol)
+        )
+        self.device_boxes["audio.output_device"].configure(
+            values=device_choices("output", selected_protocol)
+        )
+        if clear_devices:
+            self.variables["audio.input_device"].set("")
+            self.variables["audio.output_device"].set("")
 
     def run(self, kind: str):
-        if not self.save():
+        if self.checklist_row is None:
+            if not self.save():
+                return
+            config = self.config_data
+        else:
+            try:
+                config = self._apply_values()
+            except Exception as exc:
+                messagebox.showerror("清单实验配置无效", str(exc))
+                return
+        try:
+            report = assert_capture_ready(config, kind)
+            for warning in report.warnings:
+                if warning.check_id not in self._logged_preflight_warning_ids:
+                    self._append(f"预检提醒：{warning.title}：{warning.detail}")
+                    self._logged_preflight_warning_ids.add(warning.check_id)
+        except Exception as exc:
+            messagebox.showerror("专业预检未通过", str(exc))
             return
-        config = self.config_data
+        self._stop_event.clear()
         self._set_busy(True)
 
         def worker():
             try:
                 backend = create_backend(config.audio)
+                self._active_backend = backend
                 logger = lambda message: self.events.put(str(message))
                 if kind == "rir":
                     store = capture_rir(
@@ -570,16 +1175,24 @@ class CaptureGUI(tk.Tk):
                         progress=lambda path, take: self.events.put(
                             ("RIR_PROGRESS", str(path), take)
                         ),
+                        stop_requested=self._stop_event.is_set,
                     )
                 else:
                     operation = {
                         "io": capture_general_io,
                         "scene": capture_scene_block,
                     }[kind]
-                    store = operation(config, backend, log=logger)
+                    store = operation(
+                        config,
+                        backend,
+                        log=logger,
+                        stop_requested=self._stop_event.is_set,
+                    )
                 self.events.put(f"__DONE__{store.root}")
             except Exception as exc:
                 self.events.put(f"__ERROR__{exc}")
+            finally:
+                self._active_backend = None
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -592,32 +1205,131 @@ class CaptureGUI(tk.Tk):
                 pass
             self._preview_after_id = None
         state = "disabled" if busy else "normal"
-        self.rir_button.configure(state=state)
-        self.scene_button.configure(state=state)
+        self.start_button.configure(state=state)
         self.scene_scan_button.configure(state=state)
-        self.basic_button.configure(state=state)
+        self.edit_metadata_button.configure(state=state)
+        self.stop_button.configure(state="normal" if busy else "disabled")
+
+    def stop_capture(self):
+        if not self._busy or self._stop_event.is_set():
+            return
+        self._stop_event.set()
+        self.stop_button.configure(state="disabled")
+        self._append("正在停止当前测试，请稍候……")
+        backend = self._active_backend
+        if backend is not None:
+            try:
+                backend.stop()
+            except Exception as exc:
+                self._append(f"停止音频流时收到提示：{exc}")
 
     def _set_mode(self):
         mode = self.mode_var.get()
-        visible_groups = {"common", mode}
-        if mode in {"rir", "speech"}:
-            visible_groups.add("rir_speech")
+        preset = AUDIO_PRESETS[self.audio_preset_var.get()]
+        is_scene = mode == "audio" and preset["kind"] == "scene"
+        is_basic = mode == "audio" and preset["kind"] == "io"
+        visible_groups = {"common"}
+        if mode == "rir":
+            visible_groups.update({"rir", "rir_speech"})
+        elif is_scene:
+            visible_groups.update({"speech", "rir_speech"})
+        elif is_basic:
+            visible_groups.add("basic")
+
+        advanced = self.advanced_var.get()
+        action = str(preset.get("action") or "")
+        if preset.get("items") is None:
+            scene_items = {name for name, variable in self.item_vars.items() if variable.get()}
+        else:
+            scene_items = set(preset.get("items") or [])
+        target_needed = bool(scene_items & {"target_only", "mixture"})
+        interferer_needed = bool(scene_items & {"interferer_only", "mixture"})
+        playback_needed = mode == "rir" or is_scene and (target_needed or interferer_needed) or (
+            is_basic and action in {"play", "play_record"}
+        )
+        recording_needed = mode == "rir" or is_scene or (
+            is_basic and action in {"record", "play_record"}
+        )
+        source_mode = LABEL_TO_SOURCE_MODE.get(
+            self.variables.get("scene.source_mode", tk.StringVar(value="单个文件")).get(),
+            "single",
+        )
+
         for name, _, _, group in FIELDS:
+            visible = group in visible_groups
+            if name in ADVANCED_FIELDS and not advanced:
+                visible = False
+            if name == "general.action":
+                visible = False
+            if name == "audio.input_device" or name == "audio.input_channels":
+                visible = visible and recording_needed
+            elif name == "audio.output_device":
+                visible = visible and playback_needed
+            elif is_basic and name in {
+                "general.source_file",
+                "general.level_dbfs",
+                "general.output_channel",
+            }:
+                visible = visible and playback_needed
+            elif is_scene and name in {"audio.target_output_channel"}:
+                visible = visible and target_needed
+            elif is_scene and name in {
+                "audio.interferer_output_channel",
+                "scene.interferer_file",
+                "scene.interferer_folder",
+                "scene.interferer_level_dbfs",
+            }:
+                visible = visible and interferer_needed
+            elif is_scene and name in {
+                "scene.target_file",
+                "scene.target_folder",
+                "scene.target_level_dbfs",
+            }:
+                visible = visible and target_needed
+            if name in {"scene.target_file", "scene.interferer_file"}:
+                visible = visible and source_mode == "single"
+            elif name in {"scene.target_folder", "scene.interferer_folder"}:
+                visible = visible and source_mode == "folders"
             for widget in self.field_rows.get(name, ()):
-                widget.grid() if group in visible_groups else widget.grid_remove()
+                widget.grid() if visible else widget.grid_remove()
         for widget, group in self.section_widgets:
             widget.grid() if group in visible_groups else widget.grid_remove()
         for widget in self.scene_widgets:
-            widget.grid() if mode == "speech" else widget.grid_remove()
-        for button in (self.basic_button, self.rir_button, self.scene_button, self.scene_scan_button):
-            button.pack_forget()
-        selected = {"basic": self.basic_button, "rir": self.rir_button, "speech": self.scene_button}[mode]
-        selected.pack(side="left", padx=4)
-        if mode == "speech":
+            widget.grid() if is_scene and advanced else widget.grid_remove()
+        if advanced:
+            self.metadata_label.grid()
+            self.metadata.grid()
+        else:
+            self.metadata_label.grid_remove()
+            self.metadata.grid_remove()
+
+        if mode == "rir" or is_scene:
+            self.metadata_summary_panel.grid()
+        else:
+            self.metadata_summary_panel.grid_remove()
+        self._update_metadata_summary()
+
+        for widget in self.audio_preset_widgets:
+            if mode == "audio":
+                widget.pack(fill="x", before=self.main_paned)
+            else:
+                widget.pack_forget()
+        self.audio_preset_help.configure(text=str(preset["help"]))
+        self.start_button.pack_forget()
+        self.scene_scan_button.pack_forget()
+        if mode == "rir":
+            self.start_button.configure(text="开始新的 RIR 实验")
+        elif is_scene:
+            self.start_button.configure(text="开始新的语音增强实验")
+        else:
+            self.start_button.configure(text="开始新的音频播录")
+        self.start_button.pack(side="left", padx=4)
+        if is_scene:
             self.scene_scan_button.pack(side="left", padx=4)
-        self._update_scene_source_fields()
         if mode == "rir":
             self._schedule_rir_preview()
+        elif is_scene and self.viewer.run_dir is None:
+            self.viewer.show_speech_workflow_guide()
 
     def _schedule_rir_preview(self, *_):
         if self._busy or self.mode_var.get() != "rir":
@@ -640,7 +1352,8 @@ class CaptureGUI(tk.Tk):
             duration_s = float(self.variables["sweep.duration_s"].get().strip())
             pre_silence_s = float(self.variables["sweep.pre_silence_s"].get().strip())
             post_silence_s = float(self.variables["sweep.post_silence_s"].get().strip())
-            fade_s = float(self.variables["sweep.fade_s"].get().strip())
+            fade_in_s = float(self.variables["sweep.fade_in_s"].get().strip())
+            fade_out_s = float(self.variables["sweep.fade_out_s"].get().strip())
             level_dbfs = float(self.variables["sweep.level_dbfs"].get().strip())
             if sample_rate < 8_000:
                 raise ValueError("采样率不能低于 8000 Hz")
@@ -648,12 +1361,18 @@ class CaptureGUI(tk.Tk):
                 raise ValueError("扫频范围必须满足 0 < 起始频率 < 终止频率 < Nyquist")
             if duration_s <= 0 or pre_silence_s < 0 or post_silence_s < 0:
                 raise ValueError("扫频时长必须为正，前后静音不能为负")
-            if fade_s < 0 or fade_s * 2 > duration_s:
-                raise ValueError("淡入淡出不能为负或超过扫频时长的一半")
+            if min(fade_in_s, fade_out_s) < 0 or max(fade_in_s, fade_out_s) > duration_s:
+                raise ValueError("淡入淡出不能为负，且每一项不能超过扫频时长")
             if not -100 <= level_dbfs <= 0:
                 raise ValueError("播放电平必须在 -100 到 0 dBFS 之间")
             sweep = exponential_sweep(
-                sample_rate, start_hz, end_hz, duration_s, fade_s, level_dbfs
+                sample_rate,
+                start_hz,
+                end_hz,
+                duration_s,
+                level_dbfs,
+                fade_in_s,
+                fade_out_s,
             )
             played = measurement_signal(sweep, sample_rate, pre_silence_s, post_silence_s)
             self.viewer.show_sweep_preview(
@@ -666,30 +1385,14 @@ class CaptureGUI(tk.Tk):
                 pre_silence_s,
                 post_silence_s,
                 level_dbfs,
+                fade_in_s,
+                fade_out_s,
             )
         except Exception as exc:
             self.viewer.summary_var.set(f"扫频参数暂时无法预览：{exc}")
 
     def _update_scene_source_fields(self):
-        source_mode = LABEL_TO_SOURCE_MODE.get(
-            self.variables.get("scene.source_mode", tk.StringVar(value="单个文件")).get(),
-            "single",
-        )
-        single_fields = {"scene.target_file", "scene.interferer_file"}
-        folder_fields = {
-            "scene.target_folder",
-            "scene.interferer_folder",
-            "scene.pairing_mode",
-            "scene.file_extensions",
-        }
-        for field in single_fields | folder_fields:
-            for widget in self.field_rows.get(field, ()):
-                if self.mode_var.get() != "speech":
-                    widget.grid_remove()
-                elif (field in single_fields) == (source_mode == "single"):
-                    widget.grid()
-                else:
-                    widget.grid_remove()
+        self._set_mode()
 
     def _append(self, message: str):
         self.log.configure(state="normal")
@@ -714,6 +1417,14 @@ class CaptureGUI(tk.Tk):
                 self.viewer.load_run(path)
                 manifest_path = Path(path) / "manifest.json"
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if manifest.get("status") == "cancelled":
+                    self._update_checklist_progress(
+                        "待采集", completed_run=path, last_error="用户停止；可重新采集"
+                    )
+                    self._append(f"测试已停止，已完成的数据已保存：{path}")
+                    messagebox.showinfo("测试已停止", f"已完成的数据已保存到：\n{path}")
+                    continue
+                self._update_checklist_progress("已完成", completed_run=path)
                 warnings = manifest.get("summary", {}).get("warnings", [])
                 if warnings:
                     messagebox.showwarning("测试完成，但存在质量警告", "\n".join(warnings) + f"\n\n结果已保存到：\n{path}")
@@ -722,6 +1433,7 @@ class CaptureGUI(tk.Tk):
             elif isinstance(event, str) and event.startswith("__ERROR__"):
                 self._set_busy(False)
                 error = event.removeprefix("__ERROR__")
+                self._update_checklist_progress("失败", last_error=error)
                 self._append(f"错误：{error}")
                 messagebox.showerror("测试失败", error)
             else:
@@ -729,6 +1441,8 @@ class CaptureGUI(tk.Tk):
         self.after(100, self._poll_events)
 
     def _close(self):
+        if self._busy:
+            self.stop_capture()
         self.viewer.stop_audio()
         self.destroy()
 

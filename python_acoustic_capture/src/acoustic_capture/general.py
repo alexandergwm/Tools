@@ -12,12 +12,14 @@ from .signals import fit_duration, load_audio, route_outputs, scale_dbfs
 from .storage import RunStore, sha256
 
 Log = Callable[[str], None]
+StopRequested = Callable[[], bool]
 
 
 def capture_general_io(
     config: ExperimentConfig,
     backend: AudioBackend,
     log: Log = print,
+    stop_requested: StopRequested | None = None,
 ) -> RunStore:
     """Run one basic I/O operation and archive exactly what was used."""
     io = config.general
@@ -41,6 +43,9 @@ def capture_general_io(
         "output_channel": io.output_channel if needs_playback else None,
     }
     try:
+        if stop_requested is not None and stop_requested():
+            store.finish(summary, status="cancelled")
+            return store
         if output is not None:
             store.write_audio("references/played.wav", output, sample_rate)
             store.write_json(
@@ -61,6 +66,12 @@ def capture_general_io(
             store.write_audio("raw/recording.wav", result.microphones, sample_rate)
             summary["channels"] = channel_metrics(result.microphones)
             summary["backend_status"] = result.status
+        if stop_requested is not None and stop_requested():
+            summary["cancelled"] = True
+            store.write_json("metrics/summary.json", summary)
+            store.finish(summary, status="cancelled")
+            log(f"基础播录已停止；已完成的数据保存在：{store.root}")
+            return store
         if needs_recording and all(item["peak"] <= 1e-12 for item in summary["channels"]):
             warning = "录制信号所有通道均为全零，请检查麦克风权限、输入设备、通道路由或硬件静音状态。"
             summary["warnings"] = [warning]
@@ -74,5 +85,10 @@ def capture_general_io(
         log(f"基础播录结果已保存到：{store.root}")
         return store
     except Exception as exc:
+        if stop_requested is not None and stop_requested():
+            summary["cancelled"] = True
+            store.finish(summary, status="cancelled")
+            log(f"基础播录已停止；已完成的数据保存在：{store.root}")
+            return store
         store.finish({"error": str(exc), **summary}, status="failed")
         raise

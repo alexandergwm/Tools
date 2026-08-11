@@ -16,6 +16,7 @@ import yaml
 @dataclass
 class AudioConfig:
     backend: str = "sounddevice"  # sounddevice | simulated
+    host_api: str | None = None  # ASIO | MME | Windows WASAPI | ...
     device: str | int | None = None  # legacy duplex fallback
     input_device: str | int | None = None
     output_device: str | int | None = None
@@ -44,7 +45,8 @@ class SweepConfig:
     duration_s: float = 8.0
     pre_silence_s: float = 1.0
     post_silence_s: float = 3.0
-    fade_s: float = 0.02
+    fade_in_s: float = 0.08
+    fade_out_s: float = 0.005
     level_dbfs: float = -18.0
     rir_duration_s: float = 2.0
     pre_peak_s: float = 0.01
@@ -133,8 +135,10 @@ class ExperimentConfig:
             raise ValueError("sweep frequencies must satisfy 0 < start < end < Nyquist")
         if min(s.duration_s, s.pre_silence_s, s.post_silence_s, s.rir_duration_s) <= 0:
             raise ValueError("sweep durations must be positive")
-        if s.fade_s < 0 or s.fade_s * 2 > s.duration_s:
-            raise ValueError("sweep.fade_s must be non-negative and no longer than half the sweep")
+        if min(s.fade_in_s, s.fade_out_s) < 0:
+            raise ValueError("sweep fade durations must be non-negative")
+        if max(s.fade_in_s, s.fade_out_s) > s.duration_s:
+            raise ValueError("each sweep fade duration cannot exceed the sweep duration")
         if s.pre_peak_s < 0 or s.pre_peak_s >= s.rir_duration_s:
             raise ValueError("sweep.pre_peak_s must be within the saved RIR duration")
         if not 1 <= r.minimum <= r.maximum:
@@ -161,15 +165,12 @@ class ExperimentConfig:
             raise ValueError(
                 "supervised mixture capture requires target_only in scene.items"
             )
-        if (
-            "mixture" in self.scene.items
-            and a.target_output_channel == a.interferer_output_channel
-        ):
-            raise ValueError("mixture capture requires different target and interferer output channels")
         if self.scene.source_mode not in {"single", "folders"}:
             raise ValueError("scene.source_mode must be single or folders")
         if self.scene.pairing_mode not in {"cycle", "cartesian"}:
             raise ValueError("scene.pairing_mode must be cycle or cartesian")
+        if self.scene.dataset_split not in {"train", "valid", "test"}:
+            raise ValueError("scene.dataset_split must be train, valid, or test")
         if not self.scene.file_extensions:
             raise ValueError("scene.file_extensions cannot be empty")
         if self.scene.duration_s is not None and self.scene.duration_s <= 0:
@@ -189,10 +190,17 @@ def load_config(path: str | Path) -> ExperimentConfig:
     path = Path(path).resolve()
     with path.open("r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
+    sweep_values = dict(raw.get("sweep") or {})
+    legacy_fade = sweep_values.pop("fade_s", None)
+    if legacy_fade is not None:
+        # Older files used one symmetric fade.  Preserve their intent while
+        # allowing new configs to match MATLAB sweeptone's asymmetric fades.
+        sweep_values.setdefault("fade_in_s", legacy_fade)
+        sweep_values.setdefault("fade_out_s", legacy_fade)
     cfg = ExperimentConfig(
         audio=_make(AudioConfig, raw.get("audio")),
         general=_make(GeneralIOConfig, raw.get("general")),
-        sweep=_make(SweepConfig, raw.get("sweep")),
+        sweep=_make(SweepConfig, sweep_values),
         repeats=_make(RepeatConfig, raw.get("repeats")),
         scene=_make(SceneConfig, raw.get("scene")),
         storage=_make(StorageConfig, raw.get("storage")),

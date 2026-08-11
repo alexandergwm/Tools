@@ -40,6 +40,9 @@ class AudioBackend(ABC):
     def play(self, output: np.ndarray) -> dict[str, Any]:
         """Play without recording."""
 
+    def stop(self) -> None:
+        """Request that an active audio operation stop as soon as possible."""
+
 
 class SoundDeviceBackend(AudioBackend):
     def _module(self):
@@ -98,6 +101,7 @@ class SoundDeviceBackend(AudioBackend):
             portaudio_version = None
         return {
             "backend": "sounddevice",
+            "requested_host_api": self.config.host_api,
             "sounddevice_version": getattr(sd, "__version__", None),
             "portaudio_version": portaudio_version,
             "windows_asio_requested": bool(os.environ.get("SD_ENABLE_ASIO")),
@@ -140,6 +144,18 @@ class SoundDeviceBackend(AudioBackend):
         output_info = status.get("output_device", {})
         input_host = input_info.get("host_api")
         output_host = output_info.get("host_api")
+        requested_host = str(self.config.host_api or "").strip()
+        if requested_host:
+            for required, info, label in (
+                (input_required, input_info, "录制设备"),
+                (output_channels is not None, output_info, "播放设备"),
+            ):
+                actual = str(info.get("host_api_name") or "")
+                if required and actual.casefold() != requested_host.casefold():
+                    raise RuntimeError(
+                        f"{label}不属于所选音频协议 {requested_host}；"
+                        f"实际协议为 {actual or '未知'}，请按协议重新选择设备"
+                    )
         if input_required and output_channels is not None and input_host != output_host:
             raise RuntimeError(
                 "同步播录要求录制设备和播放设备属于同一主机接口；"
@@ -213,6 +229,11 @@ class SoundDeviceBackend(AudioBackend):
         )
         return self._operation_status(sd)
 
+    def stop(self) -> None:
+        # sounddevice.stop() is explicitly intended to abort the convenience
+        # play/rec/playrec functions and can be called from the GUI thread.
+        self._module().stop()
+
 
 class SimulatedBackend(AudioBackend):
     """A small multi-microphone room simulator for CI and workflow rehearsal."""
@@ -257,6 +278,9 @@ class SimulatedBackend(AudioBackend):
     def play(self, output: np.ndarray) -> dict[str, Any]:
         return {"backend": "simulated", "frames": len(output)}
 
+    def stop(self) -> None:
+        return None
+
 
 def create_backend(config: AudioConfig) -> AudioBackend:
     if config.backend == "sounddevice":
@@ -281,6 +305,8 @@ def format_hardware_status(status: dict[str, Any]) -> str:
     if status.get("message"):
         return str(status["message"])
     lines = [f"音频后端：{status.get('backend', '未知')}"]
+    if status.get("requested_host_api"):
+        lines.append(f"配置选择的音频协议：{status['requested_host_api']}")
     if status.get("sounddevice_version"):
         lines.append(f"sounddevice 版本：{status['sounddevice_version']}")
     if status.get("portaudio_version"):
@@ -326,7 +352,32 @@ def list_devices() -> str:
         return f"查询音频设备失败：{exc}"
 
 
-def device_choices(kind: str | None = None) -> list[str]:
+def host_api_choices() -> list[str]:
+    """Return host APIs that currently own at least one usable audio device."""
+    try:
+        _enable_windows_asio()
+        import sounddevice as sd
+
+        devices = sd.query_devices()
+        host_apis = sd.query_hostapis()
+        used = {
+            int(item["hostapi"])
+            for item in devices
+            if item["max_input_channels"] > 0 or item["max_output_channels"] > 0
+        }
+        return [
+            str(item["name"])
+            for index, item in enumerate(host_apis)
+            if index in used
+        ]
+    except Exception:
+        return []
+
+
+def device_choices(
+    kind: str | None = None,
+    host_api: str | None = None,
+) -> list[str]:
     """Return GUI device choices, optionally filtered for input or output.
 
     Full-duplex devices are present in both filtered lists.  The numeric prefix
@@ -338,16 +389,29 @@ def device_choices(kind: str | None = None) -> list[str]:
         _enable_windows_asio()
         import sounddevice as sd
         host_apis = sd.query_hostapis()
-        return [
-            f"{index}: {item['name']} [{host_apis[item['hostapi']]['name']}] "
-            f"（输入 {item['max_input_channels']}，输出 {item['max_output_channels']}）"
-            for index, item in enumerate(sd.query_devices())
-            if (
-                kind is None
-                or (kind == "input" and item["max_input_channels"] > 0)
-                or (kind == "output" and item["max_output_channels"] > 0)
-            )
-        ]
+        choices = []
+        requested_host = str(host_api or "").strip().casefold()
+        for index, item in enumerate(sd.query_devices()):
+            api_name = str(host_apis[item["hostapi"]]["name"])
+            if requested_host and api_name.casefold() != requested_host:
+                continue
+            if kind == "input" and item["max_input_channels"] <= 0:
+                continue
+            if kind == "output" and item["max_output_channels"] <= 0:
+                continue
+            if kind is None and item["max_input_channels"] <= 0 and item["max_output_channels"] <= 0:
+                continue
+            api_suffix = "" if requested_host else f" [{api_name}]"
+            if kind == "input":
+                capacity = f"（最多 {item['max_input_channels']} 个输入通道）"
+            elif kind == "output":
+                capacity = f"（最多 {item['max_output_channels']} 个输出通道）"
+            else:
+                capacity = (
+                    f"（输入 {item['max_input_channels']}，输出 {item['max_output_channels']}）"
+                )
+            choices.append(f"{index}: {item['name']}{api_suffix} {capacity}")
+        return choices
     except Exception:
         return []
 

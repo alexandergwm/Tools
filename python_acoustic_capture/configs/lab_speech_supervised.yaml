@@ -1,9 +1,10 @@
 audio:
   backend: sounddevice
+  host_api: ASIO
   device: null
   # 明天在 GUI 中把输入、输出都选择为同一块 RME 的 ASIO 设备。
-  input_device: null
-  output_device: null
+  input_device: ASIO Fireface USB
+  output_device: ASIO Fireface USB
   sample_rate: 48000
   block_size: 0
   input_channels: [1, 2]
@@ -23,7 +24,8 @@ sweep:
   duration_s: 8.0
   pre_silence_s: 1.0
   post_silence_s: 3.0
-  fade_s: 0.02
+  fade_in_s: 0.08
+  fade_out_s: 0.005
   level_dbfs: -30.0
   rir_duration_s: 2.0
   pre_peak_s: 0.01
@@ -64,6 +66,9 @@ storage:
   save_playback_reference: true
   compute_sha256: true
 metadata:
+  capture_profile: standard
+  task_type: neural_beamforming_and_speech_enhancement
+  project_id: headset_speech_generalization_v1
   scene_id: hs01_w01_b00_int090_h170_supervised
   experiment_type: speech_enhancement
   operator: ''
@@ -75,6 +80,19 @@ metadata:
   boom_pose_id: b00_nominal
   microphone_1: left
   microphone_2: right
+  array:
+    array_id: headset_array_template
+    coordinate_system: head_center_x_forward_y_left_z_up_m
+    reference_point: artificial_head_center
+    reference_channel: 1
+    geometry_required: false
+    channels:
+      - {recording_channel: 1, microphone_id: left, x_m: null, y_m: null, z_m: null, polarity: 1}
+      - {recording_channel: 2, microphone_id: right, x_m: null, y_m: null, z_m: null, polarity: 1}
+  quality_gate:
+    enabled: false
+    max_additivity_residual_db: -6.0
+    min_additivity_correlation: 0.70
   target:
     active: true
     source_id: artificial_mouth_01

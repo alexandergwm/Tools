@@ -1,5 +1,6 @@
 audio:
   backend: sounddevice
+  host_api: ASIO
   device: null
   input_device: "ASIO Fireface USB"
   output_device: "ASIO Fireface USB"
@@ -17,7 +18,8 @@ sweep:
   duration_s: 8
   pre_silence_s: 1
   post_silence_s: 3
-  fade_s: 0.02
+  fade_in_s: 0.08
+  fade_out_s: 0.005
   level_dbfs: -20
   rir_duration_s: 2
   pre_peak_s: 0.01

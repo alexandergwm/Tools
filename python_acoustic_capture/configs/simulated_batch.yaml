@@ -1,5 +1,6 @@
 audio:
   backend: simulated
+  host_api: null
   device: null
   input_device: null
   output_device: null
@@ -24,7 +25,8 @@ sweep:
   duration_s: 2
   pre_silence_s: 0.2
   post_silence_s: 0.5
-  fade_s: 0.02
+  fade_in_s: 0.08
+  fade_out_s: 0.005
   level_dbfs: -24
   rir_duration_s: 0.5
   pre_peak_s: 0.01
