@@ -43,7 +43,8 @@ repeats:
   pause_s: 1.0
 
 scene:
-  items: [ambient, target_only, interferer_only, mixture]
+  # 默认现场方案：目标人工嘴单独播放后，立即采集两路同时播放的 mixed。
+  items: [target_only, mixture]
   source_mode: folders
   duration_s: 4.0
   ambient_duration_s: 10.0

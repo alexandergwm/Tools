@@ -169,10 +169,19 @@ def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
         app.checklist_row = None
         app.checklist_kind = None
         app.mode_var.set("audio")
-        app.audio_preset_var.set("标准监督采集（推荐）")
+        app.audio_preset_var.set("配对监督：目标 + MIXED（推荐）")
         app._audio_preset_changed()
         assert app.viewer.preview_spec is None
-        assert "训练输入是 mixture" in app.viewer.summary_var.get()
+        assert "训练输入是 mixed" in app.viewer.summary_var.get()
+        assert app.item_vars["target_only"].get()
+        assert app.item_vars["mixture"].get()
+        assert not app.item_vars["interferer_only"].get()
+        assert "人工嘴 / 目标源输出通道" in str(
+            app.field_rows["audio.target_output_channel"][0].cget("text")
+        )
+        assert "干扰源输出通道" in str(
+            app.field_rows["audio.interferer_output_channel"][0].cget("text")
+        )
         app.mode_var.set("rir")
         app._set_mode()
         app.advanced_var.set(True)
@@ -264,11 +273,11 @@ def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
         assert sum(path == rir_run.resolve() for path in loaded_runs) >= 3
 
         app.mode_var.set("audio")
-        app.audio_preset_var.set("标准监督采集（推荐）")
+        app.audio_preset_var.set("配对监督：目标 + MIXED（推荐）")
         app._audio_preset_changed()
         assert app.start_button.winfo_manager() == "pack"
         assert app.scene_scan_button.winfo_manager() == "pack"
-        assert "纯净目标" in str(app.audio_preset_help.cget("text"))
+        assert "target_only" in str(app.audio_preset_help.cget("text"))
         app.start_button.invoke()
         scene_run = _wait_for_run(app, Path(config.storage.root), "scene")
 

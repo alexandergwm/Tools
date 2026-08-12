@@ -223,6 +223,36 @@ def test_selectable_scene_block(tmp_path: Path):
     assert store.path("labels.jsonl").is_file()
 
 
+def test_target_and_mixed_pair_does_not_require_interferer_only(tmp_path: Path):
+    fs = 16_000
+    tone = np.sin(2 * np.pi * 440 * np.arange(800) / fs).astype(np.float32)
+    target, interferer = tmp_path / "target.wav", tmp_path / "interferer.wav"
+    sf.write(target, tone, fs)
+    sf.write(interferer, tone, fs)
+    cfg = ExperimentConfig()
+    cfg.audio.backend = "simulated"
+    cfg.audio.sample_rate = fs
+    cfg.scene.items = ["target_only", "mixture"]
+    cfg.scene.duration_s = 0.05
+    cfg.scene.target_file = str(target)
+    cfg.scene.interferer_file = str(interferer)
+    cfg.scene.countdown_s = 0
+    cfg.scene.gap_s = 0
+    cfg.storage.root = str(tmp_path / "runs")
+    cfg.storage.compute_sha256 = False
+
+    store = capture_scene_block(cfg, SimulatedBackend(cfg.audio), log=lambda _: None)
+    assert store.path("raw/rep_001_target_only_mics.wav").is_file()
+    assert store.path("raw/rep_001_mixture_mics.wav").is_file()
+    assert not store.path("raw/rep_001_interferer_only_mics.wav").exists()
+    with store.path("labels.csv").open(encoding="utf-8-sig", newline="") as handle:
+        row = next(csv.DictReader(handle))
+    assert row["capture_type"] == "supervised_pair"
+    assert row["target_mixture_sample_aligned"] == "是"
+    assert row["interferer_mixture_sample_aligned"] == "否"
+    assert row["supervision_ready"] == "是"
+
+
 def test_paired_sequence_uses_identical_target_samples_and_shared_boundaries():
     cfg = ExperimentConfig()
     cfg.audio.sample_rate = 1_000

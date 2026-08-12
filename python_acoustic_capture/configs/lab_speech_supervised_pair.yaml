@@ -2,60 +2,31 @@ audio:
   backend: sounddevice
   host_api: ASIO
   device: null
+  # 正式采集：输入和两路输出都选同一个 RME ASIO 双工设备。
   input_device: ASIO Fireface USB
   output_device: ASIO Fireface USB
   sample_rate: 48000
   block_size: 0
-  input_channels:
-  - 1
-  - 2
+  input_channels: [1, 2]
+  # 通道 1 接人工嘴；通道 2 接干扰扬声器。mixed 时两路同时发声。
   target_output_channel: 1
   interferer_output_channel: 2
   latency: high
   dtype: float32
-general:
-  action: play_record
-  source_file: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\source.wav
-  duration_s: 5.0
-  level_dbfs: -30.0
-  output_channel: 1
-sweep:
-  start_hz: 40.0
-  end_hz: 22000.0
-  duration_s: 8.0
-  pre_silence_s: 1.0
-  post_silence_s: 3.0
-  fade_in_s: 0.08
-  fade_out_s: 0.005
-  level_dbfs: -30.0
-  rir_duration_s: 2.0
-  pre_peak_s: 0.01
-repeats:
-  minimum: 5
-  maximum: 10
-  correlation_threshold: 0.9
-  peak_drift_samples: 2
-  minimum_sweep_snr_db: 6.0
-  required_stable_takes: 1
-  reject_clipped: true
-  clip_threshold: 0.999
-  pause_s: 1.0
+
 scene:
-  items:
-  - target_only
-  - mixture
+  # 最小严格监督方案：同一连续流内 target_only -> mixture。
+  # 不录 interferer_only，节省现场时间。
+  items: [target_only, mixture]
   source_mode: folders
   duration_s: 4.0
-  ambient_duration_s: 10.0
   target_file: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\target.wav
   interferer_file: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\interferer.wav
   target_folder: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\targets
   interferer_folder: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\interferers
-  pairing_mode: cartesian
-  file_extensions:
-  - .wav
-  - .flac
-  label_prefix: headA_wearing01
+  pairing_mode: cycle
+  file_extensions: [.wav, .flac]
+  label_prefix: speech_pair
   dataset_split: train
   target_level_dbfs: -26.0
   interferer_level_dbfs: -26.0
@@ -64,38 +35,37 @@ scene:
   require_supervised_pair: true
   countdown_s: 3.0
   gap_s: 1.0
+
 storage:
   root: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\runs
-  session_name: manual_name_entered_in_gui
+  session_name: target_mixed_pair
   wav_subtype: FLOAT
   save_playback_reference: true
   compute_sha256: true
+
 metadata:
-  operator: ''
+  capture_profile: standard
+  task_type: neural_beamforming_and_speech_enhancement
+  project_id: headset_speech_generalization_v1
+  scene_id: target_mixed_pair
+  experiment_type: speech_enhancement
   room_id: ''
   artificial_head_id: headA
-  device_under_test: ''
-  wearing_id: wearing01
+  headset_model_id: modelA
+  headset_unit_id: hs01
+  wearing_id: w01
+  boom_pose_id: b00_nominal
   microphone_1: left
   microphone_2: right
   target:
-    source_id: artificial_head_mouth
-    azimuth_deg: 0
-    elevation_deg: 0
-    distance_m: null
-    height_m: null
+    active: true
+    source_id: artificial_mouth_01
+    position_id: mouth_fixed
   interferer:
+    active: true
     source_id: interferer_speaker_01
+    position_id: int090_h170_d100
     azimuth_deg: 90
     elevation_deg: 0
-    distance_m: null
-    height_m: null
-  rme:
-    clock_source: internal
-    input_gain_1_db: null
-    input_gain_2_db: null
-    totalmix_snapshot: ''
-  environment:
-    temperature_c: null
-    humidity_percent: null
-  notes: ''
+    height_m: 1.70
+    distance_m: 1.00

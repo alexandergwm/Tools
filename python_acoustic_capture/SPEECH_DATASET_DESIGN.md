@@ -18,7 +18,8 @@ hs01_w01_b00_int090_h170_d100_supervised
 - `int090`：干扰源方位角 +90°
 - `h170`：干扰源高度 1.70 m
 - `d100`：距离 1.00 m
-- `supervised`：本实验同时产生 mixture 和与之配对的 target
+- `supervised_pair`：只产生 mixture 和与之配对的 target（默认，训练所需的最小现场方案）
+- `supervised`：产生 mixture、配对 target 和额外 interferer-only（用于物理一致性诊断）
 
 `headset_model_id`、`headset_unit_id`、`wearing_id`、`boom_pose_id` 和完整声源几何信息
 仍应分别写在 YAML 的 `metadata` 中；文件名只是方便人快速识别。
@@ -29,7 +30,7 @@ hs01_w01_b00_int090_h170_d100_supervised
 
 ```yaml
 scene:
-  items: [ambient, target_only, interferer_only, mixture]
+  items: [target_only, mixture]
   capture_strategy: paired_sequence
   require_supervised_pair: true
   gap_s: 1.0
@@ -38,11 +39,10 @@ scene:
 程序先加载并定长同一份 target 和 interferer 数字波形，然后在**一次连续声卡流**中播放：
 
 ```text
-静音 | target_only | 静音 | interferer_only | 静音 | mixture | 静音
+静音 | target_only | 静音 | mixture | 静音
 ```
 
-`target_only` 与 `mixture` 的 target 输出通道复用完全相同的 float32 样本；
-`interferer_only` 与 `mixture` 的干扰输出通道也相同。输入和输出流只打开一次，因此三个片段
+`target_only` 与 `mixture` 的 target 输出通道复用完全相同的 float32 样本。输入和输出流只打开一次，因此两个片段
 共享同一个声卡时钟和固定 I/O 延迟。麦克风连续录音再按已知的样本边界切片，得到等长的
 两通道 `target_recording`、`interferer_recording` 和 `mixture_recording`。
 
@@ -63,7 +63,8 @@ target-only 数据可以扩充纯净语料或用于验证，但不具备与旧 m
 
 ## 三类 YAML
 
-- `configs/lab_speech_supervised.yaml`：首选；同一连续流采 target-only、interferer-only、mixture。
+- `configs/lab_speech_supervised_pair.yaml`：首选；同一连续流采 target-only、mixture。
+- `configs/lab_speech_supervised.yaml`：完整诊断版；额外采 interferer-only。
 - `configs/lab_speech_target_only.yaml`：仅采人工嘴发声的额外纯净场景。
 - `configs/lab_speech_interferer_only.yaml`：仅采干扰源发声的额外纯干扰场景。
 

@@ -415,7 +415,7 @@ class ResultsViewer(ttk.Frame):
         self.axes[0].text(
             0.5,
             0.5,
-            "TARGET ONLY  >  INTERFERER ONLY  >  MIXTURE",
+            "TARGET ONLY  >  MIXED",
             ha="center",
             va="center",
             fontsize=11,
@@ -435,7 +435,7 @@ class ResultsViewer(ttk.Frame):
         self.axes[1].text(
             0.5,
             0.35,
-            "Same target source samples and shared hardware clock",
+            "Same target source samples and one shared full-duplex stream",
             ha="center",
             va="center",
             fontsize=11,
@@ -454,8 +454,8 @@ class ResultsViewer(ttk.Frame):
             transform=self.axes[2].transAxes,
         )
         self.summary_var.set(
-            "标准监督采集会在一次连续声卡流中依次录制纯净目标、纯干扰和同时发声；"
-            "训练输入是 mixture，监督标签是同一行的 target-only。"
+            "配对监督采集会在一次连续声卡流中录制 target-only 与 mixed；"
+            "两段复用完全相同的目标语音。训练输入是 mixed，监督标签是同一行的 target-only。"
         )
         self.canvas.draw_idle()
 

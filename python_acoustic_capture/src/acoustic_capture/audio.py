@@ -10,6 +10,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import os
 import sys
+import threading
+import time
 from typing import Any
 
 import numpy as np
@@ -45,6 +47,21 @@ class AudioBackend(ABC):
 
 
 class SoundDeviceBackend(AudioBackend):
+    """PortAudio backend with bounded, explicitly cancellable streams.
+
+    ``sounddevice.playrec(..., blocking=True)`` is concise, but a driver that
+    never reaches its callback leaves the calling worker blocked forever.  This
+    matters on laptops where the Windows microphone and speakers are separate
+    devices.  Owning the stream explicitly lets the GUI abort it and lets us
+    surface a useful timeout instead of appearing to hang indefinitely.
+    """
+
+    def __init__(self, config: AudioConfig):
+        super().__init__(config)
+        self._stream_lock = threading.Lock()
+        self._active_stream: Any | None = None
+        self._abort_requested = threading.Event()
+
     def _module(self):
         _enable_windows_asio()
         try:
@@ -73,6 +90,20 @@ class SoundDeviceBackend(AudioBackend):
         output_device = self.config.output_device if self.config.output_device is not None else self.config.device
         return input_device, output_device
 
+    @staticmethod
+    def _device_argument(device: str | int | None) -> str | int | None:
+        """Normalize a GUI selection such as ``"24: Microphone ..."`` to 24.
+
+        A bare numeric string is treated by sounddevice as a name search and
+        can match the same device exposed by several Windows host APIs.  The
+        integer index is unambiguous and is what the GUI displays.
+        """
+        if isinstance(device, str):
+            prefix = device.partition(":")[0].strip()
+            if prefix.isdigit():
+                return int(prefix)
+        return device
+
     def _device_status(self, sd) -> dict[str, Any]:
         def describe(device, kind: str):
             try:
@@ -95,6 +126,8 @@ class SoundDeviceBackend(AudioBackend):
                 return {"error": str(exc), "configured": device}
 
         input_device, output_device = self._devices()
+        input_device = self._device_argument(input_device)
+        output_device = self._device_argument(output_device)
         try:
             portaudio_version = sd.get_portaudio_version()[1]
         except Exception:
@@ -110,11 +143,214 @@ class SoundDeviceBackend(AudioBackend):
             "output_device": describe(output_device, "output"),
         }
 
-    def _operation_status(self, sd) -> dict[str, Any]:
+    def _operation_status(
+        self, sd, callback_status: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         status = self._device_status(sd)
-        status["callback_status"] = self._callback_status(sd)
+        status["callback_status"] = callback_status or self._callback_status(sd)
         status["xrun"] = status["callback_status"]["xrun"]
         return status
+
+    @staticmethod
+    def _new_callback_status() -> dict[str, Any]:
+        return {
+            "text": "",
+            "xrun": False,
+            "input_underflow": False,
+            "input_overflow": False,
+            "output_underflow": False,
+            "output_overflow": False,
+        }
+
+    @staticmethod
+    def _merge_callback_status(
+        target: dict[str, Any], status: Any
+    ) -> None:
+        if not status:
+            return
+        names = ("input_underflow", "input_overflow", "output_underflow", "output_overflow")
+        for name in names:
+            target[name] = bool(target[name] or getattr(status, name, False))
+        target["xrun"] = any(bool(target[name]) for name in names)
+        message = str(status).strip()
+        if message and message not in str(target["text"]):
+            target["text"] = "; ".join(part for part in (target["text"], message) if part)
+
+    def _set_active_stream(self, stream: Any | None) -> None:
+        with self._stream_lock:
+            self._active_stream = stream
+
+    def _abort_stream_async(self, stream: Any) -> None:
+        """Abort outside the Tk thread: a broken driver must not freeze the UI."""
+        def abort() -> None:
+            try:
+                stream.abort()
+            except Exception:
+                # The worker will either observe an inactive stream or time out
+                # and report the original device failure.
+                pass
+
+        threading.Thread(target=abort, daemon=True, name="acoustic-audio-abort").start()
+
+    def _run_stream(self, stream: Any, expected_frames: int, sd) -> tuple[bool, bool]:
+        """Start, observe and close a stream.
+
+        Returns ``(cancelled, timed_out)``.  The limit includes ample room for
+        high-latency MME devices, while still preventing an endless wait caused
+        by an unavailable laptop audio endpoint.
+        """
+        self._abort_requested.clear()
+        self._set_active_stream(stream)
+        expected_s = expected_frames / max(1, self.config.sample_rate)
+        deadline = time.monotonic() + max(15.0, expected_s * 2.0 + 8.0)
+        cancelled = False
+        timed_out = False
+        try:
+            stream.start()
+            while bool(getattr(stream, "active", False)):
+                if self._abort_requested.is_set():
+                    cancelled = True
+                    try:
+                        stream.abort()
+                    except Exception:
+                        pass
+                    break
+                if time.monotonic() >= deadline:
+                    timed_out = True
+                    try:
+                        stream.abort()
+                    except Exception:
+                        pass
+                    break
+                time.sleep(0.02)
+        finally:
+            try:
+                if bool(getattr(stream, "active", False)):
+                    stream.abort()
+            except Exception:
+                pass
+            try:
+                stream.close()
+            except Exception:
+                pass
+            self._set_active_stream(None)
+        return cancelled, timed_out
+
+    def _duplex_stream(self, output: np.ndarray, sd) -> tuple[np.ndarray, dict[str, Any], bool]:
+        """Return a fixed-length recording from one cancellable full-duplex stream."""
+        input_count = max(self.config.input_channels)
+        frames = len(output)
+        recording = np.zeros((frames, input_count), dtype=np.float32)
+        callback_status = self._new_callback_status()
+        cursor = 0
+
+        def callback(indata, outdata, callback_frames, _time, status):
+            nonlocal cursor
+            self._merge_callback_status(callback_status, status)
+            available = max(0, frames - cursor)
+            copied = min(callback_frames, available)
+            outdata.fill(0)
+            if copied:
+                recording[cursor : cursor + copied] = indata[:copied]
+                outdata[:copied] = output[cursor : cursor + copied]
+                cursor += copied
+            if cursor >= frames or self._abort_requested.is_set():
+                raise sd.CallbackStop()
+
+        input_device, output_device = self._devices()
+        input_device = self._device_argument(input_device)
+        output_device = self._device_argument(output_device)
+        stream = sd.Stream(
+            samplerate=self.config.sample_rate,
+            blocksize=self.config.block_size,
+            device=(input_device, output_device),
+            channels=(input_count, output.shape[1]),
+            dtype=(self.config.dtype, self.config.dtype),
+            latency=self.config.latency,
+            callback=callback,
+            never_drop_input=False,
+            prime_output_buffers_using_stream_callback=False,
+        )
+        cancelled, timed_out = self._run_stream(stream, frames, sd)
+        if timed_out:
+            raise TimeoutError(
+                "同步播录超时：音频驱动没有在预期时间内完成。"
+                "请改选 MME 或 Windows WASAPI 的实际麦克风/扬声器，"
+                "并先点击“检查声卡”。"
+            )
+        callback_status["cancelled"] = cancelled
+        return recording, callback_status, cancelled
+
+    def _input_stream(self, frames: int, sd) -> tuple[np.ndarray, dict[str, Any], bool]:
+        input_count = max(self.config.input_channels)
+        recording = np.zeros((frames, input_count), dtype=np.float32)
+        callback_status = self._new_callback_status()
+        cursor = 0
+
+        def callback(indata, callback_frames, _time, status):
+            nonlocal cursor
+            self._merge_callback_status(callback_status, status)
+            copied = min(callback_frames, max(0, frames - cursor))
+            if copied:
+                recording[cursor : cursor + copied] = indata[:copied]
+                cursor += copied
+            if cursor >= frames or self._abort_requested.is_set():
+                raise sd.CallbackStop()
+
+        input_device, _ = self._devices()
+        input_device = self._device_argument(input_device)
+        stream = sd.InputStream(
+            samplerate=self.config.sample_rate,
+            blocksize=self.config.block_size,
+            device=input_device,
+            channels=input_count,
+            dtype=self.config.dtype,
+            latency=self.config.latency,
+            callback=callback,
+        )
+        cancelled, timed_out = self._run_stream(stream, frames, sd)
+        if timed_out:
+            raise TimeoutError(
+                "录制超时：麦克风驱动没有返回音频。请检查 Windows 麦克风权限和所选设备。"
+            )
+        callback_status["cancelled"] = cancelled
+        return recording, callback_status, cancelled
+
+    def _output_stream(self, output: np.ndarray, sd) -> tuple[dict[str, Any], bool]:
+        frames = len(output)
+        callback_status = self._new_callback_status()
+        cursor = 0
+
+        def callback(outdata, callback_frames, _time, status):
+            nonlocal cursor
+            self._merge_callback_status(callback_status, status)
+            copied = min(callback_frames, max(0, frames - cursor))
+            outdata.fill(0)
+            if copied:
+                outdata[:copied] = output[cursor : cursor + copied]
+                cursor += copied
+            if cursor >= frames or self._abort_requested.is_set():
+                raise sd.CallbackStop()
+
+        _, output_device = self._devices()
+        output_device = self._device_argument(output_device)
+        stream = sd.OutputStream(
+            samplerate=self.config.sample_rate,
+            blocksize=self.config.block_size,
+            device=output_device,
+            channels=output.shape[1],
+            dtype=self.config.dtype,
+            latency=self.config.latency,
+            callback=callback,
+            prime_output_buffers_using_stream_callback=False,
+        )
+        cancelled, timed_out = self._run_stream(stream, frames, sd)
+        if timed_out:
+            raise TimeoutError(
+                "播放超时：扬声器驱动没有在预期时间内完成。请检查所选播放设备。"
+            )
+        callback_status["cancelled"] = cancelled
+        return callback_status, cancelled
 
     def check_settings(
         self,
@@ -125,6 +361,8 @@ class SoundDeviceBackend(AudioBackend):
         """Ask PortAudio to validate devices, channels, format and sample rate."""
         sd = self._module()
         input_device, output_device = self._devices()
+        input_device = self._device_argument(input_device)
+        output_device = self._device_argument(output_device)
         if input_required:
             sd.check_input_settings(
                 device=input_device,
@@ -182,57 +420,38 @@ class SoundDeviceBackend(AudioBackend):
     def play_record(self, output: np.ndarray) -> CaptureResult:
         sd = self._module()
         self.check_settings(input_required=True, output_channels=output.shape[1])
-        input_count = max(self.config.input_channels)
-        recording = sd.playrec(
-            output,
-            samplerate=self.config.sample_rate,
-            channels=input_count,
-            dtype=self.config.dtype,
-            device=(
-                self.config.input_device if self.config.input_device is not None else self.config.device,
-                self.config.output_device if self.config.output_device is not None else self.config.device,
-            ),
-            blocksize=self.config.block_size,
-            latency=self.config.latency,
-            blocking=True,
-        )
+        recording, callback_status, _ = self._duplex_stream(output, sd)
         selected = recording[:, np.asarray(self.config.input_channels) - 1]
-        return CaptureResult(np.asarray(selected, dtype=np.float32), self._operation_status(sd))
+        return CaptureResult(
+            np.asarray(selected, dtype=np.float32),
+            self._operation_status(sd, callback_status),
+        )
 
     def record(self, frames: int) -> CaptureResult:
         sd = self._module()
         self.check_settings(input_required=True, output_channels=None)
-        input_count = max(self.config.input_channels)
-        recording = sd.rec(
-            frames,
-            samplerate=self.config.sample_rate,
-            channels=input_count,
-            dtype=self.config.dtype,
-            device=self.config.input_device if self.config.input_device is not None else self.config.device,
-            blocksize=self.config.block_size,
-            latency=self.config.latency,
-            blocking=True,
-        )
+        recording, callback_status, _ = self._input_stream(frames, sd)
         selected = recording[:, np.asarray(self.config.input_channels) - 1]
-        return CaptureResult(np.asarray(selected, dtype=np.float32), self._operation_status(sd))
+        return CaptureResult(
+            np.asarray(selected, dtype=np.float32),
+            self._operation_status(sd, callback_status),
+        )
 
     def play(self, output: np.ndarray) -> dict[str, Any]:
         sd = self._module()
         self.check_settings(input_required=False, output_channels=output.shape[1])
-        sd.play(
-            output,
-            samplerate=self.config.sample_rate,
-            device=self.config.output_device if self.config.output_device is not None else self.config.device,
-            blocksize=self.config.block_size,
-            latency=self.config.latency,
-            blocking=True,
-        )
-        return self._operation_status(sd)
+        callback_status, _ = self._output_stream(output, sd)
+        return self._operation_status(sd, callback_status)
 
     def stop(self) -> None:
-        # sounddevice.stop() is explicitly intended to abort the convenience
-        # play/rec/playrec functions and can be called from the GUI thread.
-        self._module().stop()
+        # Do not call the convenience-function global stop() here.  It cannot
+        # reliably control our explicit streams and may itself block in a
+        # driver.  The asynchronous abort keeps the Tk event loop responsive.
+        self._abort_requested.set()
+        with self._stream_lock:
+            stream = self._active_stream
+        if stream is not None:
+            self._abort_stream_async(stream)
 
 
 class SimulatedBackend(AudioBackend):

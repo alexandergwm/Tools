@@ -24,7 +24,7 @@ from .config import ExperimentConfig
 CHECKLIST_SHEET = "采集清单"
 CHECKLIST_COLUMNS: tuple[tuple[str, str], ...] = (
     ("status", "待采集/已完成/跳过/失败"),
-    ("workflow", "rir / supervised / target_only / interferer_only / audio"),
+    ("workflow", "rir / supervised / supervised_pair / target_only / interferer_only / audio"),
     ("experiment_name", "现场唯一实验名；一行对应一次物理实验"),
     ("dataset_split", "train / valid / test"),
     ("project_id", "项目编号"),
@@ -118,7 +118,14 @@ def create_checklist(path: str | Path, rows: list[dict[str, Any]] | None = None)
         workflow_col,
         {
             "validate": "list",
-            "source": ["rir", "supervised", "target_only", "interferer_only", "audio"],
+            "source": [
+                "rir",
+                "supervised",
+                "supervised_pair",
+                "target_only",
+                "interferer_only",
+                "audio",
+            ],
         },
     )
     sheet.data_validation(
@@ -421,6 +428,8 @@ def apply_checklist_row(
     workflow_aliases = {
         "rir": "rir",
         "supervised": "scene",
+        "supervised_pair": "scene",
+        "target_mixed": "scene",
         "speech": "scene",
         "target_only": "scene",
         "interferer_only": "scene",
@@ -435,6 +444,8 @@ def apply_checklist_row(
 
     if workflow == "supervised" or workflow == "speech":
         config.scene.items = ["ambient", "target_only", "interferer_only", "mixture"]
+    elif workflow in {"supervised_pair", "target_mixed"}:
+        config.scene.items = ["target_only", "mixture"]
     elif workflow == "target_only":
         config.scene.items = ["target_only"]
     elif workflow == "interferer_only":

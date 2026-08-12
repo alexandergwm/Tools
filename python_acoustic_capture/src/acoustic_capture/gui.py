@@ -41,8 +41,8 @@ FIELDS = [
     ("general.duration_s", "持续时间（秒）", float, "basic"),
     ("general.level_dbfs", "播放电平（满刻度分贝）", float, "basic"),
     ("general.output_channel", "播放输出通道", int, "basic"),
-    ("audio.target_output_channel", "扫频 / 人工嘴输出通道", int, "rir_speech"),
-    ("audio.interferer_output_channel", "干扰扬声器输出通道", int, "speech"),
+    ("audio.target_output_channel", "人工嘴 / 目标源输出通道", int, "rir_speech"),
+    ("audio.interferer_output_channel", "干扰源输出通道", int, "speech"),
     ("sweep.start_hz", "扫频起始频率（赫兹）", float, "rir"),
     ("sweep.end_hz", "扫频终止频率（赫兹）", float, "rir"),
     ("sweep.duration_s", "扫频持续时间（秒）", float, "rir"),
@@ -122,6 +122,11 @@ RIR_PREVIEW_FIELDS = {
 }
 
 AUDIO_PRESETS = {
+    "配对监督：目标 + MIXED（推荐）": {
+        "kind": "scene",
+        "items": ["target_only", "mixture"],
+        "help": "一次连续播录先采 target_only，再采 mixed；两段复用完全相同的目标语音。适合监督训练，且不额外采 interferer_only。",
+    },
     "标准监督采集（推荐）": {
         "kind": "scene",
         "items": ["ambient", "target_only", "interferer_only", "mixture"],
@@ -291,6 +296,8 @@ class CaptureGUI(tk.Tk):
         self._busy = False
         self._stop_event = threading.Event()
         self._active_backend = None
+        self._worker_thread: threading.Thread | None = None
+        self._cancel_watch_after_id: str | None = None
         self.checklist_path: Path | None = None
         self.checklist_row: dict | None = None
         self.checklist_kind: str | None = None
@@ -1194,7 +1201,10 @@ class CaptureGUI(tk.Tk):
             finally:
                 self._active_backend = None
 
-        threading.Thread(target=worker, daemon=True).start()
+        self._worker_thread = threading.Thread(
+            target=worker, daemon=True, name="acoustic-capture-worker"
+        )
+        self._worker_thread.start()
 
     def _set_busy(self, busy: bool):
         self._busy = busy
@@ -1222,6 +1232,22 @@ class CaptureGUI(tk.Tk):
                 backend.stop()
             except Exception as exc:
                 self._append(f"停止音频流时收到提示：{exc}")
+        self._schedule_cancel_watch()
+
+    def _schedule_cancel_watch(self):
+        """Keep the GUI usable even if a third-party audio driver ignores stop."""
+        if self._cancel_watch_after_id is not None:
+            return
+        self._cancel_watch_after_id = self.after(250, self._check_cancel_watch)
+
+    def _check_cancel_watch(self):
+        self._cancel_watch_after_id = None
+        worker = self._worker_thread
+        if not self._busy or not self._stop_event.is_set() or worker is None:
+            return
+        if worker.is_alive():
+            self._append("仍在等待声卡驱动停止；界面可继续响应。若超过超时限制，本次会自动报错退出。")
+            self._cancel_watch_after_id = self.after(2_000, self._check_cancel_watch)
 
     def _set_mode(self):
         mode = self.mode_var.get()
@@ -1412,6 +1438,7 @@ class CaptureGUI(tk.Tk):
                 self.viewer.load_run(path)
             elif isinstance(event, str) and event.startswith("__DONE__"):
                 self._set_busy(False)
+                self._worker_thread = None
                 path = event.removeprefix("__DONE__")
                 self._append(f"测试完成：{path}")
                 self.viewer.load_run(path)
@@ -1432,6 +1459,7 @@ class CaptureGUI(tk.Tk):
                     messagebox.showinfo("测试完成", f"结果已保存到：\n{path}")
             elif isinstance(event, str) and event.startswith("__ERROR__"):
                 self._set_busy(False)
+                self._worker_thread = None
                 error = event.removeprefix("__ERROR__")
                 self._update_checklist_progress("失败", last_error=error)
                 self._append(f"错误：{error}")

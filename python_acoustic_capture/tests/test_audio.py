@@ -89,23 +89,69 @@ def test_hardware_check_rejects_device_outside_selected_protocol(monkeypatch):
 
 def test_play_record_keeps_only_selected_input_channels(monkeypatch):
     fake = FakeSoundDevice()
+    captured = {}
 
-    def playrec(output, *, channels, **kwargs):
-        assert output.shape == (16, 2)
-        assert channels == 3
-        return np.column_stack(
-            [np.full(16, 1.0), np.full(16, 2.0), np.full(16, 3.0)]
-        ).astype(np.float32)
+    class CallbackStop(Exception):
+        pass
 
-    fake.playrec = playrec
+    class Stream:
+        def __init__(self, *, channels, callback, **kwargs):
+            assert channels == (3, 2)
+            self.callback = callback
+            self.active = False
+
+        def start(self):
+            indata = np.column_stack(
+                [np.full(16, 1.0), np.full(16, 2.0), np.full(16, 3.0)]
+            ).astype(np.float32)
+            outdata = np.zeros((16, 2), dtype=np.float32)
+            try:
+                self.callback(indata, outdata, 16, None, None)
+            except CallbackStop:
+                pass
+            captured["outdata"] = outdata
+            self.active = False
+
+        def abort(self):
+            self.active = False
+
+        def close(self):
+            pass
+
+    fake.Stream = Stream
+    fake.CallbackStop = CallbackStop
     monkeypatch.setattr(SoundDeviceBackend, "_module", lambda self: fake)
     config = AudioConfig(input_channels=[1, 3])
     result = SoundDeviceBackend(config).play_record(np.zeros((16, 2), dtype=np.float32))
     assert result.microphones.shape == (16, 2)
     assert np.allclose(result.microphones[:, 0], 1.0)
     assert np.allclose(result.microphones[:, 1], 3.0)
-    assert result.status["xrun"] is True
-    assert result.status["callback_status"]["input_overflow"] is True
+    assert result.status["xrun"] is False
+    assert np.allclose(captured["outdata"], 0)
+
+
+def test_stop_requests_abort_without_calling_global_sounddevice_stop(monkeypatch):
+    backend = SoundDeviceBackend(AudioConfig())
+    calls: list[str] = []
+
+    class Stream:
+        def abort(self):
+            calls.append("abort")
+
+    backend._set_active_stream(Stream())
+    backend.stop()
+    deadline = __import__("time").monotonic() + 1.0
+    while not calls and __import__("time").monotonic() < deadline:
+        __import__("time").sleep(0.01)
+    assert backend._abort_requested.is_set()
+    assert calls == ["abort"]
+
+
+def test_device_argument_converts_numeric_gui_prefix_to_portaudio_index():
+    assert SoundDeviceBackend._device_argument("24: Laptop microphone") == 24
+    assert SoundDeviceBackend._device_argument(" 4 ") == 4
+    assert SoundDeviceBackend._device_argument("ASIO Fireface USB") == "ASIO Fireface USB"
+    assert SoundDeviceBackend._device_argument(None) is None
 
 
 def test_gui_device_choices_filter_input_and_output(monkeypatch):
