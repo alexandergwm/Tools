@@ -1,0 +1,18 @@
+{
+  "schema_version": 2,
+  "kind": "speech_enhancement_dataset",
+  "project_id_filter": "verify_ten_supervised_pairs",
+  "source_runs_root": "E:\\Code_Github\\Tools-main\\Tools-main\\python_acoustic_capture\\verification_10_pairs\\runs",
+  "audio_packaged": true,
+  "completed_runs": 1,
+  "sample_count": 10,
+  "supervised_pair_count": 10,
+  "validation_error_count": 0,
+  "split_leakage_issue_count": 0,
+  "split_leakage_blocking_count": 0,
+  "training_ready": true,
+  "supervised_input": "mixture_recording",
+  "supervised_target": "target_recording",
+  "microphone_storage": "one_multichannel_wav_per_recording",
+  "split_leakage_rule": "group by exact target content and physical capture group before train/valid/test split"
+}

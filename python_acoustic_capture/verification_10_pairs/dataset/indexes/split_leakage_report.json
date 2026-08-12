@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "group_keys": [
+    "target_source_sha256",
+    "split_group_id",
+    "speaker_id",
+    "utterance_id"
+  ],
+  "issue_count": 0,
+  "blocking_issue_count": 0,
+  "issues": []
+}

@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "workflow": "scene",
+  "capture_profile": "standard",
+  "status": "warning",
+  "can_start": true,
+  "production_ready": false,
+  "error_count": 0,
+  "warning_count": 4,
+  "checks": [
+    {
+      "check_id": "capture_profile",
+      "status": "pass",
+      "title": "采集配置级别",
+      "detail": "当前为 standard；production 模式会阻止缺少关键元数据的正式采集。"
+    },
+    {
+      "check_id": "traceability",
+      "status": "warning",
+      "title": "实验身份与物理条件",
+      "detail": "缺少字段：room_id, headset_model_id"
+    },
+    {
+      "check_id": "array_geometry",
+      "status": "warning",
+      "title": "麦克风阵列定义",
+      "detail": "未提供 metadata.array 或完整 microphone_N 映射，无法可靠还原通道身份。"
+    },
+    {
+      "check_id": "speech_source_geometry",
+      "status": "warning",
+      "title": "语音声源与几何",
+      "detail": "缺少字段：interferer.azimuth_deg, interferer.elevation_deg"
+    },
+    {
+      "check_id": "source_files",
+      "status": "pass",
+      "title": "播放素材",
+      "detail": "所需播放文件或文件夹存在。"
+    },
+    {
+      "check_id": "shared_hardware_clock",
+      "status": "pass",
+      "title": "监督配对硬件时钟",
+      "detail": "输入与输出使用同一可验证双工设备。"
+    },
+    {
+      "check_id": "source_output_routing",
+      "status": "pass",
+      "title": "目标/干扰输出路由",
+      "detail": "目标输出 1，干扰输出 2。"
+    },
+    {
+      "check_id": "calibration",
+      "status": "warning",
+      "title": "校准记录",
+      "detail": "未记录麦克风灵敏度/输入增益/播放 SPL 校准；相对训练可用，但跨批次电平不可严格比较。"
+    },
+    {
+      "check_id": "storage",
+      "status": "pass",
+      "title": "保存位置",
+      "detail": "保存目录：E:\\Code_Github\\Tools-main\\Tools-main\\python_acoustic_capture\\verification_10_pairs\\runs；可用空间 334.7 GiB"
+    }
+  ]
+}

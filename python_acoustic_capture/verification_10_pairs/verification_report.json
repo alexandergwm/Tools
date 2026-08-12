@@ -1,0 +1,9 @@
+{
+  "status": "passed",
+  "source_pairs": 10,
+  "label_rows": 10,
+  "supervised_pairs": 10,
+  "run_dir": "E:\\Code_Github\\Tools-main\\Tools-main\\python_acoustic_capture\\verification_10_pairs\\runs\\20260812_224312_ten_pair_closed_loop_scene",
+  "dataset_dir": "E:\\Code_Github\\Tools-main\\Tools-main\\python_acoustic_capture\\verification_10_pairs\\dataset",
+  "workbook": "E:\\Code_Github\\Tools-main\\Tools-main\\python_acoustic_capture\\verification_10_pairs\\dataset\\indexes\\speech_dataset.xlsx"
+}
