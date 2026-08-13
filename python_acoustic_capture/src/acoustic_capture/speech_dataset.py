@@ -112,6 +112,62 @@ def _audio_signature(path: Path | None) -> tuple[int, int, int] | None:
     return info.samplerate, info.frames, info.channels
 
 
+def _label_metadata_error(row: dict[str, Any]) -> str:
+    def missing_value(key: str) -> bool:
+        value = row.get(key)
+        return value is None or (isinstance(value, str) and not value.strip())
+
+    required = (
+        "project_id",
+        "room_id",
+        "artificial_head_id",
+        "headset_model_id",
+        "headset_unit_id",
+        "wearing_id",
+        "boom_pose_id",
+    )
+    missing = [key for key in required if missing_value(key)]
+    if row.get("target_recording"):
+        missing.extend(
+            key
+            for key in (
+                "target_source_id",
+                "target_position_id",
+                "target_azimuth_deg",
+                "target_elevation_deg",
+                "target_height_m",
+                "target_distance_m",
+            )
+            if missing_value(key)
+        )
+    if row.get("interferer_recording") or row.get("mixture_recording"):
+        missing.extend(
+            key
+            for key in (
+                "interferer_source_id",
+                "interferer_position_id",
+                "interferer_azimuth_deg",
+                "interferer_elevation_deg",
+                "interferer_height_m",
+                "interferer_distance_m",
+            )
+            if missing_value(key)
+        )
+    channel_text = str(row.get("microphone_channels") or "")
+    channels = [value.strip() for value in channel_text.split(",") if value.strip()]
+    try:
+        microphone_map = row.get("microphone_map_json") or {}
+        if isinstance(microphone_map, str):
+            microphone_map = json.loads(microphone_map)
+    except (TypeError, json.JSONDecodeError):
+        microphone_map = {}
+    if not isinstance(microphone_map, dict) or any(
+        str(microphone_map.get(channel) or "").strip() == "" for channel in channels
+    ):
+        missing.append("microphone_map_json")
+    return "missing training labels: " + ", ".join(missing) if missing else ""
+
+
 def _supervision_error(row: dict[str, Any], run_dir: Path) -> str:
     if row.get("supervision_ready") != "是":
         return "source row is not supervision-ready"
@@ -354,7 +410,10 @@ def compile_speech_dataset(
             row["run_id"] = run_id
             row["dataset_sample_id"] = f"{run_id}__{_safe_token(row.get('sample_id'))}"
             row["source_run"] = str(run_dir)
-            error = _supervision_error(row, run_dir) if row.get("mixture_recording") else ""
+            errors = [_label_metadata_error(row)]
+            if row.get("mixture_recording"):
+                errors.append(_supervision_error(row, run_dir))
+            error = "; ".join(value for value in errors if value)
             row["dataset_validation_error"] = error
             row["dataset_supervision_ready"] = (
                 "是"

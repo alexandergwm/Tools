@@ -210,8 +210,6 @@ COMMON_METADATA_FIELDS = [
     ("headset_unit_id", "耳机个体编号", str),
     ("wearing_id", "本次佩戴编号", str),
     ("boom_pose_id", "麦杆姿态编号", str),
-    ("microphone_1", "录制通道 1 含义", str),
-    ("microphone_2", "录制通道 2 含义", str),
 ]
 RIR_METADATA_FIELDS = [
     ("source_role", "RIR 声源类型（mouth/interferer）", str),
@@ -680,18 +678,16 @@ class CaptureGUI(tk.Tk):
             return
         fields = list(COMMON_METADATA_FIELDS)
         try:
-            microphone_count = len(
-                [
-                    value
-                    for value in self.variables["audio.input_channels"].get().split(",")
-                    if value.strip()
-                ]
-            )
+            microphone_channels = [
+                int(value.strip())
+                for value in self.variables["audio.input_channels"].get().split(",")
+                if value.strip()
+            ]
         except (KeyError, ValueError):
-            microphone_count = 2
+            microphone_channels = list(self.config_data.audio.input_channels)
         fields.extend(
-            (f"microphone_{index}", f"录制通道 {index} 含义", str)
-            for index in range(3, microphone_count + 1)
+            (f"microphone_{channel}", f"录制通道 {channel} 含义", str)
+            for channel in microphone_channels
         )
         fields += (
             RIR_METADATA_FIELDS if self.mode_var.get() == "rir" else SPEECH_METADATA_FIELDS

@@ -253,17 +253,46 @@ def _source_checks(
     if workflow == "rir":
         missing = [
             key
-            for key in ("source_role", "source_id", "azimuth_deg", "elevation_deg")
+            for key in (
+                "source_role",
+                "source_id",
+                "azimuth_deg",
+                "elevation_deg",
+                "source_height_cm",
+                "distance_cm",
+            )
             if _missing(metadata.get(key))
         ]
+        invalid: list[str] = []
+        numeric_ranges = {
+            "azimuth_deg": (None, None),
+            "elevation_deg": (-90.0, 90.0),
+            "source_height_cm": (0.0, None),
+            "distance_cm": (0.0, None),
+        }
+        for key, (minimum, maximum) in numeric_ranges.items():
+            if key in missing:
+                continue
+            try:
+                value = float(metadata[key])
+            except (TypeError, ValueError):
+                invalid.append(f"{key} 不是数字")
+                continue
+            if not math.isfinite(value):
+                invalid.append(f"{key} 不是有限值")
+            elif minimum is not None and value <= minimum:
+                invalid.append(f"{key} 必须大于 {minimum:g}")
+            elif maximum is not None and value > maximum:
+                invalid.append(f"{key} 必须不大于 {maximum:g}")
+        problems = [*(f"缺少 {key}" for key in missing), *invalid]
         checks.append(
             PreflightCheck(
                 "rir_source_geometry",
-                "error" if missing and production else "warning" if missing else "pass",
+                "error" if problems and production else "warning" if problems else "pass",
                 "RIR 声源与几何",
-                "缺少字段：" + ", ".join(missing)
-                if missing
-                else "声源角色、声源编号、方位角和俯仰角已记录。",
+                "；".join(problems)
+                if problems
+                else "声源角色、编号、角度、高度和距离均已记录。",
             )
         )
         return
@@ -274,7 +303,14 @@ def _source_checks(
     missing: list[str] = []
     if items & {"target_only", "mixture"}:
         target = metadata.get("target") if isinstance(metadata.get("target"), dict) else {}
-        for key in ("source_id", "position_id"):
+        for key in (
+            "source_id",
+            "position_id",
+            "azimuth_deg",
+            "elevation_deg",
+            "height_m",
+            "distance_m",
+        ):
             if _missing(target.get(key)):
                 missing.append(f"target.{key}")
     if items & {"interferer_only", "mixture"}:
@@ -283,7 +319,14 @@ def _source_checks(
             if isinstance(metadata.get("interferer"), dict)
             else {}
         )
-        for key in ("source_id", "position_id", "azimuth_deg", "elevation_deg"):
+        for key in (
+            "source_id",
+            "position_id",
+            "azimuth_deg",
+            "elevation_deg",
+            "height_m",
+            "distance_m",
+        ):
             if _missing(interferer.get(key)):
                 missing.append(f"interferer.{key}")
     checks.append(

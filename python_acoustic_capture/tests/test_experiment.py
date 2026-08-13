@@ -19,6 +19,7 @@ from acoustic_capture.rir import capture_rir
 
 def _experiment(wearing_id: str, split: str) -> dict:
     return {
+        "artificial_head_id": "head_a",
         "headset_model_id": "model_a",
         "headset_unit_id": "hs01",
         "wearing_id": wearing_id,
@@ -69,6 +70,13 @@ def test_experiment_id_is_stable_and_windows_safe():
     assert first == second
     assert " " not in first
     assert "azp000" in first
+    assert "h140" in first
+
+
+def test_experiment_id_distinguishes_same_angle_at_different_heights():
+    low = _experiment("w01", "train")
+    high = {**low, "source_height_cm": 170}
+    assert experiment_id(low) != experiment_id(high)
 
 
 def test_manual_experiment_id_keeps_chinese_name_and_removes_path_punctuation():
@@ -172,7 +180,7 @@ def test_compile_rir_dataset_exports_one_mean_ir_per_microphone_without_cross_ex
 def test_compile_manual_rir_runs_keeps_runs_independent_and_all_microphones(tmp_path: Path):
     cfg = ExperimentConfig()
     cfg.audio.backend = "simulated"
-    cfg.audio.input_channels = [1, 2, 3]
+    cfg.audio.input_channels = [1, 3, 5]
     cfg.sweep.duration_s = 0.08
     cfg.sweep.pre_silence_s = 0.02
     cfg.sweep.post_silence_s = 0.03
@@ -188,11 +196,20 @@ def test_compile_manual_rir_runs_keeps_runs_independent_and_all_microphones(tmp_
         "project_id": "manual_project",
         "experiment_id": "manual_az090_h170",
         "artificial_head_id": "head01",
+        "room_id": "lab_a",
+        "headset_model_id": "model_a",
         "headset_unit_id": "hs01",
         "wearing_id": "w01",
+        "boom_pose_id": "b00",
         "source_role": "interferer",
+        "source_id": "speaker01",
         "azimuth_deg": 90,
+        "elevation_deg": 0,
         "source_height_cm": 170,
+        "distance_cm": 100,
+        "microphone_1": "left",
+        "microphone_3": "right",
+        "microphone_5": "reference",
     }
     for _ in range(2):
         capture_rir(cfg, SimulatedBackend(cfg.audio), log=lambda _: None)
@@ -212,5 +229,24 @@ def test_compile_manual_rir_runs_keeps_runs_independent_and_all_microphones(tmp_
     assert manifest["cross_experiment_averaging"] is False
     assert {row["duplicate_manual_name_count"] for row in rows} == {"2"}
     assert all(row["microphone_channels"] == "3" for row in rows)
+    assert all(row["recording_channels"] == "1,3,5" for row in rows)
+    channel_map = json.loads(rows[0]["mean_ir_channel_map_json"])
+    assert [item["recording_channel"] for item in channel_map] == [1, 3, 5]
+    assert [item["microphone_id"] for item in channel_map] == ["left", "right", "reference"]
     assert all(row["mean_ir_mic_03"] for row in rows)
     assert (dataset / "indexes/rir_dataset.xlsx").is_file()
+
+
+def test_plan_compiler_rejects_same_name_with_changed_physical_condition(tmp_path: Path):
+    plan_path = _write_plan(tmp_path)
+    generated = expand_experiment_plan(plan_path)
+    config = load_config(generated[0])
+    config.metadata["source_height_cm"] = 999
+    capture_rir(config, SimulatedBackend(config.audio), log=lambda _: None)
+
+    dataset = compile_rir_dataset(plan_path)
+    manifest = json.loads((dataset / "dataset_manifest.json").read_text(encoding="utf-8"))
+    mismatches = (dataset / "indexes/condition_mismatches.jsonl").read_text(encoding="utf-8")
+    assert manifest["condition_mismatch_count"] == 1
+    assert not manifest["training_ready"]
+    assert "999" in mismatches

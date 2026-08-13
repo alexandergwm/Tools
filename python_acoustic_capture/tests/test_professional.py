@@ -62,6 +62,37 @@ def test_checklist_round_trip_and_apply(tmp_path: Path):
     assert updated["completed_at"]
 
 
+def test_checklist_blank_cells_do_not_inherit_previous_experiment_metadata(tmp_path: Path):
+    path = create_checklist(
+        tmp_path / "capture.xlsx",
+        [
+            {
+                "workflow": "supervised_pair",
+                "experiment_name": "first",
+                "wearing_id": "w01",
+                "target_source_id": "mouth01",
+                "target_position_id": "fixed",
+                "interferer_source_id": "speaker01",
+                "interferer_position_id": "az090",
+            },
+            {
+                "workflow": "target_only",
+                "experiment_name": "second",
+                "wearing_id": "w02",
+                "target_source_id": "mouth01",
+                "target_position_id": "fixed",
+            },
+        ],
+    )
+    rows = read_checklist(path)
+    config = ExperimentConfig()
+    apply_checklist_row(config, rows[0], path)
+    assert "interferer" in config.metadata
+    apply_checklist_row(config, rows[1], path)
+    assert config.metadata["wearing_id"] == "w02"
+    assert "interferer" not in config.metadata
+
+
 def test_standard_profile_warns_but_does_not_block_legacy_channel_map(tmp_path: Path):
     config = ExperimentConfig()
     config.storage.root = str(tmp_path)

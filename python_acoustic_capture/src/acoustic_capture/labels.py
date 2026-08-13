@@ -241,6 +241,7 @@ def flatten_experiment_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         for key in (
             "room_id",
             "artificial_head_id",
+            "headset_model_id",
             "headset_unit_id",
             "wearing_id",
             "boom_pose_id",

@@ -337,6 +337,39 @@ def test_scene_failure_checkpoints_and_resume_skips_completed_pair(tmp_path: Pat
     assert resumed_backend.calls == -98
 
 
+def test_scene_resume_rejects_changed_level_or_physical_labels(tmp_path: Path):
+    fs = 16_000
+    signal = np.sin(2 * np.pi * 440 * np.arange(320) / fs)
+    target, interferer = tmp_path / "target.wav", tmp_path / "interferer.wav"
+    sf.write(target, signal, fs)
+    sf.write(interferer, signal, fs)
+    cfg = ExperimentConfig()
+    cfg.audio.backend = "simulated"
+    cfg.audio.sample_rate = fs
+    cfg.scene.items = ["target_only", "mixture"]
+    cfg.scene.target_file = str(target)
+    cfg.scene.interferer_file = str(interferer)
+    cfg.scene.duration_s = 0.02
+    cfg.scene.countdown_s = 0
+    cfg.scene.gap_s = 0
+    cfg.storage.root = str(tmp_path / "runs")
+    cfg.storage.compute_sha256 = False
+    cfg.metadata = {"wearing_id": "w01"}
+
+    class AlwaysFail(SimulatedBackend):
+        def play_record(self, output: np.ndarray) -> CaptureResult:
+            raise RuntimeError("stop here")
+
+    with pytest.raises(RuntimeError, match="stop here"):
+        capture_scene_block(cfg, AlwaysFail(cfg.audio), log=lambda _: None)
+    run = next((tmp_path / "runs").iterdir())
+    cfg.scene.resume_run = str(run)
+    cfg.scene.target_level_dbfs = -12
+    cfg.metadata["wearing_id"] = "w02"
+    with pytest.raises(ValueError, match="不能续采"):
+        capture_scene_block(cfg, SimulatedBackend(cfg.audio), log=lambda _: None)
+
+
 def test_source_indexes_and_reviewed_excel_feed_training_labels(tmp_path: Path):
     fs = 16_000
     target_folder, interferer_folder = tmp_path / "targets", tmp_path / "interferers"
@@ -598,7 +631,14 @@ def test_speech_dataset_packages_multichannel_pairs_and_flattened_labels(tmp_pat
         "microphone_1": "left",
         "microphone_2": "right",
         "microphone_3": "reference",
-        "target": {"source_id": "mouth01", "position_id": "mouth_fixed"},
+        "target": {
+            "source_id": "mouth01",
+            "position_id": "mouth_fixed",
+            "azimuth_deg": 0,
+            "elevation_deg": 0,
+            "height_m": 1.4,
+            "distance_m": 0.05,
+        },
         "interferer": {
             "source_id": "speaker01",
             "position_id": "az090_h170",

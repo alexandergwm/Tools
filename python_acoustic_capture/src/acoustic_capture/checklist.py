@@ -42,6 +42,10 @@ CHECKLIST_COLUMNS: tuple[tuple[str, str], ...] = (
     ("distance_cm", "RIR 声源距离 cm"),
     ("target_source_id", "语音目标源编号"),
     ("target_position_id", "语音目标源位置编号"),
+    ("target_azimuth_deg", "语音目标源方位角"),
+    ("target_elevation_deg", "语音目标源俯仰角"),
+    ("target_height_m", "语音目标源高度 m"),
+    ("target_distance_m", "语音目标源距离 m"),
     ("interferer_source_id", "语音干扰源编号"),
     ("interferer_position_id", "语音干扰源位置编号"),
     ("interferer_azimuth_deg", "语音干扰源方位角"),
@@ -474,6 +478,13 @@ def apply_checklist_row(
         "source_height_cm",
         "distance_cm",
     }
+    # A checklist row is a complete physical experiment, not a partial patch.
+    # Clear values owned by the previous row so a blank cell cannot silently
+    # inherit the preceding wearing, head, source or geometry.
+    for key in direct_metadata:
+        metadata.pop(key, None)
+    metadata.pop("target", None)
+    metadata.pop("interferer", None)
     for key in direct_metadata:
         value = row.get(key)
         if value not in (None, ""):
@@ -481,6 +492,10 @@ def apply_checklist_row(
     source_mapping = {
         "target_source_id": "target.source_id",
         "target_position_id": "target.position_id",
+        "target_azimuth_deg": "target.azimuth_deg",
+        "target_elevation_deg": "target.elevation_deg",
+        "target_height_m": "target.height_m",
+        "target_distance_m": "target.distance_m",
         "interferer_source_id": "interferer.source_id",
         "interferer_position_id": "interferer.position_id",
         "interferer_azimuth_deg": "interferer.azimuth_deg",
@@ -489,6 +504,10 @@ def apply_checklist_row(
         "interferer_distance_m": "interferer.distance_m",
     }
     numeric_source = {
+        "target_azimuth_deg",
+        "target_elevation_deg",
+        "target_height_m",
+        "target_distance_m",
         "interferer_azimuth_deg",
         "interferer_elevation_deg",
         "interferer_height_m",

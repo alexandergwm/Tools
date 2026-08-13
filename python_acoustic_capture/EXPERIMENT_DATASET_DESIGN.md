@@ -16,6 +16,7 @@ project
 - `experiment`：一次确定的人工头、耳机单体、佩戴、麦杆和声源几何，是数据集基本单元。
 - `take`：只是在该实验内部固定全部物理条件后重复播放 ESS。
 - 仅在同一 `experiment_id` 内对通过质检的 take 对齐并求均值。
+- 自动实验 ID 同时包含人工头、耳机型号/个体、佩戴、麦杆、声源、方位、俯仰、绝对高度和距离；同角度不同高度仍是两次实验。
 - 跨人工头、`wearing_id`、角度、高度、麦杆或耳机单体都不做波形均值，也不生成跨实验 stack。
 - 每个麦克风分别形成 `mean_ir_mic_NN`；多通道 WAV 只是这些 IR 的同步容器。
 
@@ -92,6 +93,8 @@ datasets/headset_rir_generalization_v1/
       ├─ <experiment_id>__mean-ir-mic-01.wav
       ├─ <experiment_id>__mean-ir-mic-02.wav
       └─ <experiment_id>__mean-ir-mic-NN.wav
+
+索引中的 `recording_channels` 和 `mean_ir_channel_map_json` 明确记录 WAV 列号、声卡输入通道和麦克风身份；即便输入选择为 `1,3,5` 也不会把它误解释成 `1,2,3`。计划编译会核对物理条件指纹；同名但不同佩戴、人工头、角度或高度的运行不会被自动接受。
 ```
 
 训练时读取 `rir_experiments.jsonl`，一行对应一次独立实验。佩戴、角度和高度差异通过多行实验样本体现，训练程序自行采样这些实验，采集工具不再跨实验平均。

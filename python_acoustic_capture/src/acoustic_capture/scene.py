@@ -357,22 +357,46 @@ def capture_scene_block(
     interferer_index = _load_source_index(
         scene.interferer_index_csv, scene.interferer_folder
     )
+    def source_signature(path: Path | None) -> dict | None:
+        if path is None:
+            return None
+        stat = path.stat()
+        return {
+            "path": str(path.resolve()),
+            "size": stat.st_size,
+            "mtime_ns": stat.st_mtime_ns,
+        }
+
+    def optional_file_signature(value: str) -> dict | None:
+        path = Path(value) if value else None
+        return source_signature(path) if path and path.is_file() else None
+
     plan = {
         "pairs": [
             {
-                "target": str(pair.target.resolve()) if pair.target else None,
-                "interferer": str(pair.interferer.resolve()) if pair.interferer else None,
+                "target": source_signature(pair.target),
+                "interferer": source_signature(pair.interferer),
             }
             for pair in pairs
         ],
+        "source_mode": scene.source_mode,
+        "pairing_mode": scene.pairing_mode,
+        "target_index": optional_file_signature(scene.target_index_csv),
+        "interferer_index": optional_file_signature(scene.interferer_index_csv),
         "items": list(scene.items),
         "repetitions": scene.repetitions,
         "duration_s": scene.duration_s,
         "gap_s": scene.gap_s,
+        "capture_strategy": scene.capture_strategy,
+        "require_supervised_pair": scene.require_supervised_pair,
+        "target_level_dbfs": scene.target_level_dbfs,
+        "interferer_level_dbfs": scene.interferer_level_dbfs,
         "sample_rate": fs,
         "input_channels": list(config.audio.input_channels),
         "target_output_channel": config.audio.target_output_channel,
         "interferer_output_channel": config.audio.interferer_output_channel,
+        "wav_subtype": config.storage.wav_subtype,
+        "metadata": config.metadata,
     }
     plan_sha256 = canonical_sha256(plan)
     store = (

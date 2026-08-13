@@ -57,6 +57,33 @@ def main() -> int:
         config.storage.root = str(root / "runs")
         config.storage.compute_sha256 = False
         config.storage.save_playback_reference = False
+        config.metadata = {
+            "project_id": "stress_2000_pairs",
+            "room_id": "simulated_room",
+            "artificial_head_id": "simulated_head",
+            "headset_model_id": "simulated_model",
+            "headset_unit_id": "simulated_unit",
+            "wearing_id": "fixed",
+            "boom_pose_id": "fixed",
+            "microphone_1": "left",
+            "microphone_2": "right",
+            "target": {
+                "source_id": "simulated_mouth",
+                "position_id": "front",
+                "azimuth_deg": 0,
+                "elevation_deg": 0,
+                "height_m": 1.4,
+                "distance_m": 0.05,
+            },
+            "interferer": {
+                "source_id": "simulated_interferer",
+                "position_id": "right",
+                "azimuth_deg": 90,
+                "elevation_deg": 0,
+                "height_m": 1.4,
+                "distance_m": 1.0,
+            },
+        }
 
         tracemalloc.start()
         capture_started = time.perf_counter()

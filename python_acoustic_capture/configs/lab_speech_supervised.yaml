@@ -97,6 +97,10 @@ metadata:
     active: true
     source_id: artificial_mouth_01
     position_id: mouth_fixed
+    azimuth_deg: 0
+    elevation_deg: 0
+    height_m: 1.40
+    distance_m: 0.05
   interferer:
     active: true
     source_id: interferer_speaker_01

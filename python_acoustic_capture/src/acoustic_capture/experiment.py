@@ -14,7 +14,7 @@ import soundfile as sf
 import yaml
 
 from .config import load_config, save_config
-from .professional import array_geometry_sha256, array_metadata
+from .professional import array_geometry_sha256, array_metadata, canonical_sha256
 
 
 EXPERIMENT_FIELDS = (
@@ -32,6 +32,78 @@ EXPERIMENT_FIELDS = (
     "dataset_split",
     "output_channel",
 )
+
+RIR_CONDITION_FIELDS = (
+    "project_id",
+    "room_id",
+    "artificial_head_id",
+    "headset_model_id",
+    "headset_unit_id",
+    "wearing_id",
+    "boom_pose_id",
+    "source_role",
+    "source_id",
+    "azimuth_deg",
+    "elevation_deg",
+    "source_height_cm",
+    "distance_cm",
+    "output_channel",
+)
+
+_NUMERIC_CONDITION_FIELDS = {
+    "azimuth_deg",
+    "elevation_deg",
+    "source_height_cm",
+    "distance_cm",
+    "output_channel",
+}
+
+
+def _condition_value(field: str, value: Any) -> Any:
+    if value in (None, ""):
+        return ""
+    if field in _NUMERIC_CONDITION_FIELDS:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return str(value).strip()
+    return str(value).strip()
+
+
+def rir_condition(metadata: dict[str, Any], *, output_channel: Any = None) -> dict[str, Any]:
+    """Return the physical identity used to prevent cross-condition mixing."""
+    values = dict(metadata)
+    if values.get("output_channel") in (None, "") and output_channel not in (None, ""):
+        values["output_channel"] = output_channel
+    return {
+        field: _condition_value(field, values.get(field))
+        for field in RIR_CONDITION_FIELDS
+    }
+
+
+def rir_condition_sha256(metadata: dict[str, Any], *, output_channel: Any = None) -> str:
+    return canonical_sha256(rir_condition(metadata, output_channel=output_channel))
+
+
+def _rir_metadata_errors(metadata: dict[str, Any], *, output_channel: Any = None) -> list[str]:
+    condition = rir_condition(metadata, output_channel=output_channel)
+    missing = [field for field, value in condition.items() if value == ""]
+    errors = [f"missing {field}" for field in missing]
+    for field in ("azimuth_deg", "elevation_deg", "source_height_cm", "distance_cm"):
+        value = condition[field]
+        if value == "":
+            continue
+        if not isinstance(value, float):
+            errors.append(f"invalid {field}")
+    if isinstance(condition["elevation_deg"], float) and not -90 <= condition["elevation_deg"] <= 90:
+        errors.append("elevation_deg outside [-90, 90]")
+    for field in ("source_height_cm", "distance_cm"):
+        value = condition[field]
+        if isinstance(value, float) and value <= 0:
+            errors.append(f"{field} must be positive")
+    if condition["source_role"] not in {"mouth", "interferer"}:
+        errors.append("source_role must be mouth or interferer")
+    return errors
 
 def _token(value: Any, fallback: str = "na") -> str:
     text = str(value).strip().lower()
@@ -54,6 +126,7 @@ def experiment_id(metadata: dict[str, Any]) -> str:
         text = re.sub(r"[^\w-]+", "-", text, flags=re.UNICODE).strip("-_")
         return text or "experiment"
     required = (
+        "artificial_head_id",
         "headset_model_id",
         "headset_unit_id",
         "wearing_id",
@@ -62,17 +135,14 @@ def experiment_id(metadata: dict[str, Any]) -> str:
         "source_id",
         "azimuth_deg",
         "elevation_deg",
+        "source_height_cm",
         "distance_cm",
     )
     missing = [name for name in required if metadata.get(name) in (None, "")]
     if missing:
         raise ValueError(f"experiment metadata is missing: {', '.join(missing)}")
     parts = [
-        *(
-            [f"ah-{_token(metadata['artificial_head_id'])}"]
-            if metadata.get("artificial_head_id") not in (None, "")
-            else []
-        ),
+        f"ah-{_token(metadata['artificial_head_id'])}",
         f"hm-{_token(metadata['headset_model_id'])}",
         f"hu-{_token(metadata['headset_unit_id'])}",
         f"w-{_token(metadata['wearing_id'])}",
@@ -80,6 +150,7 @@ def experiment_id(metadata: dict[str, Any]) -> str:
         f"src-{_token(metadata['source_role'])}-{_token(metadata['source_id'])}",
         _signed_token("az", metadata["azimuth_deg"]),
         _signed_token("el", metadata["elevation_deg"]),
+        f"h{int(round(float(metadata['source_height_cm']))):03d}",
         f"d{int(round(float(metadata['distance_cm']))):03d}",
     ]
     return "__".join(parts)
@@ -96,6 +167,7 @@ def _physical_group_id(metadata: dict[str, Any]) -> str:
         for key in (
             "room_id",
             "artificial_head_id",
+            "headset_model_id",
             "headset_unit_id",
             "wearing_id",
             "boom_pose_id",
@@ -118,7 +190,9 @@ def load_experiment_plan(path: str | Path) -> dict[str, Any]:
     if not plan.get("experiments") and plan.get("matrix"):
         matrix = plan["matrix"]
         expanded = []
-        artificial_heads = matrix.get("artificial_heads") or [{}]
+        artificial_heads = matrix.get("artificial_heads") or []
+        if not artificial_heads:
+            raise ValueError("experiment plan matrix requires artificial_heads")
         for artificial_head in artificial_heads:
             for headset in matrix.get("headset_units", []):
                 for wearing in matrix.get("wearings", []):
@@ -160,7 +234,6 @@ def load_experiment_plan(path: str | Path) -> dict[str, Any]:
     for raw in plan["experiments"]:
         item = dict(raw)
         item.setdefault("dataset_split", "train")
-        item.setdefault("source_height_cm", "")
         item["experiment_id"] = experiment_id(item)
         if item["experiment_id"] in seen:
             raise ValueError(f"duplicate experiment_id: {item['experiment_id']}")
@@ -220,6 +293,66 @@ def _write_rows(path: Path, rows: list[dict[str, Any]]) -> None:
         writer = csv.DictWriter(handle, fieldnames=keys)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _input_channel_map(
+    manifest: dict[str, Any], metadata: dict[str, Any], microphone_paths: list[str]
+) -> tuple[list[int], list[dict[str, Any]]]:
+    configured = manifest.get("audio_input_channels") or []
+    try:
+        recording_channels = [int(value) for value in configured]
+    except (TypeError, ValueError):
+        recording_channels = []
+    if len(recording_channels) != len(microphone_paths):
+        recording_channels = list(range(1, len(microphone_paths) + 1))
+    array_channels = array_metadata(metadata).get("channels") or []
+    array_ids = {
+        int(channel["recording_channel"]): str(channel.get("microphone_id") or "")
+        for channel in array_channels
+        if isinstance(channel, dict)
+        and isinstance(channel.get("recording_channel"), int)
+    }
+    mapping = []
+    for wav_column, (recording_channel, path) in enumerate(
+        zip(recording_channels, microphone_paths), 1
+    ):
+        mapping.append(
+            {
+                "wav_column": wav_column,
+                "recording_channel": recording_channel,
+                "microphone_id": array_ids.get(
+                    recording_channel,
+                    str(metadata.get(f"microphone_{recording_channel}") or ""),
+                ),
+                "file": path,
+            }
+        )
+    return recording_channels, mapping
+
+
+def _rir_split_issues(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        if row.get("status") != "completed":
+            continue
+        group = str(row.get("split_group_id") or "").strip()
+        split = str(row.get("dataset_split") or "").strip().lower()
+        if group and split in {"train", "valid", "test"}:
+            groups[group].append(row)
+    issues = []
+    for group, members in groups.items():
+        splits = sorted({str(member.get("dataset_split")) for member in members})
+        if len(splits) > 1:
+            issues.append(
+                {
+                    "split_group_id": group,
+                    "splits": ",".join(splits),
+                    "experiment_count": len(members),
+                    "experiment_ids": [member.get("experiment_id", "") for member in members],
+                    "severity": "error",
+                }
+            )
+    return issues
 
 
 def _write_rir_workbook(path: Path, rows: list[dict[str, Any]], summary: dict[str, Any]) -> None:
@@ -334,6 +467,13 @@ def compile_completed_rir_runs(
             sf.write(microphone_path, audio[:, channel], sample_rate, subtype="FLOAT")
             microphone_paths.append(microphone_path.relative_to(dataset_root).as_posix())
         summary = manifest.get("summary") or {}
+        actual_output_channel = summary.get("output_channel", metadata.get("output_channel", ""))
+        metadata_errors = _rir_metadata_errors(
+            metadata, output_channel=actual_output_channel
+        )
+        recording_channels, microphone_map = _input_channel_map(
+            manifest, metadata, microphone_paths
+        )
         row = {
             "dataset_experiment_id": dataset_eid,
             "experiment_id": eid,
@@ -343,6 +483,7 @@ def compile_completed_rir_runs(
             "created_at": manifest.get("created_at", ""),
             "dataset_split": split,
             **{field: metadata.get(field, "") for field in EXPERIMENT_FIELDS},
+            "output_channel": actual_output_channel,
             "project_id": metadata.get("project_id", ""),
             "run_uuid": manifest.get("run_uuid", ""),
             "config_sha256": manifest.get("config_sha256", ""),
@@ -359,7 +500,15 @@ def compile_completed_rir_runs(
             "rejected_take_count": len(summary.get("rejected_takes", [])),
             "sample_rate_hz": sample_rate,
             "rir_samples": len(audio),
+            "microphone_channel_count": audio.shape[1],
             "microphone_channels": audio.shape[1],
+            "recording_channels": ",".join(map(str, recording_channels)),
+            "mean_ir_channel_map_json": json.dumps(microphone_map, ensure_ascii=False),
+            "rir_condition_sha256": rir_condition_sha256(
+                metadata, output_channel=actual_output_channel
+            ),
+            "dataset_validation_error": "; ".join(metadata_errors),
+            "dataset_training_ready": not metadata_errors,
             "mean_ir_multichannel": target.relative_to(dataset_root).as_posix(),
             "mean_ir_files_json": json.dumps(microphone_paths, ensure_ascii=False),
             "source_run": str(run_dir),
@@ -371,12 +520,18 @@ def compile_completed_rir_runs(
 
     index_base = dataset_root / "indexes" / "rir_experiments"
     _write_rows(index_base, rows)
+    split_issues = _rir_split_issues(rows)
+    _write_rows(dataset_root / "indexes" / "split_leakage", split_issues)
+    validation_error_count = sum(bool(row["dataset_validation_error"]) for row in rows)
     dataset_summary = {
-        "schema_version": 2,
+        "schema_version": 3,
         "kind": "rir_dataset_from_completed_runs",
         "project_id_filter": project_id,
         "source_runs_root": str(runs_root),
         "completed_experiments": len(rows),
+        "validation_error_count": validation_error_count,
+        "split_leakage_blocking_count": len(split_issues),
+        "training_ready": bool(rows) and validation_error_count == 0 and not split_issues,
         "training_unit": "within_experiment_mean_ir_per_microphone",
         "averaging_scope": "accepted_takes_within_one_run_only",
         "cross_experiment_averaging": False,
@@ -395,9 +550,18 @@ def compile_rir_dataset(path: str | Path) -> Path:
     runs_root = Path(plan["paths"]["runs_root"])
     dataset_root = Path(plan["paths"]["dataset_root"])
     project_id = str(plan["project"]["project_id"])
-    planned = {item["experiment_id"]: item for item in plan["experiments"]}
+    base_metadata = dict(load_config(plan["paths"]["base_config"]).metadata)
+    planned = {
+        item["experiment_id"]: {
+            **base_metadata,
+            **plan["project"],
+            **item,
+        }
+        for item in plan["experiments"]
+    }
 
     candidates: dict[str, list[tuple[str, Path, dict[str, Any]]]] = defaultdict(list)
+    condition_mismatches: list[dict[str, Any]] = []
     for manifest_path in runs_root.glob("*/manifest.json"):
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -410,6 +574,22 @@ def compile_rir_dataset(path: str | Path) -> Path:
                 continue
             eid = experiment_id(metadata)
             if eid in planned and (manifest_path.parent / "processed/average_rir.wav").is_file():
+                summary = manifest.get("summary") or {}
+                actual_output = summary.get("output_channel", metadata.get("output_channel", ""))
+                expected_hash = rir_condition_sha256(planned[eid])
+                actual_hash = rir_condition_sha256(metadata, output_channel=actual_output)
+                if expected_hash != actual_hash:
+                    condition_mismatches.append(
+                        {
+                            "experiment_id": eid,
+                            "run_id": manifest_path.parent.name,
+                            "expected_condition_sha256": expected_hash,
+                            "actual_condition_sha256": actual_hash,
+                            "expected_condition_json": json.dumps(rir_condition(planned[eid]), ensure_ascii=False),
+                            "actual_condition_json": json.dumps(rir_condition(metadata, output_channel=actual_output), ensure_ascii=False),
+                        }
+                    )
+                    continue
                 candidates[eid].append((str(manifest.get("created_at", "")), manifest_path.parent, manifest))
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             continue
@@ -447,6 +627,14 @@ def compile_rir_dataset(path: str | Path) -> Path:
             sf.write(microphone_path, audio[:, channel], sample_rate, subtype="FLOAT")
             microphone_paths.append(microphone_path.relative_to(dataset_root).as_posix())
         summary = manifest.get("summary") or {}
+        metadata = manifest.get("metadata") or {}
+        actual_output_channel = summary.get("output_channel", metadata.get("output_channel", ""))
+        metadata_errors = _rir_metadata_errors(
+            metadata, output_channel=actual_output_channel
+        )
+        recording_channels, microphone_map = _input_channel_map(
+            manifest, metadata, microphone_paths
+        )
         row.update(
             {
                 "status": "completed",
@@ -480,7 +668,15 @@ def compile_rir_dataset(path: str | Path) -> Path:
                 "rejected_take_count": len(summary.get("rejected_takes", [])),
                 "sample_rate_hz": sample_rate,
                 "rir_samples": len(audio),
+                "microphone_channel_count": audio.shape[1],
                 "microphone_channels": audio.shape[1],
+                "recording_channels": ",".join(map(str, recording_channels)),
+                "mean_ir_channel_map_json": json.dumps(microphone_map, ensure_ascii=False),
+                "rir_condition_sha256": rir_condition_sha256(
+                    metadata, output_channel=actual_output_channel
+                ),
+                "dataset_validation_error": "; ".join(metadata_errors),
+                "dataset_training_ready": not metadata_errors,
                 "mean_ir_multichannel": target.relative_to(dataset_root).as_posix(),
                 "mean_ir_2ch": (
                     target.relative_to(dataset_root).as_posix()
@@ -496,14 +692,34 @@ def compile_rir_dataset(path: str | Path) -> Path:
         experiment_rows.append(row)
 
     _write_rows(dataset_root / "indexes" / "rir_experiments", experiment_rows)
+    _write_rows(dataset_root / "indexes" / "condition_mismatches", condition_mismatches)
+    split_issues = _rir_split_issues(experiment_rows)
+    _write_rows(dataset_root / "indexes" / "split_leakage", split_issues)
+    duplicate_count = sum(int(row.get("duplicate_completed_runs", 0)) for row in experiment_rows)
+    validation_error_count = sum(
+        bool(row.get("dataset_validation_error")) for row in experiment_rows
+    )
+    missing_ids = [
+        row["experiment_id"] for row in experiment_rows if row["status"] == "missing"
+    ]
     summary = {
-        "schema_version": 2,
+        "schema_version": 3,
         "project": plan["project"],
         "planned_experiments": len(plan["experiments"]),
         "completed_experiments": sum(row["status"] == "completed" for row in experiment_rows),
-        "missing_experiments": [
-            row["experiment_id"] for row in experiment_rows if row["status"] == "missing"
-        ],
+        "missing_experiments": missing_ids,
+        "condition_mismatch_count": len(condition_mismatches),
+        "duplicate_completed_run_count": duplicate_count,
+        "validation_error_count": validation_error_count,
+        "split_leakage_blocking_count": len(split_issues),
+        "training_ready": (
+            bool(experiment_rows)
+            and not missing_ids
+            and not condition_mismatches
+            and duplicate_count == 0
+            and validation_error_count == 0
+            and not split_issues
+        ),
         "training_unit": "mean_ir_per_microphone",
         "averaging_scope": "accepted_takes_within_one_experiment_only",
         "cross_experiment_averaging": False,

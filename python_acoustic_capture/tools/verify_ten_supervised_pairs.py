@@ -96,14 +96,32 @@ def main() -> int:
     config.storage.compute_sha256 = True
     config.metadata = {
         "project_id": "verify_ten_supervised_pairs",
+        "room_id": "simulated_room",
         "scene_id": "simulated_closed_loop_10_pairs",
         "experiment_id": "simulated_closed_loop_10_pairs",
         "artificial_head_id": "simulator",
+        "headset_model_id": "simulator_model",
         "headset_unit_id": "simulator_headset",
         "wearing_id": "fixed",
         "boom_pose_id": "fixed",
-        "target": {"source_id": "simulated_mouth", "position_id": "front"},
-        "interferer": {"source_id": "simulated_interferer", "position_id": "right"},
+        "microphone_1": "left",
+        "microphone_2": "right",
+        "target": {
+            "source_id": "simulated_mouth",
+            "position_id": "front",
+            "azimuth_deg": 0,
+            "elevation_deg": 0,
+            "height_m": 1.4,
+            "distance_m": 0.05,
+        },
+        "interferer": {
+            "source_id": "simulated_interferer",
+            "position_id": "right",
+            "azimuth_deg": 90,
+            "elevation_deg": 0,
+            "height_m": 1.4,
+            "distance_m": 1.0,
+        },
     }
     config.validate()
 
