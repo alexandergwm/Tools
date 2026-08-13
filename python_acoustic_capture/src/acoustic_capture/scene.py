@@ -26,6 +26,7 @@ from .storage import RunStore, sha256
 
 Log = Callable[[str], None]
 StopRequested = Callable[[], bool]
+Progress = Callable[[dict], None]
 PAIRED_ITEM_ORDER = ("target_only", "interferer_only", "mixture")
 
 
@@ -264,6 +265,7 @@ def capture_scene_block(
     backend: AudioBackend,
     log: Log = print,
     stop_requested: StopRequested | None = None,
+    progress: Progress | None = None,
 ) -> RunStore:
     fs, scene = config.audio.sample_rate, config.scene
     if (
@@ -376,6 +378,28 @@ def capture_scene_block(
                     if single_legacy
                     else f"sample_{pair_index:04d}_rep_{repetition:03d}_paired_sequence"
                 )
+                if progress is not None:
+                    progress(
+                        {
+                            "event": "pair_prepared",
+                            "pair_index": pair_index,
+                            "pair_count": len(pairs),
+                            "repetition": repetition,
+                            "target_name": pair.target.name if pair.target else "(not used)",
+                            "interferer_name": pair.interferer.name if pair.interferer else "(not used)",
+                            "target": target,
+                            "interferer": interferer,
+                            "sample_rate": fs,
+                            "stream_samples": len(paired_playback),
+                            "segments": {
+                                item: {
+                                    "start_sample": segment["start_sample"],
+                                    "end_sample": segment["end_sample"],
+                                }
+                                for item, segment in segments.items()
+                            },
+                        }
+                    )
                 log(
                     "  配对序列："
                     + " → ".join(

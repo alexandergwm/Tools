@@ -45,6 +45,14 @@ class AudioBackend(ABC):
     def stop(self) -> None:
         """Request that an active audio operation stop as soon as possible."""
 
+    def set_progress_callback(self, callback) -> None:
+        """Receive lightweight playback progress dictionaries when supported.
+
+        Backends deliberately do not know about Tk.  The GUI installs a
+        thread-safe queue writer here, while command-line callers can simply
+        leave the callback unset.
+        """
+
 
 class SoundDeviceBackend(AudioBackend):
     """PortAudio backend with bounded, explicitly cancellable streams.
@@ -61,6 +69,32 @@ class SoundDeviceBackend(AudioBackend):
         self._stream_lock = threading.Lock()
         self._active_stream: Any | None = None
         self._abort_requested = threading.Event()
+        self._progress_callback = None
+        self._last_progress_at = 0.0
+
+    def set_progress_callback(self, callback) -> None:
+        self._progress_callback = callback
+
+    def _emit_progress(self, phase: str, frames: int, total_frames: int, *, force: bool = False) -> None:
+        callback = self._progress_callback
+        if callback is None:
+            return
+        now = time.monotonic()
+        if not force and now - self._last_progress_at < 0.08:
+            return
+        self._last_progress_at = now
+        try:
+            callback(
+                {
+                    "phase": phase,
+                    "frames": int(frames),
+                    "total_frames": int(total_frames),
+                    "sample_rate": int(self.config.sample_rate),
+                }
+            )
+        except Exception:
+            # Progress reporting must never interrupt an audio callback.
+            pass
 
     def _module(self):
         _enable_windows_asio()
@@ -206,7 +240,9 @@ class SoundDeviceBackend(AudioBackend):
         cancelled = False
         timed_out = False
         try:
+            self._emit_progress("opening_audio_stream", 0, expected_frames, force=True)
             stream.start()
+            self._emit_progress("playing", 0, expected_frames, force=True)
             while bool(getattr(stream, "active", False)):
                 if self._abort_requested.is_set():
                     cancelled = True
@@ -234,6 +270,12 @@ class SoundDeviceBackend(AudioBackend):
             except Exception:
                 pass
             self._set_active_stream(None)
+            self._emit_progress(
+                "cancelled" if cancelled else "timed_out" if timed_out else "completed",
+                expected_frames if not cancelled and not timed_out else 0,
+                expected_frames,
+                force=True,
+            )
         return cancelled, timed_out
 
     def _duplex_stream(self, output: np.ndarray, sd) -> tuple[np.ndarray, dict[str, Any], bool]:
@@ -254,6 +296,7 @@ class SoundDeviceBackend(AudioBackend):
                 recording[cursor : cursor + copied] = indata[:copied]
                 outdata[:copied] = output[cursor : cursor + copied]
                 cursor += copied
+                self._emit_progress("playing", cursor, frames)
             if cursor >= frames or self._abort_requested.is_set():
                 raise sd.CallbackStop()
 
@@ -294,6 +337,7 @@ class SoundDeviceBackend(AudioBackend):
             if copied:
                 recording[cursor : cursor + copied] = indata[:copied]
                 cursor += copied
+                self._emit_progress("recording", cursor, frames)
             if cursor >= frames or self._abort_requested.is_set():
                 raise sd.CallbackStop()
 
@@ -329,6 +373,7 @@ class SoundDeviceBackend(AudioBackend):
             if copied:
                 outdata[:copied] = output[cursor : cursor + copied]
                 cursor += copied
+                self._emit_progress("playing", cursor, frames)
             if cursor >= frames or self._abort_requested.is_set():
                 raise sd.CallbackStop()
 
@@ -464,6 +509,16 @@ class SimulatedBackend(AudioBackend):
             config.target_output_channel: self._paths(1.0),
             config.interferer_output_channel: self._paths(0.72),
         }
+        self._progress_callback = None
+
+    def set_progress_callback(self, callback) -> None:
+        self._progress_callback = callback
+
+    def _emit_progress(self, phase: str, frames: int, total_frames: int) -> None:
+        if self._progress_callback is not None:
+            self._progress_callback(
+                {"phase": phase, "frames": frames, "total_frames": total_frames, "sample_rate": self.config.sample_rate}
+            )
 
     def _paths(self, base_gain: float) -> list[np.ndarray]:
         delay = 170
@@ -479,6 +534,7 @@ class SimulatedBackend(AudioBackend):
         return paths
 
     def play_record(self, output: np.ndarray) -> CaptureResult:
+        self._emit_progress("playing", 0, len(output))
         microphones = np.zeros((len(output), len(self.config.input_channels)), dtype=np.float32)
         for one_based_channel, paths in self.paths.items():
             if one_based_channel <= output.shape[1]:
@@ -486,12 +542,15 @@ class SimulatedBackend(AudioBackend):
                 for mic, impulse in enumerate(paths):
                     microphones[:, mic] += fftconvolve(emitted, impulse, mode="full")[: len(output)]
         microphones += self.rng.normal(0, 2e-5, microphones.shape).astype(np.float32)
+        self._emit_progress("completed", len(output), len(output))
         return CaptureResult(microphones, {"backend": "simulated", "overflow": False})
 
     def record(self, frames: int) -> CaptureResult:
+        self._emit_progress("recording", 0, frames)
         microphones = self.rng.normal(
             0, 2e-5, (frames, len(self.config.input_channels))
         ).astype(np.float32)
+        self._emit_progress("completed", frames, frames)
         return CaptureResult(microphones, {"backend": "simulated", "overflow": False})
 
     def play(self, output: np.ndarray) -> dict[str, Any]:

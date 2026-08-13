@@ -321,6 +321,10 @@ pytest
 
 ## 10. Windows Portable EXE
 
+语音采集开始后，右侧会即时显示当前素材对的 target 与 interferer 波形，以及红色播放/录制游标；
+RIR 预览同样显示扫频播放位置。素材预检和文件夹扫描在后台执行，因此网络盘、同步盘或异常声卡驱动
+不会阻塞 GUI 主界面；可随时点击“停止当前测试”。
+
 无需 Python 的 Portable 版本可通过以下脚本重新生成：
 
 ```powershell

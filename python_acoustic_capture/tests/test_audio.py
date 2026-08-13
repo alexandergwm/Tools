@@ -130,6 +130,47 @@ def test_play_record_keeps_only_selected_input_channels(monkeypatch):
     assert np.allclose(captured["outdata"], 0)
 
 
+def test_play_record_reports_stream_progress(monkeypatch):
+    fake = FakeSoundDevice()
+
+    class CallbackStop(Exception):
+        pass
+
+    class Stream:
+        def __init__(self, *, callback, **kwargs):
+            self.callback = callback
+            self.active = False
+
+        def start(self):
+            try:
+                self.callback(
+                    np.zeros((12, 2), dtype=np.float32),
+                    np.zeros((12, 2), dtype=np.float32),
+                    12,
+                    None,
+                    None,
+                )
+            except CallbackStop:
+                pass
+
+        def abort(self):
+            self.active = False
+
+        def close(self):
+            pass
+
+    fake.Stream = Stream
+    fake.CallbackStop = CallbackStop
+    monkeypatch.setattr(SoundDeviceBackend, "_module", lambda self: fake)
+    updates = []
+    backend = SoundDeviceBackend(AudioConfig(input_channels=[1, 2]))
+    backend.set_progress_callback(updates.append)
+    backend.play_record(np.zeros((12, 2), dtype=np.float32))
+    assert updates[0]["phase"] == "opening_audio_stream"
+    assert any(update["frames"] == 12 for update in updates)
+    assert updates[-1]["phase"] == "completed"
+
+
 def test_stop_requests_abort_without_calling_global_sounddevice_stop(monkeypatch):
     backend = SoundDeviceBackend(AudioConfig())
     calls: list[str] = []

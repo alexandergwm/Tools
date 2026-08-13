@@ -156,6 +156,9 @@ class ResultsViewer(ttk.Frame):
         self._x_bounds: dict[object, tuple[float, float]] = {}
         self._drag_state: tuple[object, float, tuple[float, float]] | None = None
         self.preview_spec: dict[str, float] | None = None
+        self._live_lines: list[object] = []
+        self._live_segments: dict[str, dict] = {}
+        self._live_total_s = 0.0
         self._build()
 
     def _build(self):
@@ -303,6 +306,7 @@ class ResultsViewer(ttk.Frame):
         self.run_label.configure(text="ESS 扫频实时预览（修改左侧参数后自动更新）")
         self._x_bounds.clear()
         self._drag_state = None
+        self._live_lines.clear()
 
         detail_duration = min(duration_s, max(0.02, 8.0 / start_hz))
         detail_samples = min(len(sweep), max(2, int(round(detail_duration * sample_rate))))
@@ -361,6 +365,7 @@ class ResultsViewer(ttk.Frame):
         self.axes[0].set_xlabel("Playback time (s)")
         self.axes[0].set_xlim(0.0, max(full_duration, 1.0 / sample_rate))
         self._x_bounds[self.axes[0]] = self.axes[0].get_xlim()
+        self._live_lines.append(self.axes[0].axvline(0.0, color="#d62728", linewidth=1.8))
 
         self.axes[1].plot(detail_times, sweep[:detail_samples], linewidth=1.0, color="#ff7f0e")
         self.axes[1].axhline(0.0, linewidth=0.5, color="#555555", alpha=0.5)
@@ -373,6 +378,7 @@ class ResultsViewer(ttk.Frame):
         )
         self.axes[1].set_xlim(detail_bounds)
         self._x_bounds[self.axes[1]] = detail_bounds
+        self._live_lines.append(self.axes[1].axvline(pre_silence_s, color="#d62728", linewidth=1.6))
 
         absolute_frequency_times = frequency_times + pre_silence_s
         self.axes[2].semilogy(absolute_frequency_times, frequencies, linewidth=1.6, color="#2ca02c")
@@ -383,6 +389,7 @@ class ResultsViewer(ttk.Frame):
         self.axes[2].set_xlim(sweep_bounds)
         self.axes[2].set_ylim(max(1.0, start_hz * 0.8), end_hz * 1.2)
         self._x_bounds[self.axes[2]] = sweep_bounds
+        self._live_lines.append(self.axes[2].axvline(pre_silence_s, color="#d62728", linewidth=1.6))
 
         peak = float(np.max(np.abs(sweep))) if len(sweep) else 0.0
         self.summary_var.set(
@@ -391,6 +398,89 @@ class ResultsViewer(ttk.Frame):
             f"电平 {level_dbfs:g} dBFS，峰值 {peak:.4f}；"
             "第一图只表示前静音 / ESS / 后静音的播放顺序，不是波形，也不用于判断掉音"
         )
+        self.canvas.draw_idle()
+
+    def show_live_speech_pair(
+        self,
+        target: np.ndarray,
+        interferer: np.ndarray,
+        sample_rate: int,
+        segments: dict[str, dict],
+        *,
+        target_name: str,
+        interferer_name: str,
+        pair_index: int,
+        pair_count: int,
+        stream_samples: int,
+    ) -> None:
+        """Show the exact two source signals while a paired stream is running."""
+        self.run_dir = None
+        self.preview_spec = None
+        self._x_bounds.clear()
+        self._drag_state = None
+        self._live_lines.clear()
+        self._live_segments = segments
+        self._live_total_s = stream_samples / max(1, sample_rate)
+        for axis in self.axes:
+            axis.clear()
+            axis.grid(True, alpha=0.25)
+
+        for axis, signal, title, color in (
+            (self.axes[0], target, f"Target / artificial mouth: {target_name}", "#1f77b4"),
+            (self.axes[1], interferer, f"Interferer: {interferer_name}", "#ff7f0e"),
+        ):
+            times, shown = display_points(np.asarray(signal).reshape(-1, 1), sample_rate)
+            axis.plot(times, shown[:, 0], color=color, linewidth=0.8)
+            axis.set_title(title)
+            axis.set_ylabel("Amplitude")
+            axis.set_xlim(0.0, max(len(signal) / sample_rate, 1.0 / sample_rate))
+            self._x_bounds[axis] = axis.get_xlim()
+            self._live_lines.append(axis.axvline(0.0, color="#d62728", linewidth=1.6))
+
+        timeline = self.axes[2]
+        colors = {"target_only": "#4c9bd6", "interferer_only": "#f2a65a", "mixture": "#7fbf7f"}
+        labels = {"target_only": "TARGET ONLY", "interferer_only": "INTERFERER ONLY", "mixture": "MIXED"}
+        for item, segment in segments.items():
+            start = float(segment["start_sample"]) / sample_rate
+            end = float(segment["end_sample"]) / sample_rate
+            timeline.barh(0.5, end - start, left=start, height=0.45, color=colors.get(item, "#bbbbbb"), edgecolor="#555555")
+            timeline.text((start + end) / 2.0, 0.5, labels.get(item, item), ha="center", va="center", fontsize=9)
+        timeline.set_title(f"Playback progress — pair {pair_index}/{pair_count}")
+        timeline.set_xlabel("Stream time (s)")
+        timeline.set_yticks([])
+        timeline.set_ylim(0.0, 1.0)
+        timeline.set_xlim(0.0, max(self._live_total_s, 1.0 / sample_rate))
+        self._x_bounds[timeline] = timeline.get_xlim()
+        self._live_lines.append(timeline.axvline(0.0, color="#d62728", linewidth=1.8))
+        self.run_label.configure(text=f"Live capture: target={target_name} | interferer={interferer_name}")
+        self.summary_var.set("Preparing audio stream… The red line is the actual playback/recording position.")
+        self.canvas.draw_idle()
+
+    def update_live_progress(self, frames: int, total_frames: int, sample_rate: int, phase: str) -> None:
+        """Advance the red cursor for RIR and speech live previews."""
+        if not self._live_lines and self.preview_spec is None:
+            return
+        total = max(1, int(total_frames))
+        time_s = min(max(0.0, int(frames) / max(1, int(sample_rate))), total / max(1, int(sample_rate)))
+        for line in self._live_lines:
+            line.set_xdata([time_s, time_s])
+        phase_text = {
+            "opening_audio_stream": "Opening audio stream…",
+            "playing": "Playing and recording…",
+            "recording": "Recording…",
+            "completed": "Playback finished; saving files…",
+            "cancelled": "Stopping audio stream…",
+            "timed_out": "Audio stream timed out.",
+        }.get(phase, phase)
+        if self._live_segments:
+            active = "silence / transition"
+            frame = int(frames)
+            for item, segment in self._live_segments.items():
+                if int(segment["start_sample"]) <= frame < int(segment["end_sample"]):
+                    active = {"target_only": "TARGET ONLY", "interferer_only": "INTERFERER ONLY", "mixture": "MIXED"}.get(item, item)
+                    break
+            phase_text += f"  |  now: {active}  |  {time_s:.2f}/{total / max(1, sample_rate):.2f} s"
+        self.summary_var.set(phase_text)
         self.canvas.draw_idle()
 
     def show_speech_workflow_guide(self) -> None:
@@ -409,6 +499,8 @@ class ResultsViewer(ttk.Frame):
         self.run_label.configure(text="语音增强采集：完成后自动显示本次多通道录音")
         self._x_bounds.clear()
         self._drag_state = None
+        self._live_lines.clear()
+        self._live_segments = {}
         for axis in self.axes:
             axis.clear()
             axis.set_axis_off()
@@ -466,6 +558,8 @@ class ResultsViewer(ttk.Frame):
             return
         self.run_dir = root
         self.preview_spec = None
+        self._live_lines.clear()
+        self._live_segments = {}
         self.files = discover_audio_files(root)
         self.path_by_label.clear()
         for category, paths in self.files.items():
@@ -498,6 +592,8 @@ class ResultsViewer(ttk.Frame):
         channel_max = 1
         self._x_bounds.clear()
         self._drag_state = None
+        self._live_lines.clear()
+        self._live_segments = {}
         for axis, category, title in zip(
             self.axes,
             ("playback", "recording", "rir"),

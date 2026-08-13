@@ -1157,23 +1157,25 @@ class CaptureGUI(tk.Tk):
             except Exception as exc:
                 messagebox.showerror("清单实验配置无效", str(exc))
                 return
-        try:
-            report = assert_capture_ready(config, kind)
-            for warning in report.warnings:
-                if warning.check_id not in self._logged_preflight_warning_ids:
-                    self._append(f"预检提醒：{warning.title}：{warning.detail}")
-                    self._logged_preflight_warning_ids.add(warning.check_id)
-        except Exception as exc:
-            messagebox.showerror("专业预检未通过", str(exc))
-            return
         self._stop_event.clear()
         self._set_busy(True)
+        self._append("正在后台预检、扫描素材并准备声卡；界面保持可操作。")
 
         def worker():
             try:
+                # Folder recursion, availability checks and device opening can
+                # block on OneDrive/network drives or a faulty audio driver.
+                # None of these are allowed on Tk's event thread.
+                report = assert_capture_ready(config, kind)
+                for warning in report.warnings:
+                    self.events.put(("PREFLIGHT_WARNING", warning.check_id, warning.title, warning.detail))
+                self.events.put(("STATUS", "预检完成；正在打开声卡流…"))
                 backend = create_backend(config.audio)
                 self._active_backend = backend
                 logger = lambda message: self.events.put(str(message))
+                backend.set_progress_callback(
+                    lambda update: self.events.put(("AUDIO_PROGRESS", update))
+                )
                 if kind == "rir":
                     store = capture_rir(
                         config,
@@ -1189,12 +1191,21 @@ class CaptureGUI(tk.Tk):
                         "io": capture_general_io,
                         "scene": capture_scene_block,
                     }[kind]
-                    store = operation(
-                        config,
-                        backend,
-                        log=logger,
-                        stop_requested=self._stop_event.is_set,
-                    )
+                    if kind == "scene":
+                        store = capture_scene_block(
+                            config,
+                            backend,
+                            log=logger,
+                            stop_requested=self._stop_event.is_set,
+                            progress=lambda update: self.events.put(("SCENE_PROGRESS", update)),
+                        )
+                    else:
+                        store = operation(
+                            config,
+                            backend,
+                            log=logger,
+                            stop_requested=self._stop_event.is_set,
+                        )
                 self.events.put(f"__DONE__{store.root}")
             except Exception as exc:
                 self.events.put(f"__ERROR__{exc}")
@@ -1432,7 +1443,40 @@ class CaptureGUI(tk.Tk):
                 event = self.events.get_nowait()
             except queue.Empty:
                 break
-            if isinstance(event, tuple) and event and event[0] == "RIR_PROGRESS":
+            if isinstance(event, tuple) and event and event[0] == "PREFLIGHT_WARNING":
+                _, check_id, title, detail = event
+                if check_id not in self._logged_preflight_warning_ids:
+                    self._append(f"预检提醒：{title}：{detail}")
+                    self._logged_preflight_warning_ids.add(check_id)
+            elif isinstance(event, tuple) and event and event[0] == "STATUS":
+                self._append(str(event[1]))
+            elif isinstance(event, tuple) and event and event[0] == "SCENE_PROGRESS":
+                _, update = event
+                if update.get("event") == "pair_prepared":
+                    self._append(
+                        f"素材对 {update['pair_index']}/{update['pair_count']}："
+                        f"target={update['target_name']} | interferer={update['interferer_name']}"
+                    )
+                    self.viewer.show_live_speech_pair(
+                        update["target"],
+                        update["interferer"],
+                        update["sample_rate"],
+                        update["segments"],
+                        target_name=update["target_name"],
+                        interferer_name=update["interferer_name"],
+                        pair_index=update["pair_index"],
+                        pair_count=update["pair_count"],
+                        stream_samples=update["stream_samples"],
+                    )
+            elif isinstance(event, tuple) and event and event[0] == "AUDIO_PROGRESS":
+                _, update = event
+                self.viewer.update_live_progress(
+                    update.get("frames", 0),
+                    update.get("total_frames", 1),
+                    update.get("sample_rate", 1),
+                    str(update.get("phase", "")),
+                )
+            elif isinstance(event, tuple) and event and event[0] == "RIR_PROGRESS":
                 _, path, take = event
                 self._append(f"第 {take} 次 RIR 已完成，正在刷新右侧图形：{path}")
                 self.viewer.load_run(path)
