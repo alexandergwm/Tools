@@ -24,6 +24,10 @@ scene:
   interferer_file: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\interferer.wav
   target_folder: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\targets
   interferer_folder: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\interferers
+  # 可选 CSV：relative_path,speaker_id,utterance_id
+  target_index_csv: ''
+  # 可选 CSV：relative_path,noise_id,noise_class
+  interferer_index_csv: ''
   pairing_mode: cycle
   file_extensions: [.wav, .flac]
   label_prefix: speech_pair

@@ -36,7 +36,7 @@ repeats:
   correlation_threshold: 0.9
   peak_drift_samples: 2
   minimum_sweep_snr_db: 6.0
-  required_stable_takes: 1
+  required_stable_takes: 3
   reject_clipped: true
   clip_threshold: 0.999
   pause_s: 1.0
@@ -51,7 +51,7 @@ scene:
   interferer_file: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\interferer.wav
   target_folder: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\targets
   interferer_folder: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\interferers
-  pairing_mode: cartesian
+  pairing_mode: cycle
   file_extensions:
   - .wav
   - .flac

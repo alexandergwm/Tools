@@ -21,6 +21,9 @@ if (-not (Test-Path -LiteralPath $PyInstallerPackage)) {
     --workpath $BuildRoot `
     --distpath $DistRoot `
     (Join-Path $ProjectRoot "AcousticCapture.spec")
+if ($LASTEXITCODE -ne 0) {
+    throw "Folder Portable build failed with exit code $LASTEXITCODE"
+}
 
 & $PythonExe -m PyInstaller `
     --noconfirm `
@@ -28,6 +31,9 @@ if (-not (Test-Path -LiteralPath $PyInstallerPackage)) {
     --workpath $BuildRoot `
     --distpath $DistRoot `
     (Join-Path $ProjectRoot "AcousticCaptureOneFile.spec")
+if ($LASTEXITCODE -ne 0) {
+    throw "Single-file Portable build failed with exit code $LASTEXITCODE"
+}
 
 $FolderPackage = Join-Path $DistRoot "AcousticCapturePortable"
 $ReadmeSource = Join-Path $ProjectRoot "portable_assets\README_PORTABLE.txt"

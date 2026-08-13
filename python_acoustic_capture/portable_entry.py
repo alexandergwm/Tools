@@ -9,6 +9,12 @@ import sys
 import traceback
 from pathlib import Path
 
+PORTABLE_CONFIG_VERSION = "0.2.4"
+
+
+def _portable_config_path(root: Path) -> Path:
+    return root / "configs" / f"portable_default_{PORTABLE_CONFIG_VERSION}.yaml"
+
 
 def _bundle_root() -> Path:
     return Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
@@ -42,10 +48,18 @@ def _install_assets(root: Path) -> None:
         if not source.is_file():
             continue
         relative = source.relative_to(source_root)
-        destination = root / relative
+        destination = (
+            _portable_config_path(root)
+            if relative.as_posix() == "configs/portable_default.yaml"
+            else root / relative
+        )
         destination.parent.mkdir(parents=True, exist_ok=True)
         if not destination.exists():
             shutil.copy2(source, destination)
+        if relative.as_posix() == "configs/portable_default.yaml":
+            legacy = root / relative
+            if not legacy.exists():
+                shutil.copy2(source, legacy)
     for folder in ("runs", "datasets", "logs"):
         (root / folder).mkdir(parents=True, exist_ok=True)
 
@@ -79,7 +93,7 @@ def _portable_smoke_test(root: Path) -> None:
     from acoustic_capture.audio import _enable_windows_asio
     from acoustic_capture.checklist import read_checklist
     from acoustic_capture.config import load_config
-    from acoustic_capture.labels import write_label_files
+    from acoustic_capture.labels import import_reviewed_labels, write_label_files
     from acoustic_capture.professional import build_preflight_report
     from acoustic_capture.rir import estimate_impulse_response
     from acoustic_capture.signals import exponential_sweep
@@ -90,7 +104,7 @@ def _portable_smoke_test(root: Path) -> None:
     import soundfile as sf
     import tkinter as tk
 
-    config = load_config(root / "configs" / "portable_default.yaml")
+    config = load_config(_portable_config_path(root))
     checklist_path = root / "acoustic_capture_checklist_template.xlsx"
     checklist_rows = read_checklist(checklist_path)
     preflight = build_preflight_report(config, "scene")
@@ -109,13 +123,14 @@ def _portable_smoke_test(root: Path) -> None:
     smoke_root.mkdir(parents=True, exist_ok=True)
     sf.write(smoke_root / "sweep.wav", sweep, config.audio.sample_rate)
     label_files = write_label_files(smoke_root, [], {"smoke_test": True})
+    reviewed_label_files = import_reviewed_labels(smoke_root)
     tcl = tk.Tcl()
     tcl_version = tcl.eval("info patchlevel")
     result = {
         "status": "passed",
         "python_frozen": bool(getattr(sys, "frozen", False)),
         "portable_root": str(root),
-        "config": str(root / "configs" / "portable_default.yaml"),
+        "config": str(_portable_config_path(root)),
         "checklist": str(checklist_path),
         "checklist_rows": len(checklist_rows),
         "preflight_status": preflight.to_dict()["status"],
@@ -128,6 +143,9 @@ def _portable_smoke_test(root: Path) -> None:
         "soundfile_formats": sorted(sf.available_formats()),
         "tcl_version": tcl_version,
         "label_files": {key: str(path) for key, path in label_files.items()},
+        "reviewed_label_files": {
+            key: str(path) for key, path in reviewed_label_files.items()
+        },
     }
     (root / "logs" / "portable_smoke.json").write_text(
         json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -139,7 +157,7 @@ def main() -> int:
     try:
         _install_assets(root)
         os.chdir(root)
-        config = root / "configs" / "portable_default.yaml"
+        config = _portable_config_path(root)
         if os.environ.get("ACOUSTIC_CAPTURE_PORTABLE_SMOKE") == "1":
             _portable_smoke_test(root)
             return 0

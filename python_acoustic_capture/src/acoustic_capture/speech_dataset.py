@@ -148,7 +148,11 @@ def _package_recordings(
         relative = Path("audio") / run_id / Path(str(original))
         destination = dataset_root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
-        if not destination.exists():
+        if (
+            not destination.exists()
+            or destination.stat().st_size != source.stat().st_size
+            or destination.stat().st_mtime_ns < source.stat().st_mtime_ns
+        ):
             shutil.copy2(source, destination)
         row[key] = relative.as_posix()
 
@@ -328,7 +332,8 @@ def compile_speech_dataset(
         if project_id is not None and str(metadata.get("project_id", "")) != project_id:
             continue
         run_dir = manifest_path.parent
-        label_path = run_dir / "labels.jsonl"
+        reviewed_label_path = run_dir / "labels_reviewed.jsonl"
+        label_path = reviewed_label_path if reviewed_label_path.is_file() else run_dir / "labels.jsonl"
         if not label_path.is_file():
             continue
         run_id = _safe_token(run_dir.name)

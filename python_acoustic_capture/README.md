@@ -196,6 +196,16 @@ ASIO 流的硬件延迟，因此 target-only 可以作为 mixture 的样本级�
 不要误选 `cartesian`，因为它会形成 4,000,000 组。程序对超过 100,000 组的笛卡尔组合会直接
 给出提示并阻止启动，避免实验电脑因任务表过大而长时间无响应。
 
+正式开始前会逐个读取音频文件头，损坏或空音频会在扬声器发声之前报出。每完成一组配对，
+程序都会立即落盘标签和断点；停止、驱动报错或断电后，用同一实验名重新开始，GUI 会询问是否从
+下一条续采。预检还会按片段长度、通道数、重复数和播放参考设置估算整批磁盘占用，空间不足时
+直接阻止开始。
+
+素材逐文件元数据可由两个可选 CSV 提供：目标表使用
+`relative_path,speaker_id,utterance_id`，干扰表使用
+`relative_path,noise_id,noise_class`。`relative_path` 相对于对应素材文件夹，这些值会逐对写入标签，
+用于监督训练索引和数据划分泄漏检查。
+
 `scene.duration_s` 建议设为 `4.0`。长文件截取前 4 秒，短文件在末尾补零，不会重复语音内容。
 每个源文件组合会在一次连续播录中完成所勾选的仅目标、仅干扰和真实混合片段。环境底噪在
 每次 repetition 开始时单独录一次，供该 repetition 下的全部样本引用。
@@ -210,6 +220,10 @@ ASIO 流的硬件延迟，因此 target-only 可以作为 mixture 的样本级�
 - `raw/*_paired_sequence_mics.wav`：未切分的一次连续双麦录音；
 - `references/*_paired_sequence_playback.wav`：未切分的连续播放矩阵；
 - `metrics/*_paired_sequence_layout.json`：三个片段的精确起止采样点和对齐方式。
+
+在 `labels.xlsx` 的“标签”页修改人工标签、train/valid/test、是否有效或备注后，从 GUI“文件 →
+导入人工质检 labels.xlsx”，或运行 `acoustic-capture labels-import <运行目录>`。这会生成
+`labels_reviewed.jsonl`；之后 `speech-dataset` 会优先读取质检版，同时保留原始自动标签不被覆盖。
 
 多耳机、多次佩戴、麦杆姿态和干扰源几何位置的 `scene_id` 命名、三类现场 YAML 以及
 服务器聚合规则见 [SPEECH_DATASET_DESIGN.md](SPEECH_DATASET_DESIGN.md)。

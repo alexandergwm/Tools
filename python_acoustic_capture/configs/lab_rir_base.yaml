@@ -33,7 +33,7 @@ repeats:
   correlation_threshold: 0.90
   peak_drift_samples: 2
   minimum_sweep_snr_db: 6.0
-  required_stable_takes: 1
+  required_stable_takes: 3
   reject_clipped: true
   clip_threshold: 0.999
   pause_s: 1

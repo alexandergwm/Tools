@@ -332,6 +332,10 @@ def capture_rir(
             rejection_reasons = []
             if xrun:
                 rejection_reasons.append("音频丢帧")
+            if array_health["has_nonfinite_samples"]:
+                rejection_reasons.append("录音包含非有限数值")
+            if array_health["has_silent_channel"]:
+                rejection_reasons.append("存在静音通道")
             if repeat_cfg.reject_clipped and clipped:
                 rejection_reasons.append("削波")
             if low_sweep_snr:
@@ -364,6 +368,7 @@ def capture_rir(
             store.write_audio(f"processed/take_{take_index:03d}_full_ir.wav", full_rir, fs)
             store.write_audio(f"processed/take_{take_index:03d}_rir.wav", aligned, fs)
             store.write_json(f"metrics/take_{take_index:03d}.json", metrics)
+            store.checkpoint()
             all_metrics.append(metrics)
             if accepted_now:
                 accepted.append(RIRTake(take_index, aligned, peaks, True, metrics))

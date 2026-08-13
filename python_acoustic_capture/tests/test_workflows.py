@@ -19,6 +19,7 @@ from acoustic_capture.scene import (
     capture_scene_block,
     discover_source_pairs,
 )
+from acoustic_capture.labels import import_reviewed_labels
 from acoustic_capture.speech_dataset import compile_speech_dataset
 from acoustic_capture.storage import _safe_name
 
@@ -254,6 +255,141 @@ def test_target_and_mixed_pair_does_not_require_interferer_only(tmp_path: Path):
     assert row["target_mixture_sample_aligned"] == "是"
     assert row["interferer_mixture_sample_aligned"] == "否"
     assert row["supervision_ready"] == "是"
+
+
+def test_scene_rejects_one_silent_microphone_for_supervision(tmp_path: Path):
+    class OneSilentChannelBackend(SimulatedBackend):
+        def play_record(self, output: np.ndarray) -> CaptureResult:
+            result = super().play_record(output)
+            result.microphones[:, 1] = 0
+            return result
+
+    fs = 16_000
+    signal = np.sin(2 * np.pi * 440 * np.arange(800) / fs).astype(np.float32)
+    target, interferer = tmp_path / "target.wav", tmp_path / "interferer.wav"
+    sf.write(target, signal, fs)
+    sf.write(interferer, signal, fs)
+    cfg = ExperimentConfig()
+    cfg.audio.backend = "simulated"
+    cfg.audio.sample_rate = fs
+    cfg.scene.items = ["target_only", "mixture"]
+    cfg.scene.target_file = str(target)
+    cfg.scene.interferer_file = str(interferer)
+    cfg.scene.duration_s = 0.05
+    cfg.scene.countdown_s = 0
+    cfg.scene.gap_s = 0
+    cfg.storage.root = str(tmp_path / "runs")
+    cfg.storage.compute_sha256 = False
+
+    store = capture_scene_block(cfg, OneSilentChannelBackend(cfg.audio), log=lambda _: None)
+    with store.path("labels.csv").open(encoding="utf-8-sig", newline="") as handle:
+        row = next(csv.DictReader(handle))
+    assert row["quality_flag"] == "存在静音通道"
+    assert row["supervision_ready"] == "否"
+
+
+def test_scene_failure_checkpoints_and_resume_skips_completed_pair(tmp_path: Path):
+    fs = 16_000
+    target_folder, interferer_folder = tmp_path / "targets", tmp_path / "interferers"
+    target_folder.mkdir()
+    interferer_folder.mkdir()
+    for index in range(3):
+        signal = np.sin(2 * np.pi * (300 + index * 100) * np.arange(320) / fs)
+        sf.write(target_folder / f"target_{index}.wav", signal, fs)
+        sf.write(interferer_folder / f"noise_{index}.wav", signal, fs)
+    cfg = ExperimentConfig()
+    cfg.audio.backend = "simulated"
+    cfg.audio.sample_rate = fs
+    cfg.scene.source_mode = "folders"
+    cfg.scene.target_folder = str(target_folder)
+    cfg.scene.interferer_folder = str(interferer_folder)
+    cfg.scene.items = ["target_only", "mixture"]
+    cfg.scene.duration_s = 0.02
+    cfg.scene.countdown_s = 0
+    cfg.scene.gap_s = 0
+    cfg.storage.root = str(tmp_path / "runs")
+    cfg.storage.compute_sha256 = False
+
+    class FailSecondBackend(SimulatedBackend):
+        def __init__(self, audio):
+            super().__init__(audio)
+            self.calls = 0
+
+        def play_record(self, output: np.ndarray) -> CaptureResult:
+            self.calls += 1
+            if self.calls == 2:
+                raise RuntimeError("injected failure")
+            return super().play_record(output)
+
+    with pytest.raises(RuntimeError, match="injected failure"):
+        capture_scene_block(cfg, FailSecondBackend(cfg.audio), log=lambda _: None)
+    run = next((tmp_path / "runs").iterdir())
+    manifest = json.loads((run / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["status"] == "failed"
+    assert len((run / "labels.jsonl").read_text(encoding="utf-8").splitlines()) == 1
+    cfg.scene.resume_run = str(run)
+    resumed_backend = FailSecondBackend(cfg.audio)
+    resumed_backend.calls = -100  # disable the injected second-call failure
+    store = capture_scene_block(cfg, resumed_backend, log=lambda _: None)
+    assert store.root == run
+    assert store.manifest["status"] == "completed"
+    assert len((run / "labels.jsonl").read_text(encoding="utf-8").splitlines()) == 3
+    assert resumed_backend.calls == -98
+
+
+def test_source_indexes_and_reviewed_excel_feed_training_labels(tmp_path: Path):
+    fs = 16_000
+    target_folder, interferer_folder = tmp_path / "targets", tmp_path / "interferers"
+    target_folder.mkdir()
+    interferer_folder.mkdir()
+    signal = np.sin(2 * np.pi * 440 * np.arange(320) / fs)
+    sf.write(target_folder / "utterance.wav", signal, fs)
+    sf.write(interferer_folder / "noise.wav", signal, fs)
+    target_index = tmp_path / "target_index.csv"
+    target_index.write_text(
+        "relative_path,speaker_id,utterance_id\nutterance.wav,spk007,utt042\n",
+        encoding="utf-8-sig",
+    )
+    interferer_index = tmp_path / "interferer_index.csv"
+    interferer_index.write_text(
+        "relative_path,noise_id,noise_class\nnoise.wav,n008,cafe\n",
+        encoding="utf-8-sig",
+    )
+    cfg = ExperimentConfig()
+    cfg.audio.backend = "simulated"
+    cfg.audio.sample_rate = fs
+    cfg.scene.source_mode = "folders"
+    cfg.scene.target_folder = str(target_folder)
+    cfg.scene.interferer_folder = str(interferer_folder)
+    cfg.scene.target_index_csv = str(target_index)
+    cfg.scene.interferer_index_csv = str(interferer_index)
+    cfg.scene.items = ["target_only", "mixture"]
+    cfg.scene.duration_s = 0.02
+    cfg.scene.countdown_s = 0
+    cfg.scene.gap_s = 0
+    cfg.storage.root = str(tmp_path / "runs")
+    cfg.storage.compute_sha256 = False
+    store = capture_scene_block(cfg, SimulatedBackend(cfg.audio), log=lambda _: None)
+
+    with store.path("labels.csv").open(encoding="utf-8-sig", newline="") as handle:
+        row = next(csv.DictReader(handle))
+    assert (row["speaker_id"], row["utterance_id"]) == ("spk007", "utt042")
+    assert (row["noise_id"], row["noise_class"]) == ("n008", "cafe")
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(store.path("labels.xlsx"))
+    sheet = workbook["标签"]
+    headers = [cell.value for cell in sheet[1]]
+    sheet.cell(2, headers.index("人工标签") + 1, "人工通过")
+    sheet.cell(2, headers.index("数据集划分") + 1, "test")
+    workbook.save(store.path("labels.xlsx"))
+    import_reviewed_labels(store.root)
+    dataset = compile_speech_dataset(tmp_path / "runs", tmp_path / "dataset", copy_audio=False)
+    reviewed = json.loads(
+        (dataset / "indexes" / "speech_samples.jsonl").read_text(encoding="utf-8").splitlines()[0]
+    )
+    assert reviewed["manual_label"] == "人工通过"
+    assert reviewed["dataset_split"] == "test"
 
 
 def test_paired_sequence_uses_identical_target_samples_and_shared_boundaries():

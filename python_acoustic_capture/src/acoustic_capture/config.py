@@ -82,6 +82,9 @@ class SceneConfig:
     interferer_file: str = "audio/interferer.wav"
     target_folder: str = "audio/targets"
     interferer_folder: str = "audio/interferers"
+    target_index_csv: str = ""
+    interferer_index_csv: str = ""
+    resume_run: str = ""
     pairing_mode: str = "cycle"  # cycle | cartesian
     file_extensions: list[str] = field(default_factory=lambda: [".wav", ".flac"])
     label_prefix: str = ""
@@ -141,6 +144,11 @@ class ExperimentConfig:
             raise ValueError("each sweep fade duration cannot exceed the sweep duration")
         if s.pre_peak_s < 0 or s.pre_peak_s >= s.rir_duration_s:
             raise ValueError("sweep.pre_peak_s must be within the saved RIR duration")
+        if s.rir_duration_s - s.pre_peak_s > s.post_silence_s:
+            raise ValueError(
+                "the RIR tail after pre_peak_s cannot exceed sweep.post_silence_s; "
+                "otherwise the saved RIR tail was never recorded"
+            )
         if not 1 <= r.minimum <= r.maximum:
             raise ValueError("repeats must satisfy 1 <= minimum <= maximum")
         if r.minimum_sweep_snr_db < 0:
@@ -213,8 +221,14 @@ def load_config(path: str | Path) -> ExperimentConfig:
         (cfg.scene, "interferer_file"),
         (cfg.scene, "target_folder"),
         (cfg.scene, "interferer_folder"),
+        (cfg.scene, "target_index_csv"),
+        (cfg.scene, "interferer_index_csv"),
+        (cfg.scene, "resume_run"),
     ):
-        value = Path(getattr(section, attr))
+        raw_value = getattr(section, attr)
+        if not raw_value:
+            continue
+        value = Path(raw_value)
         if not value.is_absolute():
             setattr(section, attr, str((path.parent / value).resolve()))
     root = Path(cfg.storage.root)

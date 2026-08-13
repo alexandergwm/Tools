@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import csv
 import itertools
+import json
 import re
 import time
 from dataclasses import dataclass
@@ -14,7 +16,7 @@ import soundfile as sf
 
 from .audio import AudioBackend
 from .config import ExperimentConfig, SceneConfig
-from .labels import flatten_experiment_metadata, write_label_files
+from .labels import append_label_checkpoint, flatten_experiment_metadata, write_label_files
 from .quality import (
     channel_metrics,
     evaluate_supervision_quality_gate,
@@ -22,6 +24,7 @@ from .quality import (
     multichannel_health_metrics,
 )
 from .signals import load_audio, route_outputs, scale_dbfs
+from .professional import canonical_sha256
 from .storage import RunStore, sha256
 
 Log = Callable[[str], None]
@@ -93,6 +96,59 @@ def discover_source_pairs(scene: SceneConfig) -> list[SourcePair]:
         return [SourcePair(target, interferer) for target, interferer in itertools.product(targets, interferers)]
     count = max(len(targets), len(interferers))
     return [SourcePair(targets[index % len(targets)], interferers[index % len(interferers)]) for index in range(count)]
+
+
+def validate_source_audio(pairs: list[SourcePair]) -> None:
+    """Check every selected source header before any loudspeaker starts."""
+    checked: set[Path] = set()
+    failures: list[str] = []
+    for pair in pairs:
+        for path in (pair.target, pair.interferer):
+            if path is None or path in checked:
+                continue
+            checked.add(path)
+            try:
+                info = sf.info(path)
+                if info.frames <= 0 or info.samplerate <= 0 or info.channels <= 0:
+                    raise ValueError("empty or invalid audio stream")
+            except Exception as exc:
+                failures.append(f"{path}: {exc}")
+                if len(failures) >= 10:
+                    break
+        if len(failures) >= 10:
+            break
+    if failures:
+        raise ValueError(
+            "素材预检失败，尚未开始播放。请修复以下音频：\n" + "\n".join(failures)
+        )
+
+
+def _load_source_index(index_csv: str, folder: str) -> dict[Path, dict[str, str]]:
+    if not index_csv:
+        return {}
+    path = Path(index_csv)
+    if not path.is_file():
+        raise FileNotFoundError(f"素材索引 CSV 不存在：{path}")
+    result: dict[Path, dict[str, str]] = {}
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if not reader.fieldnames or "relative_path" not in reader.fieldnames:
+            raise ValueError(f"素材索引必须包含 relative_path 列：{path}")
+        for row_number, row in enumerate(reader, 2):
+            relative = str(row.get("relative_path") or "").strip()
+            if not relative:
+                continue
+            source = (Path(folder) / relative).resolve()
+            if source in result:
+                raise ValueError(f"素材索引第 {row_number} 行路径重复：{relative}")
+            if not source.is_file():
+                raise FileNotFoundError(f"素材索引第 {row_number} 行文件不存在：{source}")
+            result[source] = {
+                str(key): str(value or "").strip()
+                for key, value in row.items()
+                if key and key != "relative_path"
+            }
+    return result
 
 
 def _require_file(path: Path | None, label: str) -> None:
@@ -218,6 +274,18 @@ def _quality_flag(metrics_by_item: dict[str, dict]) -> str:
     if any(bool(channel.get("clipped")) for channel in channels):
         return "削波"
     if any(
+        metrics.get("array_health", {}).get("has_nonfinite_samples")
+        for item, metrics in metrics_by_item.items()
+        if item != "ambient"
+    ):
+        return "录音包含非有限数值"
+    if any(
+        metrics.get("array_health", {}).get("has_silent_channel")
+        for item, metrics in metrics_by_item.items()
+        if item != "ambient"
+    ):
+        return "存在静音通道"
+    if any(
         metrics.get("array_health", {}).get("exact_duplicate_channel_pairs")
         for item, metrics in metrics_by_item.items()
         if item != "ambient"
@@ -284,7 +352,70 @@ def capture_scene_block(
     ):
         raise ValueError("mixture capture requires different target and interferer output channels")
     pairs = discover_source_pairs(scene)
-    store = RunStore.create(config, "scene")
+    validate_source_audio(pairs)
+    target_index = _load_source_index(scene.target_index_csv, scene.target_folder)
+    interferer_index = _load_source_index(
+        scene.interferer_index_csv, scene.interferer_folder
+    )
+    plan = {
+        "pairs": [
+            {
+                "target": str(pair.target.resolve()) if pair.target else None,
+                "interferer": str(pair.interferer.resolve()) if pair.interferer else None,
+            }
+            for pair in pairs
+        ],
+        "items": list(scene.items),
+        "repetitions": scene.repetitions,
+        "duration_s": scene.duration_s,
+        "gap_s": scene.gap_s,
+        "sample_rate": fs,
+        "input_channels": list(config.audio.input_channels),
+        "target_output_channel": config.audio.target_output_channel,
+        "interferer_output_channel": config.audio.interferer_output_channel,
+    }
+    plan_sha256 = canonical_sha256(plan)
+    store = (
+        RunStore.resume(scene.resume_run, config, "scene")
+        if scene.resume_run
+        else RunStore.create(config, "scene")
+    )
+    completed_ordinal = 0
+    label_rows: list[dict] = []
+    if scene.resume_run:
+        checkpoint_path = store.path("metrics/scene_checkpoint.json")
+        if not checkpoint_path.is_file():
+            raise ValueError("续采目录没有 scene_checkpoint.json，无法确认安全断点")
+        checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        if checkpoint.get("plan_sha256") != plan_sha256:
+            raise ValueError("当前素材、场景或通道设置与原实验不一致，不能续采")
+        completed_ordinal = int(checkpoint.get("completed_ordinal", 0))
+        partial_path = store.path("labels.partial.jsonl")
+        fallback_path = store.path("labels.jsonl")
+        label_path = partial_path if partial_path.is_file() else fallback_path
+        if label_path.is_file():
+            label_rows = [
+                json.loads(line)
+                for line in label_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+        if len(label_rows) != completed_ordinal:
+            raise ValueError(
+                "续采标签数量与断点不一致；为避免错配，未自动继续。"
+                f"标签 {len(label_rows)} 行，断点 {completed_ordinal} 条。"
+            )
+        log(f"从断点续采：已完成 {completed_ordinal}/{len(pairs) * scene.repetitions} 条")
+    else:
+        store.write_json(
+            "metrics/scene_checkpoint.json",
+            {
+                "schema_version": 1,
+                "plan_sha256": plan_sha256,
+                "completed_ordinal": 0,
+                "total_pairs": len(pairs) * scene.repetitions,
+            },
+        )
+        store.checkpoint()
     output_channels = max(
         config.audio.target_output_channel,
         config.audio.interferer_output_channel,
@@ -302,13 +433,25 @@ def capture_scene_block(
                 "target": {
                     "path": str(pair.target) if pair.target else None,
                     "sha256": None,
+                    "metadata": target_index.get(pair.target.resolve(), {}) if pair.target else {},
                 },
                 "interferer": {
                     "path": str(pair.interferer) if pair.interferer else None,
                     "sha256": None,
+                    "metadata": interferer_index.get(pair.interferer.resolve(), {}) if pair.interferer else {},
                 },
             }
         )
+    existing_source_path = store.path("references/sources.json")
+    if scene.resume_run and existing_source_path.is_file():
+        try:
+            previous_sources = json.loads(
+                existing_source_path.read_text(encoding="utf-8")
+            ).get("pairs", [])
+            for index in range(min(completed_ordinal, len(previous_sources), len(source_info))):
+                source_info[index] = previous_sources[index]
+        except (OSError, TypeError, json.JSONDecodeError):
+            pass
     source_hash_cache: dict[Path, str] = {}
 
     def source_hash(path: Path | None) -> str | None:
@@ -333,7 +476,16 @@ def capture_scene_block(
         "captures": [],
         "paired_sequences": [],
     }
-    label_rows: list[dict] = []
+    if scene.resume_run and isinstance(store.manifest.get("summary"), dict):
+        previous_summary = store.manifest["summary"]
+        summary["captures"] = list(previous_summary.get("captures", []))
+        summary["paired_sequences"] = list(
+            previous_summary.get("paired_sequences", [])
+        )
+        if previous_summary.get("supervision_quality"):
+            summary["supervision_quality"] = list(
+                previous_summary["supervision_quality"]
+            )
     metadata_columns = flatten_experiment_metadata(config.metadata)
     shared_hardware_clock = _shared_hardware_clock(config)
 
@@ -342,32 +494,40 @@ def capture_scene_block(
             _check_cancelled(stop_requested)
             ambient_path: Path | None = None
             if "ambient" in scene.items:
-                log(f"场景：环境底噪，重复 {repetition}/{scene.repetitions}")
-                if scene.countdown_s:
-                    log(f"  将在 {scene.countdown_s:g} 秒后开始")
-                    _wait_or_cancel(scene.countdown_s, stop_requested)
-                capture = backend.record(round(scene.ambient_duration_s * fs))
-                _check_cancelled(stop_requested)
-                ambient_path = store.write_audio(
-                    f"raw/rep_{repetition:03d}_ambient_mics.wav",
-                    capture.microphones,
-                    fs,
-                )
-                ambient_metrics = {
-                    "item": "ambient",
-                    "repetition": repetition,
-                    "file": _relative(ambient_path, store.root),
-                    "channels": channel_metrics(capture.microphones),
-                    "backend_status": capture.status,
-                }
-                store.write_json(f"metrics/rep_{repetition:03d}_ambient.json", ambient_metrics)
-                summary["captures"].append(ambient_metrics)
+                first_ordinal = (repetition - 1) * len(pairs) + 1
+                existing_ambient = store.path(f"raw/rep_{repetition:03d}_ambient_mics.wav")
+                if completed_ordinal >= first_ordinal and existing_ambient.is_file():
+                    ambient_path = existing_ambient
+                else:
+                    log(f"场景：环境底噪，重复 {repetition}/{scene.repetitions}")
+                    if scene.countdown_s:
+                        log(f"  将在 {scene.countdown_s:g} 秒后开始")
+                        _wait_or_cancel(scene.countdown_s, stop_requested)
+                    capture = backend.record(round(scene.ambient_duration_s * fs))
+                    _check_cancelled(stop_requested)
+                    ambient_path = store.write_audio(
+                        f"raw/rep_{repetition:03d}_ambient_mics.wav",
+                        capture.microphones,
+                        fs,
+                    )
+                    ambient_metrics = {
+                        "item": "ambient",
+                        "repetition": repetition,
+                        "file": _relative(ambient_path, store.root),
+                        "channels": channel_metrics(capture.microphones),
+                        "backend_status": capture.status,
+                    }
+                    store.write_json(f"metrics/rep_{repetition:03d}_ambient.json", ambient_metrics)
+                    summary["captures"].append(ambient_metrics)
 
             if not any(item != "ambient" for item in scene.items):
                 continue
 
             for pair_index, pair in enumerate(pairs, 1):
                 _check_cancelled(stop_requested)
+                ordinal = (repetition - 1) * len(pairs) + pair_index
+                if ordinal <= completed_ordinal:
+                    continue
                 if progress is not None:
                     progress(
                         {
@@ -600,10 +760,18 @@ def capture_scene_block(
                 )
                 segment_items = set(segments)
                 source_hashes = current_source_info
+                pair_metadata = dict(metadata_columns)
+                for key in ("speaker_id", "utterance_id"):
+                    value = source_hashes["target"]["metadata"].get(key)
+                    if value not in (None, ""):
+                        pair_metadata[key] = value
+                for key in ("noise_id", "noise_class"):
+                    value = source_hashes["interferer"]["metadata"].get(key)
+                    if value not in (None, ""):
+                        pair_metadata[key] = value
 
-                label_rows.append(
-                    {
-                        **metadata_columns,
+                label_row = {
+                        **pair_metadata,
                         "run_id": store.root.name,
                         "sample_id": sample_id,
                         "supervision_pair_id": sample_id if target_mixture_aligned else "",
@@ -686,7 +854,23 @@ def capture_scene_block(
                         "metadata_json": config.metadata,
                         "notes": "",
                     }
+                label_rows.append(label_row)
+                append_label_checkpoint(store.root, label_row)
+                store.write_json(
+                    "metrics/scene_checkpoint.json",
+                    {
+                        "schema_version": 1,
+                        "plan_sha256": plan_sha256,
+                        "completed_ordinal": ordinal,
+                        "total_pairs": len(pairs) * scene.repetitions,
+                    },
                 )
+                # labels.partial.jsonl and scene_checkpoint.json are already
+                # durable for every pair.  The much larger artifact manifest
+                # is batched to avoid quadratic JSON rewrites on 2000+ pairs.
+                if ordinal % 25 == 0:
+                    store.checkpoint()
+                completed_ordinal = ordinal
 
         save_source_index()
         _finish_scene(store, label_rows, summary, config.metadata, status="completed")
@@ -704,5 +888,11 @@ def capture_scene_block(
             log(f"语音增强采集已停止；已完成的数据保存在：{store.root}")
             return store
         save_source_index()
-        store.finish({"error": str(exc), **summary}, status="failed")
+        _finish_scene(
+            store,
+            label_rows,
+            {"error": str(exc), **summary},
+            config.metadata,
+            status="failed",
+        )
         raise

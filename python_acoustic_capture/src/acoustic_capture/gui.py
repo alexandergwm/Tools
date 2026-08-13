@@ -19,6 +19,7 @@ from .audio import (
     list_devices,
 )
 from .config import ExperimentConfig, load_config, save_config
+from .labels import import_reviewed_labels
 from .checklist import apply_checklist_row, create_checklist, read_checklist, update_checklist_row
 from .general import capture_general_io
 from .professional import assert_capture_ready, build_preflight_report, format_preflight_report
@@ -63,6 +64,8 @@ FIELDS = [
     ("scene.interferer_file", "干扰音频文件", str, "speech"),
     ("scene.target_folder", "干净目标音频文件夹", str, "speech"),
     ("scene.interferer_folder", "干扰音频文件夹", str, "speech"),
+    ("scene.target_index_csv", "目标素材元数据 CSV（可选）", str, "speech"),
+    ("scene.interferer_index_csv", "干扰素材元数据 CSV（可选）", str, "speech"),
     ("scene.pairing_mode", "目标与干扰配对方式", str, "speech"),
     ("scene.file_extensions", "扫描扩展名（逗号分隔）", lambda x: [v.strip() for v in x.split(",") if v.strip()], "speech"),
     ("scene.label_prefix", "标签前缀", str, "speech"),
@@ -92,7 +95,13 @@ SOURCE_MODE_TO_LABEL = {"single": "单个文件", "folders": "文件夹批量"}
 LABEL_TO_SOURCE_MODE = {label: value for value, label in SOURCE_MODE_TO_LABEL.items()}
 PAIRING_MODE_TO_LABEL = {"cycle": "按顺序循环配对", "cartesian": "全部组合配对"}
 LABEL_TO_PAIRING_MODE = {label: value for value, label in PAIRING_MODE_TO_LABEL.items()}
-FILE_PATH_FIELDS = {"general.source_file", "scene.target_file", "scene.interferer_file"}
+FILE_PATH_FIELDS = {
+    "general.source_file",
+    "scene.target_file",
+    "scene.interferer_file",
+    "scene.target_index_csv",
+    "scene.interferer_index_csv",
+}
 FOLDER_PATH_FIELDS = {"scene.target_folder", "scene.interferer_folder", "storage.root"}
 SCENE_LABELS = {
     "ambient": "环境底噪",
@@ -539,6 +548,7 @@ class CaptureGUI(tk.Tk):
         file_menu.add_separator()
         file_menu.add_command(label="打开测试清单 (.xlsx)", command=self.open_checklist)
         file_menu.add_command(label="新建测试清单模板", command=self.new_checklist_template)
+        file_menu.add_command(label="导入人工质检 labels.xlsx", command=self.import_label_review)
         file_menu.add_separator()
         file_menu.add_command(label="退出", command=self._close)
         menu.add_cascade(label="文件", menu=file_menu)
@@ -917,11 +927,34 @@ class CaptureGUI(tk.Tk):
             except Exception as exc:
                 messagebox.showerror("打开失败", str(exc))
 
+    def import_label_review(self):
+        path = filedialog.askopenfilename(
+            title="选择已人工编辑的 labels.xlsx",
+            filetypes=[("Excel 标签表", "*.xlsx")],
+        )
+        if not path:
+            return
+        try:
+            outputs = import_reviewed_labels(Path(path).parent, path)
+            messagebox.showinfo(
+                "标签质检已导入",
+                "已生成 labels_reviewed.jsonl；以后汇总训练数据时会优先使用它。\n\n"
+                + str(outputs["jsonl"]),
+            )
+        except Exception as exc:
+            messagebox.showerror("导入标签质检失败", str(exc))
+
     def save(self) -> bool:
         if self.config_path is None:
             return self.save_as()
         try:
-            save_config(self._apply_values(), self.config_path)
+            config = self._apply_values()
+            resume_run = config.scene.resume_run
+            config.scene.resume_run = ""
+            try:
+                save_config(config, self.config_path)
+            finally:
+                config.scene.resume_run = resume_run
             self._append(f"已保存配置：{self.config_path}")
             return True
         except Exception as exc:
@@ -968,10 +1001,15 @@ class CaptureGUI(tk.Tk):
         if field in FOLDER_PATH_FIELDS:
             selected = filedialog.askdirectory(title="选择文件夹", initialdir=initial)
         else:
+            filetypes = (
+                [("CSV 素材索引", "*.csv"), ("所有文件", "*.*")]
+                if field.endswith("index_csv")
+                else [("音频文件", "*.wav *.flac *.aiff *.aif"), ("所有文件", "*.*")]
+            )
             selected = filedialog.askopenfilename(
-                title="选择音频文件",
+                title="选择素材索引" if field.endswith("index_csv") else "选择音频文件",
                 initialdir=initial,
-                filetypes=[("音频文件", "*.wav *.flac *.aiff *.aif"), ("所有文件", "*.*")],
+                filetypes=filetypes,
             )
         if selected:
             self.variables[field].set(selected)
@@ -1048,6 +1086,7 @@ class CaptureGUI(tk.Tk):
             messagebox.showwarning("实验名称不能为空", "没有开始采集，请重新点击开始并输入名称。")
             return
         existing_runs = []
+        resumable_runs: list[Path] = []
         runs_root = Path(self.variables["storage.root"].get().strip()).expanduser()
         if runs_root.is_dir():
             for manifest_path in runs_root.glob("*/manifest.json"):
@@ -1065,8 +1104,26 @@ class CaptureGUI(tk.Tk):
                         and str(old_name) == name
                     ):
                         existing_runs.append(manifest_path.parent.name)
+                    if (
+                        kind == "scene"
+                        and same_kind
+                        and manifest.get("status") in {"running", "cancelled", "failed"}
+                        and str(old_name) == name
+                        and (manifest_path.parent / "metrics" / "scene_checkpoint.json").is_file()
+                    ):
+                        resumable_runs.append(manifest_path.parent)
                 except (OSError, TypeError, json.JSONDecodeError):
                     continue
+        resume_run = ""
+        if resumable_runs:
+            latest = max(resumable_runs, key=lambda path: path.stat().st_mtime)
+            if messagebox.askyesno(
+                "发现未完成实验",
+                f"名称“{name}”有可续采结果：\n{latest}\n\n"
+                "选择“是”会跳过已完成素材，从下一条继续；选择“否”会新建实验。",
+                parent=self,
+            ):
+                resume_run = str(latest)
         if existing_runs and not messagebox.askyesno(
             "实验名称已经使用",
             f"名称“{name}”已有 {len(existing_runs)} 个完成结果。\n"
@@ -1085,6 +1142,7 @@ class CaptureGUI(tk.Tk):
         self.metadata.delete("1.0", "end")
         self.metadata.insert("1.0", json.dumps(metadata, ensure_ascii=False, indent=2))
         self.variables["storage.session_name"].set(name)
+        self.config_data.scene.resume_run = resume_run
         self._append(f"本次实验名称：{name}")
         self._update_metadata_summary()
         self.run(kind)
@@ -1172,6 +1230,8 @@ class CaptureGUI(tk.Tk):
             except Exception as exc:
                 messagebox.showerror("清单实验配置无效", str(exc))
                 return
+        if kind != "scene":
+            config.scene.resume_run = ""
         self._stop_event.clear()
         self._set_busy(True)
         self._append("正在后台预检、扫描素材并准备声卡；界面保持可操作。")

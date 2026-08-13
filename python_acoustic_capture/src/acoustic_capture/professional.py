@@ -411,7 +411,71 @@ def _calibration_check(
     )
 
 
-def _storage_check(checks: list[PreflightCheck], config: ExperimentConfig) -> None:
+def _scene_pair_count(config: ExperimentConfig) -> int | None:
+    scene = config.scene
+    if scene.source_mode == "single":
+        return 1
+    extensions = {
+        value.lower() if value.startswith(".") else f".{value.lower()}"
+        for value in scene.file_extensions
+    }
+    items = set(scene.items)
+    counts: list[int] = []
+    for required, folder_value in (
+        (bool(items & {"target_only", "mixture"}), scene.target_folder),
+        (bool(items & {"interferer_only", "mixture"}), scene.interferer_folder),
+    ):
+        if not required:
+            counts.append(1)
+            continue
+        folder = Path(folder_value)
+        if not folder.is_dir():
+            return None
+        counts.append(
+            sum(
+                path.is_file() and path.suffix.lower() in extensions
+                for path in folder.rglob("*")
+            )
+        )
+    if not counts or not all(counts):
+        return None
+    return math.prod(counts) if scene.pairing_mode == "cartesian" else max(counts)
+
+
+def _estimated_scene_bytes(config: ExperimentConfig) -> int | None:
+    pairs = _scene_pair_count(config)
+    duration = config.scene.duration_s
+    if pairs is None or duration is None:
+        return None
+    scene, fs = config.scene, config.audio.sample_rate
+    repetitions = scene.repetitions
+    mic_count = len(config.audio.input_channels)
+    output_count = max(
+        config.audio.target_output_channel, config.audio.interferer_output_channel
+    )
+    item_count = len([item for item in scene.items if item != "ambient"])
+    stream_s = scene.gap_s + item_count * (duration + scene.gap_s)
+    # Complete multichannel stream plus extracted item WAVs.
+    channel_seconds = pairs * repetitions * mic_count * (
+        stream_s + item_count * duration
+    )
+    if "ambient" in scene.items:
+        channel_seconds += repetitions * mic_count * scene.ambient_duration_s
+    if config.storage.save_playback_reference:
+        # Full playback, extracted item playbacks and one mono emitted copy per source.
+        channel_seconds += pairs * repetitions * output_count * (
+            stream_s + item_count * duration
+        )
+        channel_seconds += pairs * duration * 2
+    bytes_per_sample = {"PCM_16": 2, "PCM_24": 3, "PCM_32": 4, "FLOAT": 4}.get(
+        config.storage.wav_subtype, 4
+    )
+    return math.ceil(channel_seconds * fs * bytes_per_sample * 1.15)
+
+
+def _storage_check(
+    checks: list[PreflightCheck], config: ExperimentConfig, workflow: str
+) -> None:
     root = Path(config.storage.root)
     parent = _existing_parent(root)
     writable = parent.is_dir() and os.access(parent, os.W_OK)
@@ -420,8 +484,20 @@ def _storage_check(checks: list[PreflightCheck], config: ExperimentConfig) -> No
         try:
             free_gib = shutil.disk_usage(parent).free / (1024**3)
             detail += f"；可用空间 {free_gib:.1f} GiB"
-            status = "warning" if free_gib < 2.0 else "pass"
-            if free_gib < 2.0:
+            estimate = (
+                _estimated_scene_bytes(config)
+                if workflow in {"scene", "speech", "speech_enhancement"}
+                else None
+            )
+            if estimate is not None:
+                estimate_gib = estimate / (1024**3)
+                detail += f"；预计本批最多约 {estimate_gib:.1f} GiB（含 15% 余量）"
+                status = "error" if estimate > shutil.disk_usage(parent).free else "pass"
+                if status == "error":
+                    detail += "（空间不足，已阻止开始）"
+            else:
+                status = "warning" if free_gib < 2.0 else "pass"
+            if estimate is None and free_gib < 2.0:
                 detail += "（建议至少保留 2 GiB）"
         except OSError:
             status = "warning"
@@ -468,7 +544,7 @@ def build_preflight_report(
             _source_file_checks(checks, config)
         _clock_check(checks, config)
     _calibration_check(checks, config, production)
-    _storage_check(checks, config)
+    _storage_check(checks, config, workflow)
     return PreflightReport(workflow, profile, tuple(checks))
 
 

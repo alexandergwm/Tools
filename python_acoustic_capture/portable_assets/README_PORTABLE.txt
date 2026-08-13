@@ -5,6 +5,8 @@ Acoustic Capture Portable
 2. No Python installation is required.
 3. The RME Windows driver must still be installed for Fireface/ASIO access.
 4. On first launch, editable configs and demo audio are created next to the EXE.
+   Each release uses a versioned default config, so upgrading does not overwrite
+   a config you edited with an older release.
 5. Captures are saved under the runs folder next to the EXE.
 6. Dataset exports can be saved under the datasets folder.
 7. For checklist-driven work, open acoustic_capture_checklist_template.xlsx,
@@ -14,6 +16,11 @@ Acoustic Capture Portable
    so Windows does not lock it.
 
 Manual naming remains available when no checklist row is selected.
+
+Large speech batches are checkpointed after every completed source pair. If a
+run is stopped or fails, enter the same experiment name next time and accept
+the resume prompt. Edited labels.xlsx files can be imported from the File menu;
+dataset compilation then prefers labels_reviewed.jsonl.
 
 For supervised speech data, connect microphone input, artificial-mouth output,
 and interferer output to the same RME interface and select the same RME ASIO

@@ -12,6 +12,7 @@ from .checklist import create_checklist
 from .config import load_config
 from .demo import generate_demo_audio
 from .general import capture_general_io
+from .labels import import_reviewed_labels
 from .experiment import (
     compile_completed_rir_runs,
     compile_rir_dataset,
@@ -75,6 +76,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="只生成索引，不复制多通道录音",
     )
+    label_import = sub.add_parser(
+        "labels-import", help="导入人工编辑的 labels.xlsx，生成训练汇总优先使用的质检标签"
+    )
+    label_import.add_argument("run_dir", help="单次 scene 运行目录")
+    label_import.add_argument("--xlsx", help="质检表路径；默认使用运行目录中的 labels.xlsx")
     speech_dataset.add_argument(
         "--fail-on-split-leakage",
         action="store_true",
@@ -174,6 +180,19 @@ def main(argv: list[str] | None = None) -> int:
                     project_id=args.project_id,
                     copy_audio=not args.index_only,
                     fail_on_split_leakage=args.fail_on_split_leakage,
+                )
+            )
+        elif args.command == "labels-import":
+            print(
+                json.dumps(
+                    {
+                        key: str(path)
+                        for key, path in import_reviewed_labels(
+                            args.run_dir, args.xlsx
+                        ).items()
+                    },
+                    ensure_ascii=False,
+                    indent=2,
                 )
             )
         elif args.command == "gui":

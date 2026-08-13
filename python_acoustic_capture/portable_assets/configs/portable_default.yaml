@@ -37,7 +37,7 @@ repeats:
   correlation_threshold: 0.90
   peak_drift_samples: 2
   minimum_sweep_snr_db: 6.0
-  required_stable_takes: 1
+  required_stable_takes: 3
   reject_clipped: true
   clip_threshold: 0.999
   pause_s: 1.0
@@ -52,6 +52,9 @@ scene:
   interferer_file: ../audio/interferer.wav
   target_folder: ../audio/targets
   interferer_folder: ../audio/interferers
+  # 可选逐文件元数据；relative_path 相对于上面的素材文件夹。
+  target_index_csv: ''
+  interferer_index_csv: ''
   pairing_mode: cycle
   file_extensions: [.wav, .flac]
   label_prefix: speech

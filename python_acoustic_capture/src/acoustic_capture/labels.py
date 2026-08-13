@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -341,6 +342,123 @@ def write_label_files(
         "supervised_jsonl": supervised_jsonl_path,
         "supervised_csv": supervised_csv_path,
     }
+
+
+def write_label_checkpoint(run_dir: str | Path, rows: list[dict[str, Any]]) -> dict[str, Path]:
+    """Atomically checkpoint lightweight labels after each completed source pair."""
+    root = Path(run_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    normalized = [
+        {key: _cell_value(row.get(key, "")) for key, _header, _description in LABEL_COLUMNS}
+        for row in rows
+    ]
+    jsonl_path = root / "labels.partial.jsonl"
+    csv_path = root / "labels.partial.csv"
+    jsonl_tmp = jsonl_path.with_suffix(".jsonl.tmp")
+    with jsonl_tmp.open("w", encoding="utf-8") as handle:
+        for row in normalized:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    jsonl_tmp.replace(jsonl_path)
+    csv_tmp = csv_path.with_suffix(".csv.tmp")
+    with csv_tmp.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(
+            handle, fieldnames=[key for key, _header, _description in LABEL_COLUMNS]
+        )
+        writer.writeheader()
+        writer.writerows(normalized)
+    csv_tmp.replace(csv_path)
+    return {"jsonl": jsonl_path, "csv": csv_path}
+
+
+def append_label_checkpoint(run_dir: str | Path, row: dict[str, Any]) -> Path:
+    """Append one durable completed-pair label in O(1) time."""
+    root = Path(run_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    normalized = {
+        key: _cell_value(row.get(key, "")) for key, _header, _description in LABEL_COLUMNS
+    }
+    path = root / "labels.partial.jsonl"
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(normalized, ensure_ascii=False) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    return path
+
+
+def import_reviewed_labels(
+    run_dir: str | Path, workbook_path: str | Path | None = None
+) -> dict[str, Path]:
+    """Import manual review columns from labels.xlsx without modifying raw labels."""
+    root = Path(run_dir)
+    source = Path(workbook_path) if workbook_path else root / "labels.xlsx"
+    if not source.is_file():
+        raise FileNotFoundError(f"找不到标签质检表：{source}")
+    raw_path = root / "labels.jsonl"
+    if not raw_path.is_file():
+        raise FileNotFoundError(f"运行目录缺少 labels.jsonl：{root}")
+    try:
+        from openpyxl import load_workbook
+    except Exception as exc:  # pragma: no cover - installation failure
+        raise RuntimeError("缺少 openpyxl，无法导入人工质检 Excel") from exc
+
+    original = [
+        json.loads(line)
+        for line in raw_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    by_id = {str(row.get("sample_id", "")): dict(row) for row in original}
+    workbook = load_workbook(source, read_only=True, data_only=True)
+    if "标签" not in workbook.sheetnames:
+        raise ValueError("Excel 中缺少“标签”工作表")
+    sheet = workbook["标签"]
+    header_to_key = {header: key for key, header, _description in LABEL_COLUMNS}
+    rows = sheet.iter_rows(values_only=True)
+    try:
+        headers = next(rows)
+    except StopIteration as exc:
+        raise ValueError("“标签”工作表为空") from exc
+    keys = [header_to_key.get(str(value or ""), "") for value in headers]
+    if "sample_id" not in keys:
+        raise ValueError("“标签”工作表缺少“样本编号”列")
+    review_keys = {"manual_label", "dataset_split", "valid", "notes"}
+    seen: set[str] = set()
+    for values in rows:
+        record = {key: value for key, value in zip(keys, values) if key}
+        sample_id = str(record.get("sample_id") or "").strip()
+        if not sample_id:
+            continue
+        if sample_id not in by_id:
+            raise ValueError(f"Excel 含有未知样本编号：{sample_id}")
+        if sample_id in seen:
+            raise ValueError(f"Excel 含有重复样本编号：{sample_id}")
+        seen.add(sample_id)
+        for key in review_keys:
+            if key in record and record[key] is not None:
+                by_id[sample_id][key] = str(record[key]).strip()
+    if original and seen != set(by_id):
+        missing = sorted(set(by_id) - seen)
+        raise ValueError(
+            "Excel 缺少原始标签中的样本，未导入以防误删：" + ", ".join(missing[:10])
+        )
+    reviewed = [by_id[str(row.get("sample_id", ""))] for row in original]
+    for row in reviewed:
+        if row.get("dataset_split") not in {"train", "valid", "test"}:
+            raise ValueError(f"{row.get('sample_id')} 的数据集划分必须是 train/valid/test")
+        if row.get("valid") not in {"是", "否"}:
+            raise ValueError(f"{row.get('sample_id')} 的是否有效必须是“是”或“否”")
+
+    reviewed_jsonl = root / "labels_reviewed.jsonl"
+    reviewed_csv = root / "labels_reviewed.csv"
+    with reviewed_jsonl.open("w", encoding="utf-8") as handle:
+        for row in reviewed:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    with reviewed_csv.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=[key for key, _h, _d in LABEL_COLUMNS])
+        writer.writeheader()
+        writer.writerows(
+            {key: row.get(key, "") for key, _h, _d in LABEL_COLUMNS} for row in reviewed
+        )
+    return {"jsonl": reviewed_jsonl, "csv": reviewed_csv}
 
 
 def _cell_value(value: Any):

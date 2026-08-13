@@ -8,8 +8,9 @@ import platform
 import re
 import socket
 import subprocess
+import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,18 @@ import yaml
 from . import __version__
 from .config import ExperimentConfig
 from .professional import array_geometry_sha256, build_preflight_report, canonical_sha256
+
+
+def _replace_with_windows_retry(temporary: Path, destination: Path) -> None:
+    """Replace atomically even while an antivirus/viewer briefly opens the file."""
+    for attempt in range(20):
+        try:
+            temporary.replace(destination)
+            return
+        except PermissionError:
+            if attempt == 19:
+                raise
+            time.sleep(0.01 * (attempt + 1))
 
 
 def _safe_name(value: str) -> str:
@@ -46,6 +59,14 @@ class RunStore:
     root: Path
     config: ExperimentConfig
     manifest: dict[str, Any]
+    _artifact_positions: dict[str, int] = field(default_factory=dict, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._artifact_positions = {
+            str(entry.get("path")): index
+            for index, entry in enumerate(self.manifest.get("artifacts", []))
+            if entry.get("path")
+        }
 
     @classmethod
     def create(cls, config: ExperimentConfig, kind: str) -> "RunStore":
@@ -88,6 +109,28 @@ class RunStore:
         store.write_json("manifest.json", manifest)
         store.add_artifact("config_resolved.yaml")
         store.write_json("metrics/preflight_report.json", preflight.to_dict())
+        store.checkpoint()
+        return store
+
+    @classmethod
+    def resume(cls, root: str | Path, config: ExperimentConfig, kind: str) -> "RunStore":
+        """Re-open an interrupted run without discarding completed artifacts."""
+        run_root = Path(root).resolve()
+        manifest_path = run_root / "manifest.json"
+        if not manifest_path.is_file():
+            raise FileNotFoundError(f"续采目录缺少 manifest.json：{run_root}")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("kind") != kind:
+            raise ValueError(f"续采目录类型不是 {kind}：{run_root}")
+        if manifest.get("status") == "completed":
+            raise ValueError("该实验已经完成，不能续采；请开始一个新实验")
+        store = cls(run_root, config, manifest)
+        manifest["status"] = "running"
+        manifest.pop("finished_at", None)
+        manifest.setdefault("resume_history", []).append(
+            datetime.now(timezone.utc).isoformat()
+        )
+        store.checkpoint()
         return store
 
     def path(self, relative: str) -> Path:
@@ -103,8 +146,10 @@ class RunStore:
     def write_json(self, relative: str, data: Any) -> Path:
         path = self.path(relative)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8") as handle:
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        with temporary.open("w", encoding="utf-8") as handle:
             json.dump(data, handle, ensure_ascii=False, indent=2)
+        _replace_with_windows_retry(temporary, path)
         if relative != "manifest.json":
             self.add_artifact(relative)
         return path
@@ -116,7 +161,16 @@ class RunStore:
             entry["bytes"] = path.stat().st_size
             if self.config.storage.compute_sha256:
                 entry["sha256"] = sha256(path)
-        self.manifest["artifacts"].append(entry)
+        artifacts = self.manifest["artifacts"]
+        existing_index = self._artifact_positions.get(relative)
+        if existing_index is not None:
+            artifacts[existing_index] = entry
+        else:
+            self._artifact_positions[relative] = len(artifacts)
+            artifacts.append(entry)
+
+    def checkpoint(self) -> None:
+        """Durably save the manifest at a logical capture boundary."""
         self._flush()
 
     def finish(self, summary: dict[str, Any], status: str = "completed") -> None:
@@ -151,8 +205,11 @@ class RunStore:
         self._flush()
 
     def _flush(self) -> None:
-        with self.path("manifest.json").open("w", encoding="utf-8") as handle:
+        path = self.path("manifest.json")
+        temporary = path.with_suffix(".json.tmp")
+        with temporary.open("w", encoding="utf-8") as handle:
             json.dump(self.manifest, handle, ensure_ascii=False, indent=2)
+        _replace_with_windows_retry(temporary, path)
 
 
 def _git_commit() -> str | None:

@@ -181,6 +181,12 @@ def expand_experiment_plan(path: str | Path) -> list[Path]:
     base_path = Path(plan["paths"]["base_config"])
     output_dir = Path(plan["paths"]["generated_configs"])
     output_dir.mkdir(parents=True, exist_ok=True)
+    # This directory is compiler output.  Remove only numbered YAMLs created
+    # by previous expansions so renamed metadata fields cannot leave stale,
+    # duplicate experiments behind.
+    for old_path in output_dir.glob("*.yaml"):
+        if re.match(r"^\d{3}_.*\.yaml$", old_path.name):
+            old_path.unlink()
     project_metadata = dict(plan["project"])
     written: list[Path] = []
     for order, experiment in enumerate(plan["experiments"], 1):

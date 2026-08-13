@@ -92,6 +92,12 @@ metadata:
 人工头、耳机型号/个体、佩戴、麦杆、房间以及 target/interferer 的位置、角度、高度和距离
 同时被展开成普通列；完整原始 metadata 仍保留在 `metadata_json`。
 
+批量素材建议附带逐文件索引 CSV。目标索引列为
+`relative_path,speaker_id,utterance_id`，干扰索引列为
+`relative_path,noise_id,noise_class`；路径相对于各自素材文件夹。这样 2000 条素材不会错误地共用
+一个全局 speaker/noise 标签。每完成一条配对都会同步写 `labels.partial.jsonl` 和断点，失败或停止
+后重用同一实验名即可从下一条续采。
+
 关键文件：
 
 ```text
@@ -104,6 +110,9 @@ raw/*_mixture_mics.wav                      切出的双通道混合输入
 labels.csv / labels.xlsx / labels.jsonl     路径、场景元数据和质检状态
 supervised_pairs.csv / supervised_pairs.jsonl  只含本次运行中合格的监督对
 ```
+
+人工质检不要直接替换自动标签。编辑 `labels.xlsx` 的“标签”工作表后，通过 GUI 导入，生成
+`labels_reviewed.jsonl`。服务器汇总器优先使用 reviewed 文件，同时保留原始标签供审计。
 
 推荐不要手工拼路径，而是运行：
 
