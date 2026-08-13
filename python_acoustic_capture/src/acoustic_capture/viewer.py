@@ -158,6 +158,8 @@ class ResultsViewer(ttk.Frame):
         self.preview_spec: dict[str, float] | None = None
         self._live_lines: list[object] = []
         self._live_segments: dict[str, dict] = {}
+        self._live_source_lines: dict[str, object] = {}
+        self._live_timeline_line: object | None = None
         self._live_total_s = 0.0
         self._build()
 
@@ -307,6 +309,8 @@ class ResultsViewer(ttk.Frame):
         self._x_bounds.clear()
         self._drag_state = None
         self._live_lines.clear()
+        self._live_source_lines.clear()
+        self._live_timeline_line = None
 
         detail_duration = min(duration_s, max(0.02, 8.0 / start_hz))
         detail_samples = min(len(sweep), max(2, int(round(detail_duration * sample_rate))))
@@ -420,6 +424,8 @@ class ResultsViewer(ttk.Frame):
         self._drag_state = None
         self._live_lines.clear()
         self._live_segments = segments
+        self._live_source_lines.clear()
+        self._live_timeline_line = None
         self._live_total_s = stream_samples / max(1, sample_rate)
         for axis in self.axes:
             axis.clear()
@@ -435,7 +441,9 @@ class ResultsViewer(ttk.Frame):
             axis.set_ylabel("Amplitude")
             axis.set_xlim(0.0, max(len(signal) / sample_rate, 1.0 / sample_rate))
             self._x_bounds[axis] = axis.get_xlim()
-            self._live_lines.append(axis.axvline(0.0, color="#d62728", linewidth=1.6))
+            self._live_source_lines["target" if axis is self.axes[0] else "interferer"] = axis.axvline(
+                0.0, color="#d62728", linewidth=1.6
+            )
 
         timeline = self.axes[2]
         colors = {"target_only": "#4c9bd6", "interferer_only": "#f2a65a", "mixture": "#7fbf7f"}
@@ -451,19 +459,41 @@ class ResultsViewer(ttk.Frame):
         timeline.set_ylim(0.0, 1.0)
         timeline.set_xlim(0.0, max(self._live_total_s, 1.0 / sample_rate))
         self._x_bounds[timeline] = timeline.get_xlim()
-        self._live_lines.append(timeline.axvline(0.0, color="#d62728", linewidth=1.8))
+        self._live_timeline_line = timeline.axvline(0.0, color="#d62728", linewidth=1.8)
         self.run_label.configure(text=f"Live capture: target={target_name} | interferer={interferer_name}")
         self.summary_var.set("Preparing audio stream… The red line is the actual playback/recording position.")
         self.canvas.draw_idle()
 
     def update_live_progress(self, frames: int, total_frames: int, sample_rate: int, phase: str) -> None:
         """Advance the red cursor for RIR and speech live previews."""
-        if not self._live_lines and self.preview_spec is None:
+        if not self._live_lines and not self._live_source_lines and self.preview_spec is None:
             return
         total = max(1, int(total_frames))
         time_s = min(max(0.0, int(frames) / max(1, int(sample_rate))), total / max(1, int(sample_rate)))
-        for line in self._live_lines:
-            line.set_xdata([time_s, time_s])
+        if self._live_segments:
+            frame = int(frames)
+            active = "silence / transition"
+            active_segment = None
+            for item, segment in self._live_segments.items():
+                if int(segment["start_sample"]) <= frame < int(segment["end_sample"]):
+                    active = {"target_only": "TARGET ONLY", "interferer_only": "INTERFERER ONLY", "mixture": "MIXED"}.get(item, item)
+                    active_segment = segment
+                    break
+            if self._live_timeline_line is not None:
+                self._live_timeline_line.set_xdata([time_s, time_s])
+            local_s = 0.0
+            if active_segment is not None:
+                local_s = (frame - int(active_segment["start_sample"])) / max(1, int(sample_rate))
+            # Both target-only and mixed replay the same target samples.  The
+            # interferer waveform progresses only during mixed (or optional
+            # interferer-only) playback.
+            if "target" in self._live_source_lines and active in {"TARGET ONLY", "MIXED"}:
+                self._live_source_lines["target"].set_xdata([local_s, local_s])
+            if "interferer" in self._live_source_lines and active in {"INTERFERER ONLY", "MIXED"}:
+                self._live_source_lines["interferer"].set_xdata([local_s, local_s])
+        else:
+            for line in self._live_lines:
+                line.set_xdata([time_s, time_s])
         phase_text = {
             "opening_audio_stream": "Opening audio stream…",
             "playing": "Playing and recording…",
@@ -473,12 +503,6 @@ class ResultsViewer(ttk.Frame):
             "timed_out": "Audio stream timed out.",
         }.get(phase, phase)
         if self._live_segments:
-            active = "silence / transition"
-            frame = int(frames)
-            for item, segment in self._live_segments.items():
-                if int(segment["start_sample"]) <= frame < int(segment["end_sample"]):
-                    active = {"target_only": "TARGET ONLY", "interferer_only": "INTERFERER ONLY", "mixture": "MIXED"}.get(item, item)
-                    break
             phase_text += f"  |  now: {active}  |  {time_s:.2f}/{total / max(1, sample_rate):.2f} s"
         self.summary_var.set(phase_text)
         self.canvas.draw_idle()
@@ -501,6 +525,8 @@ class ResultsViewer(ttk.Frame):
         self._drag_state = None
         self._live_lines.clear()
         self._live_segments = {}
+        self._live_source_lines.clear()
+        self._live_timeline_line = None
         for axis in self.axes:
             axis.clear()
             axis.set_axis_off()
@@ -560,6 +586,8 @@ class ResultsViewer(ttk.Frame):
         self.preview_spec = None
         self._live_lines.clear()
         self._live_segments = {}
+        self._live_source_lines.clear()
+        self._live_timeline_line = None
         self.files = discover_audio_files(root)
         self.path_by_label.clear()
         for category, paths in self.files.items():
