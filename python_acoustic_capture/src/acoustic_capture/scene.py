@@ -28,6 +28,7 @@ Log = Callable[[str], None]
 StopRequested = Callable[[], bool]
 Progress = Callable[[dict], None]
 PAIRED_ITEM_ORDER = ("target_only", "interferer_only", "mixture")
+MAX_CARTESIAN_PAIRS = 100_000
 
 
 class _CaptureCancelled(Exception):
@@ -80,6 +81,15 @@ def discover_source_pairs(scene: SceneConfig) -> list[SourcePair]:
     if interferer_required and not interferers:
         raise FileNotFoundError(f"干扰声音文件夹中没有匹配音频：{scene.interferer_folder}")
     if scene.pairing_mode == "cartesian":
+        pair_count = len(targets) * len(interferers)
+        if pair_count > MAX_CARTESIAN_PAIRS:
+            raise ValueError(
+                "全部组合配对会生成 "
+                f"{pair_count:,} 组任务（{len(targets):,} target × "
+                f"{len(interferers):,} interferer），超过安全上限 "
+                f"{MAX_CARTESIAN_PAIRS:,}。请改用‘按顺序循环配对’，"
+                "或先用测试清单拆分成较小批次。"
+            )
         return [SourcePair(target, interferer) for target, interferer in itertools.product(targets, interferers)]
     count = max(len(targets), len(interferers))
     return [SourcePair(targets[index % len(targets)], interferers[index % len(interferers)]) for index in range(count)]
@@ -279,6 +289,10 @@ def capture_scene_block(
         config.audio.target_output_channel,
         config.audio.interferer_output_channel,
     )
+    # Build the pairing plan without reading every source file.  Hashing 4000
+    # multi-second WAVs before opening the first audio stream can look exactly
+    # like a frozen GUI and needlessly delays the experiment.  Each source is
+    # hashed lazily when its pair is actually about to be captured.
     source_info = []
     for index, pair in enumerate(pairs, 1):
         source_info.append(
@@ -287,15 +301,27 @@ def capture_scene_block(
                 "automatic_label": _automatic_label(scene, pair, index),
                 "target": {
                     "path": str(pair.target) if pair.target else None,
-                    "sha256": sha256(pair.target) if pair.target else None,
+                    "sha256": None,
                 },
                 "interferer": {
                     "path": str(pair.interferer) if pair.interferer else None,
-                    "sha256": sha256(pair.interferer) if pair.interferer else None,
+                    "sha256": None,
                 },
             }
         )
-    store.write_json("references/sources.json", {"mode": scene.source_mode, "pairs": source_info})
+    source_hash_cache: dict[Path, str] = {}
+
+    def source_hash(path: Path | None) -> str | None:
+        if path is None:
+            return None
+        if path not in source_hash_cache:
+            source_hash_cache[path] = sha256(path)
+        return source_hash_cache[path]
+
+    def save_source_index() -> None:
+        store.write_json(
+            "references/sources.json", {"mode": scene.source_mode, "pairs": source_info}
+        )
     summary: dict = {
         "source_mode": scene.source_mode,
         "pairing_mode": scene.pairing_mode,
@@ -342,8 +368,22 @@ def capture_scene_block(
 
             for pair_index, pair in enumerate(pairs, 1):
                 _check_cancelled(stop_requested)
+                if progress is not None:
+                    progress(
+                        {
+                            "event": "pair_loading",
+                            "pair_index": pair_index,
+                            "pair_count": len(pairs),
+                            "repetition": repetition,
+                            "target_name": pair.target.name if pair.target else "(not used)",
+                            "interferer_name": pair.interferer.name if pair.interferer else "(not used)",
+                        }
+                    )
                 samples = _pair_sample_count(pair, config)
                 target, interferer = _load_pair(pair, config, samples)
+                current_source_info = source_info[pair_index - 1]
+                current_source_info["target"]["sha256"] = source_hash(pair.target)
+                current_source_info["interferer"]["sha256"] = source_hash(pair.interferer)
                 automatic_label = _automatic_label(scene, pair, pair_index)
                 log(
                     f"样本 {pair_index}/{len(pairs)}：{automatic_label}，"
@@ -559,7 +599,7 @@ def capture_scene_block(
                     f"{_safe_label(scene_id)}__{automatic_label}_rep{repetition:03d}"
                 )
                 segment_items = set(segments)
-                source_hashes = source_info[pair_index - 1]
+                source_hashes = current_source_info
 
                 label_rows.append(
                     {
@@ -648,17 +688,21 @@ def capture_scene_block(
                     }
                 )
 
+        save_source_index()
         _finish_scene(store, label_rows, summary, config.metadata, status="completed")
         log(f"语音增强场景结果与标签表已保存到：{store.root}")
         return store
     except _CaptureCancelled:
+        save_source_index()
         _finish_scene(store, label_rows, summary, config.metadata, status="cancelled")
         log(f"语音增强采集已停止；已完成的数据保存在：{store.root}")
         return store
     except Exception as exc:
         if stop_requested is not None and stop_requested():
+            save_source_index()
             _finish_scene(store, label_rows, summary, config.metadata, status="cancelled")
             log(f"语音增强采集已停止；已完成的数据保存在：{store.root}")
             return store
+        save_source_index()
         store.finish({"error": str(exc), **summary}, status="failed")
         raise

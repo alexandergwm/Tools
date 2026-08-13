@@ -3,6 +3,7 @@ import csv
 import json
 
 import numpy as np
+import pytest
 import soundfile as sf
 
 from acoustic_capture.audio import CaptureResult, SimulatedBackend
@@ -11,10 +12,12 @@ from acoustic_capture.config import ExperimentConfig
 from acoustic_capture.general import capture_general_io
 from acoustic_capture.rir import capture_rir
 from acoustic_capture.scene import (
+    MAX_CARTESIAN_PAIRS,
     _safe_label,
     _shared_hardware_clock,
     build_paired_sequence,
     capture_scene_block,
+    discover_source_pairs,
 )
 from acoustic_capture.speech_dataset import compile_speech_dataset
 from acoustic_capture.storage import _safe_name
@@ -366,6 +369,64 @@ def test_folder_scene_batch_cycles_files_and_writes_labels(tmp_path: Path):
     assert all(row["automatic_label"].startswith("batch_") for row in labels)
     assert all(row["duration_s"] == "0.05" for row in labels)
     assert store.manifest["summary"]["label_rows"] == 3
+
+
+def test_folder_sources_are_hashed_lazily_per_captured_pair(tmp_path: Path, monkeypatch):
+    fs = 16_000
+    target_folder = tmp_path / "targets"
+    interferer_folder = tmp_path / "interferers"
+    target_folder.mkdir()
+    interferer_folder.mkdir()
+    signal = np.zeros(160, dtype=np.float32)
+    for index in range(4):
+        sf.write(target_folder / f"target_{index}.wav", signal, fs)
+        sf.write(interferer_folder / f"noise_{index}.wav", signal, fs)
+
+    cfg = ExperimentConfig()
+    cfg.audio.backend = "simulated"
+    cfg.audio.sample_rate = fs
+    cfg.sweep.end_hz = 7_000
+    cfg.scene.source_mode = "folders"
+    cfg.scene.target_folder = str(target_folder)
+    cfg.scene.interferer_folder = str(interferer_folder)
+    cfg.scene.items = ["target_only", "mixture"]
+    cfg.scene.duration_s = 0.01
+    cfg.scene.countdown_s = 0
+    cfg.scene.gap_s = 0
+    cfg.storage.root = str(tmp_path / "runs")
+    calls = []
+    monkeypatch.setattr("acoustic_capture.scene.sha256", lambda path: calls.append(Path(path)) or "hash")
+    stop = False
+
+    def progress(update):
+        nonlocal stop
+        if update.get("event") == "pair_prepared":
+            stop = True
+
+    store = capture_scene_block(
+        cfg,
+        SimulatedBackend(cfg.audio),
+        log=lambda _: None,
+        stop_requested=lambda: stop,
+        progress=progress,
+    )
+    assert store.manifest["status"] == "cancelled"
+    assert len(calls) == 2
+
+
+def test_cartesian_pairing_rejects_multi_million_task_explosion(tmp_path: Path, monkeypatch):
+    cfg = ExperimentConfig().scene
+    cfg.source_mode = "folders"
+    cfg.pairing_mode = "cartesian"
+    cfg.target_folder = str(tmp_path / "targets")
+    cfg.interferer_folder = str(tmp_path / "interferers")
+    fake_targets = [tmp_path / f"t{index}.wav" for index in range(2_000)]
+    fake_interferers = [tmp_path / f"n{index}.wav" for index in range(2_000)]
+    scans = iter((fake_targets, fake_interferers))
+    monkeypatch.setattr("acoustic_capture.scene._scan_audio_folder", lambda *_: next(scans))
+    with pytest.raises(ValueError, match="4,000,000"):
+        discover_source_pairs(cfg)
+    assert MAX_CARTESIAN_PAIRS < 4_000_000
 
 
 def test_speech_dataset_packages_multichannel_pairs_and_flattened_labels(tmp_path: Path):

@@ -297,6 +297,7 @@ class CaptureGUI(tk.Tk):
         self._stop_event = threading.Event()
         self._active_backend = None
         self._worker_thread: threading.Thread | None = None
+        self._scene_scan_thread: threading.Thread | None = None
         self._cancel_watch_after_id: str | None = None
         self.checklist_path: Path | None = None
         self.checklist_row: dict | None = None
@@ -978,21 +979,35 @@ class CaptureGUI(tk.Tk):
     def scan_scene_sources(self):
         try:
             config = self._apply_values()
-            pairs = discover_source_pairs(config.scene)
-            preview = [
-                f"{index:04d}  目标：{pair.target.name if pair.target else '不使用'}"
-                f"  |  干扰：{pair.interferer.name if pair.interferer else '不使用'}"
-                for index, pair in enumerate(pairs[:30], 1)
-            ]
-            suffix = "" if len(pairs) <= 30 else f"\n……另有 {len(pairs) - 30} 组未显示"
-            messagebox.showinfo(
-                "语音文件扫描结果",
-                f"共形成 {len(pairs)} 组采集任务，每条按配置时长处理。\n\n"
-                + "\n".join(preview)
-                + suffix,
-            )
         except Exception as exc:
             messagebox.showerror("扫描失败", str(exc))
+            return
+
+        if self._scene_scan_thread is not None and self._scene_scan_thread.is_alive():
+            return
+        self.scene_scan_button.configure(state="disabled")
+        self._append("正在后台扫描语音素材文件夹；窗口仍可正常操作……")
+
+        def worker():
+            try:
+                pairs = discover_source_pairs(config.scene)
+                preview = [
+                    (
+                        f"{index:04d}  target="
+                        f"{pair.target.name if pair.target else '(不使用)'}"
+                        f"  |  interferer="
+                        f"{pair.interferer.name if pair.interferer else '(不使用)'}"
+                    )
+                    for index, pair in enumerate(pairs[:30], 1)
+                ]
+                self.events.put(("SCENE_SCAN_DONE", len(pairs), preview))
+            except Exception as exc:
+                self.events.put(("SCENE_SCAN_ERROR", str(exc)))
+
+        self._scene_scan_thread = threading.Thread(
+            target=worker, daemon=True, name="acoustic-source-scan"
+        )
+        self._scene_scan_thread.start()
 
     def check_hardware(self):
         try:
@@ -1448,11 +1463,39 @@ class CaptureGUI(tk.Tk):
                 if check_id not in self._logged_preflight_warning_ids:
                     self._append(f"预检提醒：{title}：{detail}")
                     self._logged_preflight_warning_ids.add(check_id)
+            elif isinstance(event, tuple) and event and event[0] == "SCENE_SCAN_DONE":
+                _, pair_count, preview = event
+                self._scene_scan_thread = None
+                if not self._busy:
+                    self.scene_scan_button.configure(state="normal")
+                suffix = "" if pair_count <= 30 else f"\n……另有 {pair_count - 30} 组未显示"
+                messagebox.showinfo(
+                    "语音文件扫描结果",
+                    f"共形成 {pair_count} 组采集任务。\n\n" + "\n".join(preview) + suffix,
+                )
+            elif isinstance(event, tuple) and event and event[0] == "SCENE_SCAN_ERROR":
+                _, error = event
+                self._scene_scan_thread = None
+                if not self._busy:
+                    self.scene_scan_button.configure(state="normal")
+                messagebox.showerror("扫描失败", error)
             elif isinstance(event, tuple) and event and event[0] == "STATUS":
                 self._append(str(event[1]))
             elif isinstance(event, tuple) and event and event[0] == "SCENE_PROGRESS":
                 _, update = event
-                if update.get("event") == "pair_prepared":
+                if update.get("event") == "pair_loading":
+                    self._append(
+                        f"正在读取素材 {update['pair_index']}/{update['pair_count']}："
+                        f"target={update['target_name']} | interferer={update['interferer_name']}"
+                    )
+                    self.viewer.run_label.configure(
+                        text=(
+                            f"Loading pair {update['pair_index']}/{update['pair_count']}: "
+                            f"target={update['target_name']} | interferer={update['interferer_name']}"
+                        )
+                    )
+                    self.viewer.summary_var.set("正在读取并重采样当前两条素材；完成后立即开始播录。")
+                elif update.get("event") == "pair_prepared":
                     self._append(
                         f"素材对 {update['pair_index']}/{update['pair_count']}："
                         f"target={update['target_name']} | interferer={update['interferer_name']}"
