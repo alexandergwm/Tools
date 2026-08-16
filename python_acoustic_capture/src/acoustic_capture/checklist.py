@@ -449,7 +449,7 @@ def apply_checklist_row(
     if workflow == "supervised" or workflow == "speech":
         config.scene.items = ["ambient", "target_only", "interferer_only", "mixture"]
     elif workflow in {"supervised_pair", "target_mixed"}:
-        config.scene.items = ["target_only", "mixture"]
+        config.scene.items = ["target_only", "interferer_only", "mixture"]
     elif workflow == "target_only":
         config.scene.items = ["target_only"]
     elif workflow == "interferer_only":

@@ -1,0 +1,45 @@
+{
+  "sample_index": 4,
+  "automatic_label": "verify10_0004_target_04_interferer_04",
+  "item": "mixture",
+  "repetition": 1,
+  "file": "raw/sample_0004_rep_001_mixture_mics.wav",
+  "paired_stream": "sample_0004_rep_001_paired_sequence",
+  "segment_start_sample": 11440,
+  "segment_end_sample": 16560,
+  "channels": [
+    {
+      "channel": 1,
+      "peak": 0.20273256301879883,
+      "peak_dbfs": -13.861529781583883,
+      "rms_dbfs": -25.59174263828343,
+      "clipped_samples": 0,
+      "clipped": false,
+      "nonfinite_samples": 0,
+      "zero_fraction": 0.0,
+      "dc_offset": -8.162323986289355e-05
+    },
+    {
+      "channel": 2,
+      "peak": 0.19415438175201416,
+      "peak_dbfs": -14.237056073592546,
+      "rms_dbfs": -25.9692686848345,
+      "clipped_samples": 0,
+      "clipped": false,
+      "nonfinite_samples": 0,
+      "zero_fraction": 0.0,
+      "dc_offset": -0.00010079018539699558
+    }
+  ],
+  "array_health": {
+    "channel_count": 2,
+    "exact_duplicate_channel_pairs": [],
+    "rms_spread_db": 0.37752604655106836,
+    "has_nonfinite_samples": false,
+    "has_silent_channel": false
+  },
+  "backend_status": {
+    "backend": "simulated",
+    "overflow": false
+  }
+}

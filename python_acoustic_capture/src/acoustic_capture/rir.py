@@ -9,9 +9,10 @@ from typing import Callable
 
 import numpy as np
 from scipy.fft import next_fast_len
+from scipy.signal import fftconvolve
 
 from .audio import AudioBackend
-from .config import ExperimentConfig
+from .config import ExperimentConfig, RepeatConfig
 from .quality import channel_metrics, multichannel_health_metrics, normalized_correlation
 from .signals import exponential_sweep, measurement_signal, route_outputs
 from .storage import RunStore
@@ -28,6 +29,7 @@ class RIRTake:
     peak_samples: list[int]
     accepted: bool
     metrics: dict
+    validation_response: np.ndarray | None = None
 
 
 def _moving_mean_asymmetric(values: np.ndarray, before: int, after: int) -> np.ndarray:
@@ -210,12 +212,272 @@ def sweep_snr_db(
     return values
 
 
+def _validation_response(
+    recording: np.ndarray,
+    sweep_samples: int,
+    rir_samples: int,
+    sample_rate: int,
+    pre_silence_s: float,
+    pre_peak_s: float,
+    reference_peak: int,
+    alignment_shift: int,
+) -> np.ndarray:
+    """Extract the real sweep response on the cropped RIR's time grid."""
+    pre_samples = round(pre_silence_s * sample_rate)
+    before_peak = round(pre_peak_s * sample_rate)
+    # ``alignment_shift`` was applied to the RIR. Move the real-response
+    # window by the opposite amount so that both direct arrivals stay aligned.
+    start = pre_samples + reference_peak - before_peak - alignment_shift
+    start = max(0, min(int(start), len(recording)))
+    wanted = sweep_samples + rir_samples - 1
+    return np.asarray(recording[start : start + wanted], dtype=np.float32)
+
+
+def normalized_reconstruction_error_db(
+    rir: np.ndarray,
+    excitation: np.ndarray,
+    measured_responses: list[np.ndarray],
+) -> float:
+    """Return normalized reconvolution residual against real recordings.
+
+    The candidate RIR is convolved with the exact ESS that was played.  A
+    least-squares gain is fitted independently for every recording/channel so
+    that the metric judges time/frequency structure rather than sound-card
+    gain. Lower (more negative) values are better.
+    """
+    rir = np.asarray(rir, dtype=np.float64)
+    excitation = np.asarray(excitation, dtype=np.float64).reshape(-1)
+    if rir.ndim == 1:
+        rir = rir[:, None]
+    if not measured_responses:
+        return float("inf")
+    predictions = [
+        fftconvolve(excitation, rir[:, channel], mode="full")
+        for channel in range(rir.shape[1])
+    ]
+    return _reconstruction_error_from_predictions_db(predictions, measured_responses)
+
+
+def _reconstruction_error_from_predictions_db(
+    predictions: list[np.ndarray], measured_responses: list[np.ndarray]
+) -> float:
+    """Score cached reconvolutions without repeating their FFTs."""
+    if not measured_responses:
+        return float("inf")
+    channel_count = len(predictions)
+    channel_errors: list[list[float]] = [[] for _ in range(channel_count)]
+    for measured in measured_responses:
+        measured = np.asarray(measured, dtype=np.float64)
+        if measured.ndim == 1:
+            measured = measured[:, None]
+        if measured.shape[1] != channel_count:
+            raise ValueError("RIR and measured response channel counts differ")
+        for channel, prediction in enumerate(predictions):
+            count = min(len(prediction), len(measured))
+            if count < 1:
+                continue
+            actual = measured[:count, channel]
+            predicted = prediction[:count]
+            denominator = float(np.dot(predicted, predicted))
+            gain = float(np.dot(actual, predicted) / denominator) if denominator > 1e-24 else 0.0
+            residual = actual - gain * predicted
+            measured_energy = float(np.dot(actual, actual))
+            if measured_energy <= 1e-24:
+                channel_errors[channel].append(float("inf"))
+            else:
+                ratio = np.sqrt(float(np.dot(residual, residual)) / measured_energy)
+                channel_errors[channel].append(
+                    float(20.0 * np.log10(max(ratio, 1e-12)))
+                )
+    per_channel = [
+        float(np.median(values)) if values else float("inf")
+        for values in channel_errors
+    ]
+    # One bad microphone must not be hidden by the other microphones. All
+    # channels therefore share one selection, scored by the worst channel.
+    return max(per_channel)
+
+
+def normalized_rir_change_db(current: np.ndarray, previous: np.ndarray) -> float:
+    """Scale-invariant normalized change between two aligned multi-mic RIRs."""
+    current = np.asarray(current, dtype=np.float64)
+    previous = np.asarray(previous, dtype=np.float64)
+    if current.shape != previous.shape:
+        raise ValueError("RIR shapes differ")
+    denominator = float(np.sum(current * current))
+    gain = float(np.sum(previous * current) / denominator) if denominator > 1e-24 else 0.0
+    residual = previous - gain * current
+    reference_energy = float(np.sum(previous * previous))
+    if reference_energy <= 1e-24:
+        return float("inf")
+    ratio = np.sqrt(float(np.sum(residual * residual)) / reference_energy)
+    return float(20.0 * np.log10(max(ratio, 1e-12)))
+
+
+def _consensus_takes(accepted: list[RIRTake], threshold: float) -> list[RIRTake]:
+    if len(accepted) <= 2:
+        return list(accepted)
+    similarities = np.eye(len(accepted), dtype=np.float64)
+    for left in range(len(accepted)):
+        for right in range(left + 1, len(accepted)):
+            value = min(
+                normalized_correlation(
+                    accepted[left].rir[:, channel], accepted[right].rir[:, channel]
+                )
+                for channel in range(accepted[left].rir.shape[1])
+            )
+            similarities[left, right] = similarities[right, left] = value
+    medoid = max(
+        range(len(accepted)),
+        key=lambda index: (float(np.median(similarities[index])), -accepted[index].index),
+    )
+    members = [
+        take
+        for index, take in enumerate(accepted)
+        if similarities[medoid, index] >= threshold
+    ]
+    return members or [accepted[medoid]]
+
+
+def select_rir_ensemble(
+    accepted: list[RIRTake],
+    excitation: np.ndarray,
+    correlation_threshold: float = 0.98,
+) -> dict:
+    """Choose best-single, aligned-mean, or consensus-mean with LOO error."""
+    if not accepted:
+        raise ValueError("at least one accepted RIR is required")
+
+    excitation64 = np.asarray(excitation, dtype=np.float64).reshape(-1)
+    take_by_index = {take.index: take for take in accepted}
+    prediction_cache: dict[tuple[int, ...], tuple[np.ndarray, list[np.ndarray]]] = {}
+
+    def group_model(indices: tuple[int, ...]) -> tuple[np.ndarray, list[np.ndarray]]:
+        key = tuple(sorted(indices))
+        cached = prediction_cache.get(key)
+        if cached is not None:
+            return cached
+        model = np.mean([take_by_index[index].rir for index in key], axis=0).astype(
+            np.float32
+        )
+        predictions = [
+            fftconvolve(excitation64, model[:, channel], mode="full")
+            for channel in range(model.shape[1])
+        ]
+        prediction_cache[key] = (model, predictions)
+        return model, predictions
+
+    pairwise_errors: dict[tuple[int, int], float] = {}
+    for candidate in accepted:
+        _model, predictions = group_model((candidate.index,))
+        for validation in accepted:
+            pairwise_errors[(candidate.index, validation.index)] = (
+                _reconstruction_error_from_predictions_db(
+                    predictions, [validation.validation_response]
+                )
+            )
+
+    def best_single(training: list[RIRTake]) -> RIRTake:
+        if len(training) == 1:
+            return training[0]
+        scored = []
+        for candidate in training:
+            errors = [
+                pairwise_errors[(candidate.index, validation.index)]
+                for validation in training
+                if validation.index != candidate.index
+            ]
+            scored.append((float(np.median(errors)), candidate.index, candidate))
+        return min(scored, key=lambda item: (item[0], item[1]))[2]
+
+    def score_group(indices: tuple[int, ...], validation: RIRTake) -> float:
+        _model, predictions = group_model(indices)
+        return _reconstruction_error_from_predictions_db(
+            predictions, [validation.validation_response]
+        )
+
+    method_fold_errors: dict[str, list[float]] = {
+        "best_single": [],
+        "aligned_mean": [],
+        "consensus_mean": [],
+    }
+    if len(accepted) == 1:
+        score = pairwise_errors[(accepted[0].index, accepted[0].index)]
+        for values in method_fold_errors.values():
+            values.append(score)
+    else:
+        for validation in accepted:
+            training = [take for take in accepted if take.index != validation.index]
+            best = best_single(training)
+            consensus = _consensus_takes(training, correlation_threshold)
+            groups = {
+                "best_single": (best.index,),
+                "aligned_mean": tuple(take.index for take in training),
+                "consensus_mean": tuple(take.index for take in consensus),
+            }
+            for method, indices in groups.items():
+                method_fold_errors[method].append(score_group(indices, validation))
+
+    method_scores = {
+        method: float(np.median(values))
+        for method, values in method_fold_errors.items()
+    }
+    best_single_take = best_single(accepted)
+    consensus = _consensus_takes(accepted, correlation_threshold)
+    all_indices = tuple(take.index for take in accepted)
+    consensus_indices = tuple(take.index for take in consensus)
+    models = {
+        "best_single": (
+            group_model((best_single_take.index,))[0],
+            [best_single_take.index],
+        ),
+        "aligned_mean": (
+            group_model(all_indices)[0],
+            [take.index for take in accepted],
+        ),
+        "consensus_mean": (
+            group_model(consensus_indices)[0],
+            [take.index for take in consensus],
+        ),
+    }
+    selected_method = min(
+        models,
+        key=lambda method: (method_scores[method], -len(models[method][1]), method),
+    )
+    selected_rir, selected_indices = models[selected_method]
+    all_mean = models["aligned_mean"][0]
+    return {
+        "selection_method": selected_method,
+        "selected_rir": selected_rir,
+        "selected_take_indices": selected_indices,
+        "selected_reconstruction_error_db": method_scores[selected_method],
+        "best_single_rir": best_single_take.rir,
+        "best_single_take": best_single_take.index,
+        "best_single_reconstruction_error_db": method_scores["best_single"],
+        "all_accepted_mean_rir": all_mean,
+        "all_accepted_mean_reconstruction_error_db": method_scores["aligned_mean"],
+        "consensus_take_indices": models["consensus_mean"][1],
+        "consensus_mean_reconstruction_error_db": method_scores["consensus_mean"],
+        "candidate_methods": [
+            {
+                "method": method,
+                "take_indices": models[method][1],
+                "leave_one_out_reconstruction_error_db": method_scores[method],
+                "fold_errors_db": method_fold_errors[method],
+            }
+            for method in ("best_single", "aligned_mean", "consensus_mean")
+        ],
+    }
+
+
 def _finalize_average(
     store: RunStore,
     accepted: list[RIRTake],
     all_metrics: list[dict],
     sample_rate: int,
     output_channel: int,
+    excitation: np.ndarray,
+    repeat_config: RepeatConfig,
     *,
     status: str = "completed",
 ) -> dict:
@@ -228,11 +490,55 @@ def _finalize_average(
         "deconvolution": "regularized_kirkeby_matlab_impzest_compatible",
         "alignment": "common_shift_from_microphone_1_preserves_inter_microphone_delay",
     }
+    last_aggregation = next(
+        (
+            item.get("aggregation")
+            for item in reversed(all_metrics)
+            if item.get("accepted") and item.get("aggregation")
+        ),
+        None,
+    )
+    converged = bool(
+        last_aggregation
+        and last_aggregation.get("consecutive_converged_updates", 0)
+        >= repeat_config.required_stable_takes
+    )
+    if status == "cancelled":
+        stop_reason = "cancelled_by_operator"
+    elif converged:
+        stop_reason = "aggregate_and_reconstruction_error_converged"
+    elif len(all_metrics) >= repeat_config.maximum:
+        stop_reason = "maximum_attempts_reached_without_convergence"
+    else:
+        stop_reason = "completed"
+    summary["convergence"] = {
+        "converged": converged,
+        "stop_reason": stop_reason,
+        "required_consecutive_updates": repeat_config.required_stable_takes,
+        "aggregate_change_threshold_db": repeat_config.aggregate_change_threshold_db,
+        "reconstruction_change_threshold_db": (
+            repeat_config.reconstruction_change_threshold_db
+        ),
+        "last_update": last_aggregation,
+    }
     if accepted:
+        aggregation = select_rir_ensemble(
+            accepted,
+            excitation,
+            correlation_threshold=repeat_config.correlation_threshold,
+        )
         stack = np.stack([take.rir for take in accepted])
-        average = np.mean(stack, axis=0).astype(np.float32)
+        average = aggregation["selected_rir"]
+        all_accepted_mean = aggregation["all_accepted_mean_rir"]
         median = np.median(stack, axis=0).astype(np.float32)
         store.write_audio("processed/average_rir.wav", average, sample_rate)
+        store.write_audio("processed/selected_rir.wav", average, sample_rate)
+        store.write_audio(
+            "processed/all_accepted_mean_rir.wav", all_accepted_mean, sample_rate
+        )
+        store.write_audio(
+            "processed/best_single_rir.wav", aggregation["best_single_rir"], sample_rate
+        )
         store.write_audio("processed/median_rir.wav", median, sample_rate)
         mean_rir_files = []
         for channel in range(average.shape[1]):
@@ -245,6 +551,27 @@ def _finalize_average(
                 "mean_rir_2ch": "processed/average_rir.wav",
                 "mean_rir_per_microphone": mean_rir_files,
                 "partial_average": status == "cancelled",
+                "selection_method": aggregation["selection_method"],
+                "selected_take_ids": aggregation["selected_take_indices"],
+                "selected_reconstruction_error_db": aggregation[
+                    "selected_reconstruction_error_db"
+                ],
+                "best_single_take": aggregation["best_single_take"],
+                "best_single_reconstruction_error_db": aggregation[
+                    "best_single_reconstruction_error_db"
+                ],
+                "all_accepted_mean_reconstruction_error_db": aggregation[
+                    "all_accepted_mean_reconstruction_error_db"
+                ],
+                "consensus_take_ids": aggregation["consensus_take_indices"],
+                "consensus_mean_reconstruction_error_db": aggregation[
+                    "consensus_mean_reconstruction_error_db"
+                ],
+                "selection_candidates": aggregation["candidate_methods"],
+                "selection_note": (
+                    "All microphones share the same take selection. No per-take "
+                    "peak/RMS normalization is applied to the saved training RIR."
+                ),
             }
         )
     store.write_json("metrics/summary.json", summary)
@@ -288,6 +615,8 @@ def capture_rir(
     accepted: list[RIRTake] = []
     all_metrics: list[dict] = []
     stable_count = 0
+    previous_selected_rir: np.ndarray | None = None
+    previous_reconstruction_error_db: float | None = None
     cancelled = False
 
     try:
@@ -367,12 +696,72 @@ def capture_rir(
             store.write_audio(f"raw/take_{take_index:03d}.wav", raw, fs)
             store.write_audio(f"processed/take_{take_index:03d}_full_ir.wav", full_rir, fs)
             store.write_audio(f"processed/take_{take_index:03d}_rir.wav", aligned, fs)
-            store.write_json(f"metrics/take_{take_index:03d}.json", metrics)
-            store.checkpoint()
             all_metrics.append(metrics)
             if accepted_now:
-                accepted.append(RIRTake(take_index, aligned, peaks, True, metrics))
-                stable_count += 1
+                validation_response = _validation_response(
+                    raw,
+                    len(sweep),
+                    len(aligned),
+                    fs,
+                    sweep_cfg.pre_silence_s,
+                    sweep_cfg.pre_peak_s,
+                    reference_peak,
+                    residual_alignment[0],
+                )
+                accepted.append(
+                    RIRTake(
+                        take_index,
+                        aligned,
+                        peaks,
+                        True,
+                        metrics,
+                        validation_response,
+                    )
+                )
+                aggregation = select_rir_ensemble(
+                    accepted,
+                    sweep,
+                    correlation_threshold=repeat_cfg.correlation_threshold,
+                )
+                aggregate_change_db = None
+                reconstruction_change_db = None
+                converged = False
+                if previous_selected_rir is not None:
+                    aggregate_change_db = normalized_rir_change_db(
+                        aggregation["selected_rir"], previous_selected_rir
+                    )
+                    reconstruction_change_db = abs(
+                        aggregation["selected_reconstruction_error_db"]
+                        - float(previous_reconstruction_error_db)
+                    )
+                    converged = (
+                        aggregate_change_db
+                        <= repeat_cfg.aggregate_change_threshold_db
+                        and reconstruction_change_db
+                        <= repeat_cfg.reconstruction_change_threshold_db
+                    )
+                stable_count = stable_count + 1 if converged else 0
+                metrics["aggregation"] = {
+                    "selection_method": aggregation["selection_method"],
+                    "selected_take_ids": aggregation["selected_take_indices"],
+                    "leave_one_out_reconstruction_error_db": aggregation[
+                        "selected_reconstruction_error_db"
+                    ],
+                    "aggregate_change_db": aggregate_change_db,
+                    "reconstruction_error_change_db": reconstruction_change_db,
+                    "aggregate_change_threshold_db": (
+                        repeat_cfg.aggregate_change_threshold_db
+                    ),
+                    "reconstruction_change_threshold_db": (
+                        repeat_cfg.reconstruction_change_threshold_db
+                    ),
+                    "converged": converged,
+                    "consecutive_converged_updates": stable_count,
+                }
+                previous_selected_rir = aggregation["selected_rir"].copy()
+                previous_reconstruction_error_db = aggregation[
+                    "selected_reconstruction_error_db"
+                ]
                 log(
                     f"  已接受；扫频信噪比={min(sweep_snr):.1f} dB，"
                     f"相关性={min(correlations):.4f}，公共峰值漂移={drift}，"
@@ -385,6 +774,9 @@ def capture_rir(
                     f"扫频信噪比={min(sweep_snr):.1f} dB，"
                     f"相关性={min(correlations):.4f}，公共峰值漂移={drift}"
                 )
+
+            store.write_json(f"metrics/take_{take_index:03d}.json", metrics)
+            store.checkpoint()
 
             if progress is not None:
                 progress(store.root, take_index)
@@ -403,7 +795,14 @@ def capture_rir(
 
         if cancelled:
             _finalize_average(
-                store, accepted, all_metrics, fs, output_channel, status="cancelled"
+                store,
+                accepted,
+                all_metrics,
+                fs,
+                output_channel,
+                sweep,
+                repeat_cfg,
+                status="cancelled",
             )
             log(f"采集已停止；已完成的数据保存在：{store.root}")
             return store
@@ -411,13 +810,28 @@ def capture_rir(
             raise RuntimeError(
                 f"只有 {len(accepted)} 次有效脉冲响应，最少需要 {repeat_cfg.minimum} 次"
             )
-        _finalize_average(store, accepted, all_metrics, fs, output_channel)
+        _finalize_average(
+            store,
+            accepted,
+            all_metrics,
+            fs,
+            output_channel,
+            sweep,
+            repeat_cfg,
+        )
         log(f"脉冲响应结果已保存到：{store.root}")
         return store
     except Exception as exc:
         if stop_requested is not None and stop_requested():
             _finalize_average(
-                store, accepted, all_metrics, fs, output_channel, status="cancelled"
+                store,
+                accepted,
+                all_metrics,
+                fs,
+                output_channel,
+                sweep,
+                repeat_cfg,
+                status="cancelled",
             )
             log(f"采集已停止；已完成的数据保存在：{store.root}")
             return store

@@ -1,7 +1,7 @@
 """End-to-end simulated verification for ten paired speech samples.
 
 This script produces ten deliberately distinct target/noise source files,
-captures target-only plus mixture through the deterministic simulated room,
+captures target-only, interferer-only and mixture through the deterministic simulated room,
 and verifies the resulting training index.  It is a workflow verification,
 not a substitute for real loudspeaker/microphone acceptance testing.
 """
@@ -79,7 +79,7 @@ def main() -> int:
     # Keep the otherwise unused RIR section valid at this lower verification
     # sampling rate.
     config.sweep.end_hz = 7_000
-    config.scene.items = ["target_only", "mixture"]
+    config.scene.items = ["target_only", "interferer_only", "mixture"]
     config.scene.source_mode = "folders"
     config.scene.target_folder = str(target_folder)
     config.scene.interferer_folder = str(interferer_folder)
@@ -136,11 +136,17 @@ def main() -> int:
         assert Path(row["target_source"]).name == f"target_{index:02d}.wav"
         assert Path(row["interferer_source"]).name == f"interferer_{index:02d}.wav"
         target, target_fs = sf.read(store.path(row["target_recording"]), always_2d=True)
+        interferer, interferer_fs = sf.read(
+            store.path(row["interferer_recording"]), always_2d=True
+        )
         mixture, mixture_fs = sf.read(store.path(row["mixture_recording"]), always_2d=True)
         target_playback, _ = sf.read(store.path(row["target_playback"]), always_2d=True)
         mixture_playback, _ = sf.read(store.path(row["mixture_playback"]), always_2d=True)
-        assert target_fs == mixture_fs == SAMPLE_RATE
-        assert target.shape == mixture.shape == (round(SAMPLE_RATE * DURATION_S), 2)
+        assert target_fs == interferer_fs == mixture_fs == SAMPLE_RATE
+        assert target.shape == interferer.shape == mixture.shape == (
+            round(SAMPLE_RATE * DURATION_S),
+            2,
+        )
         assert np.array_equal(target_playback[:, 0], mixture_playback[:, 0])
         assert np.allclose(target_playback[:, 1], 0.0)
         assert float(np.sqrt(np.mean((mixture - target) ** 2))) > 1e-3
@@ -155,7 +161,11 @@ def main() -> int:
     for row in supervised:
         mixture = dataset / row["mixture_recording"]
         target = dataset / row["target_recording"]
-        assert mixture.is_file() and target.is_file()
+        interferer = dataset / row["interferer_recording"]
+        assert mixture.is_file() and target.is_file() and interferer.is_file()
+        assert row["mixture_recording"].startswith("audio/target-mixed/")
+        assert row["target_recording"].startswith("audio/target-only/")
+        assert row["interferer_recording"].startswith("audio/interferer-only/")
         assert sf.info(mixture).frames == sf.info(target).frames
         assert sf.info(mixture).channels == sf.info(target).channels == 2
 

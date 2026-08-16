@@ -58,6 +58,9 @@ FIELDS = [
     ("repeats.maximum", "最多尝试次数", int, "rir"),
     ("repeats.correlation_threshold", "脉冲响应相关性阈值", float, "rir"),
     ("repeats.minimum_sweep_snr_db", "扫频相对底噪最低信噪比（分贝）", float, "rir"),
+    ("repeats.required_stable_takes", "连续收敛次数", int, "rir"),
+    ("repeats.aggregate_change_threshold_db", "聚合 RIR 变化阈值（分贝）", float, "rir"),
+    ("repeats.reconstruction_change_threshold_db", "重构误差变化阈值（分贝）", float, "rir"),
     ("scene.source_mode", "素材选择方式", str, "speech"),
     ("scene.duration_s", "每条片段时长（秒，推荐 4）", lambda x: None if not x else float(x), "speech"),
     ("scene.target_file", "干净目标音频文件", str, "speech"),
@@ -131,10 +134,10 @@ RIR_PREVIEW_FIELDS = {
 }
 
 AUDIO_PRESETS = {
-    "配对监督：目标 + MIXED（推荐）": {
+    "标准监督：目标 + 干扰 + MIXED（推荐）": {
         "kind": "scene",
-        "items": ["target_only", "mixture"],
-        "help": "一次连续播录先采 target_only，再采 mixed；两段复用完全相同的目标语音。适合监督训练，且不额外采 interferer_only。",
+        "items": ["target_only", "interferer_only", "mixture"],
+        "help": "一次连续播录依次采 target_only、interferer_only 和 mixed；mixed 与 target_only 复用完全相同的目标语音，额外的纯干扰可用于离线混合。",
     },
     "标准监督采集（推荐）": {
         "kind": "scene",
@@ -190,6 +193,9 @@ ADVANCED_FIELDS = {
     "repeats.maximum",
     "repeats.correlation_threshold",
     "repeats.minimum_sweep_snr_db",
+    "repeats.required_stable_takes",
+    "repeats.aggregate_change_threshold_db",
+    "repeats.reconstruction_change_threshold_db",
     "scene.pairing_mode",
     "scene.file_extensions",
     "scene.label_prefix",

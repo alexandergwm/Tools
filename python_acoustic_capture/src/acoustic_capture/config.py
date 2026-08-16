@@ -54,12 +54,14 @@ class SweepConfig:
 
 @dataclass
 class RepeatConfig:
-    minimum: int = 4
-    maximum: int = 10
+    minimum: int = 5
+    maximum: int = 8
     correlation_threshold: float = 0.98
     peak_drift_samples: int = 2
     minimum_sweep_snr_db: float = 6.0
-    required_stable_takes: int = 3
+    required_stable_takes: int = 2
+    aggregate_change_threshold_db: float = -40.0
+    reconstruction_change_threshold_db: float = 0.1
     reject_clipped: bool = True
     clip_threshold: float = 0.999
     pause_s: float = 0.5
@@ -69,7 +71,6 @@ class RepeatConfig:
 class SceneConfig:
     items: list[str] = field(
         default_factory=lambda: [
-            "ambient",
             "target_only",
             "interferer_only",
             "mixture",
@@ -151,8 +152,20 @@ class ExperimentConfig:
             )
         if not 1 <= r.minimum <= r.maximum:
             raise ValueError("repeats must satisfy 1 <= minimum <= maximum")
+        if not 1 <= r.required_stable_takes <= r.maximum:
+            raise ValueError(
+                "repeats.required_stable_takes must be between 1 and maximum"
+            )
         if r.minimum_sweep_snr_db < 0:
             raise ValueError("repeats.minimum_sweep_snr_db must be non-negative")
+        if not -120.0 <= r.aggregate_change_threshold_db < 0.0:
+            raise ValueError(
+                "repeats.aggregate_change_threshold_db must be in [-120, 0) dB"
+            )
+        if r.reconstruction_change_threshold_db < 0.0:
+            raise ValueError(
+                "repeats.reconstruction_change_threshold_db must be non-negative"
+            )
         if not -100 <= s.level_dbfs <= 0:
             raise ValueError("sweep.level_dbfs must be between -100 and 0")
         allowed = {"ambient", "target_only", "interferer_only", "mixture"}

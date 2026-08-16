@@ -1,0 +1,145 @@
+{
+  "mode": "folders",
+  "pairs": [
+    {
+      "sample_index": 1,
+      "automatic_label": "verify10_0001_target_01_interferer_01",
+      "target": {
+        "path": "E:\\Code_Github\\Tools-main\\Tools-main\\python_acoustic_capture\\verification_10_pairs\\sources\\target\\target_01.wav",
+        "sha256": "de4de33ca90d064da7d544d57c9c93c97268ee695118e9f983f7e1c8ccff0d1b",
+        "metadata": {}
+      },
+      "interferer": {
+        "path": "E:\\Code_Github\\Tools-main\\Tools-main\\python_acoustic_capture\\verification_10_pairs\\sources\\interferer\\interferer_01.wav",
+        "sha256": "9bfa37a37e412b0603ad6963961e8442b23b877c5d689c89ef6db0ff690c3726",
+        "metadata": {}
+      }
+    },
+    {
+      "sample_index": 2,
+      "automatic_label": "verify10_0002_target_02_interferer_02",
+      "target": {
+        "path": "E:\\Code_Github\\Tools-main\\Tools-main\\python_acoustic_capture\\verification_10_pairs\\sources\\target\\target_02.wav",
+        "sha256": "472f1c2d46a4c4b06eded9f5b54cd4d24d41561f1b4a6b85b880ea65cca0a0a6",
+        "metadata": {}
+      },
+      "interferer": {
+        "path": "E:\\Code_Github\\Tools-main\\Tools-main\\python_acoustic_capture\\verification_10_pairs\\sources\\interferer\\interferer_02.wav",
+        "sha256": "1d0424219208ee5784a271e1d16ca82f7da6b0df5d212e68c2a6953626e921b4",
+        "metadata": {}
+      }
+    },
+    {
+      "sample_index": 3,
+      "automatic_label": "verify10_0003_target_03_interferer_03",
+      "target": {
+        "path": "E:\\Code_Github\\Tools-main\\Tools-main\\python_acoustic_capture\\verification_10_pairs\\sources\\target\\target_03.wav",
+        "sha256": "341d2f733d7c3fe27061a343b6b4a729ba4a1edd82dc2b9d9444fd7d912ee1cb",
+        "metadata": {}
+      },
+      "interferer": {
+        "path": "E:\\Code_Github\\Tools-main\\Tools-main\\python_acoustic_capture\\verification_10_pairs\\sources\\interferer\\interferer_03.wav",
+        "sha256": "63977f4940524c0be14b79ac7982197ca9b568820143ad18744d0530e4b428b2",
+        "metadata": {}
+      }
+    },
+    {
+      "sample_index": 4,
+      "automatic_label": "verify10_0004_target_04_interferer_04",
+      "target": {
+        "path": "E:\\Code_Github\\Tools-main\\Tools-main\\python_acoustic_capture\\verification_10_pairs\\sources\\target\\target_04.wav",
+        "sha256": "e01064ed759fa77bfc897425e27bf5a977ca3d9c59e43fd27e8758b770153185",
+        "metadata": {}
+      },
+      "interferer": {
+        "path": "E:\\Code_Github\\Tools-main\\Tools-main\\python_acoustic_capture\\verification_10_pairs\\sources\\interferer\\interferer_04.wav",
+        "sha256": "99f337990948b8a696665bfcba45990afa7448fb9b77e59a1ca86e0c82f45692",
+        "metadata": {}
+      }
+    },
+    {
+      "sample_index": 5,
+      "automatic_label": "verify10_0005_target_05_interferer_05",
+      "target": {
+        "path": "E:\\Code_Github\\Tools-main\\Tools-main\\python_acoustic_capture\\verification_10_pairs\\sources\\target\\target_05.wav",
+        "sha256": "d17e52ea2afb696565edebeda96fce5d43129b6a681fe18181fec9793972d319",
+        "metadata": {}
+      },
+      "interferer": {
+        "path": "E:\\Code_Github\\Tools-main\\Tools-main\\python_acoustic_capture\\verification_10_pairs\\sources\\interferer\\interferer_05.wav",
+        "sha256": "fc45d35b4ca108b011fd8388a0137ad1dcc6ceefa8415198cdaeafc548a9599c",
+        "metadata": {}
+      }
+    },
+    {
+      "sample_index": 6,
+      "automatic_label": "verify10_0006_target_06_interferer_06",
+      "target": {
+        "path": "E:\\Code_Github\\Tools-main\\Tools-main\\python_acoustic_capture\\verification_10_pairs\\sources\\target\\target_06.wav",
+        "sha256": "a0a07955984bf927debddb624468eefec399db0429ca8d90f816516db5c7448d",
+        "metadata": {}
+      },
+      "interferer": {
+        "path": "E:\\Code_Github\\Tools-main\\Tools-main\\python_acoustic_capture\\verification_10_pairs\\sources\\interferer\\interferer_06.wav",
+        "sha256": "ad19c55b000dbeb644a31173a7f8692acee2d37b52eb957ba165a597f975337c",
+        "metadata": {}
+      }
+    },
+    {
+      "sample_index": 7,
+      "automatic_label": "verify10_0007_target_07_interferer_07",
+      "target": {
+        "path": "E:\\Code_Github\\Tools-main\\Tools-main\\python_acoustic_capture\\verification_10_pairs\\sources\\target\\target_07.wav",
+        "sha256": "3640d0c64af75c94b221046d83bebb755557728e0558b7d34f70684ad6fc5cea",
+        "metadata": {}
+      },
+      "interferer": {
+        "path": "E:\\Code_Github\\Tools-main\\Tools-main\\python_acoustic_capture\\verification_10_pairs\\sources\\interferer\\interferer_07.wav",
+        "sha256": "8e9b65b537bb81e6e5f174db86f21d13ed7db4558afc7aae8e5b8200118cbb57",
+        "metadata": {}
+      }
+    },
+    {
+      "sample_index": 8,
+      "automatic_label": "verify10_0008_target_08_interferer_08",
+      "target": {
+        "path": "E:\\Code_Github\\Tools-main\\Tools-main\\python_acoustic_capture\\verification_10_pairs\\sources\\target\\target_08.wav",
+        "sha256": "9b8c0ae209465913e84d6d7a5382666bb787a1b493360b2a41a827b546a8f9d0",
+        "metadata": {}
+      },
+      "interferer": {
+        "path": "E:\\Code_Github\\Tools-main\\Tools-main\\python_acoustic_capture\\verification_10_pairs\\sources\\interferer\\interferer_08.wav",
+        "sha256": "a13efcba3cafaeb148ceb0373827d745251a3de335c70b45e72fed9d26fc5adc",
+        "metadata": {}
+      }
+    },
+    {
+      "sample_index": 9,
+      "automatic_label": "verify10_0009_target_09_interferer_09",
+      "target": {
+        "path": "E:\\Code_Github\\Tools-main\\Tools-main\\python_acoustic_capture\\verification_10_pairs\\sources\\target\\target_09.wav",
+        "sha256": "50d0895fb3fad1c843d92824fa20e670c0e17c2b8780fa96f38f862ac30ea45c",
+        "metadata": {}
+      },
+      "interferer": {
+        "path": "E:\\Code_Github\\Tools-main\\Tools-main\\python_acoustic_capture\\verification_10_pairs\\sources\\interferer\\interferer_09.wav",
+        "sha256": "1a2bb6c221136a421b6b72a307650029fc85873f73c86ca6b63ff06e688b856e",
+        "metadata": {}
+      }
+    },
+    {
+      "sample_index": 10,
+      "automatic_label": "verify10_0010_target_10_interferer_10",
+      "target": {
+        "path": "E:\\Code_Github\\Tools-main\\Tools-main\\python_acoustic_capture\\verification_10_pairs\\sources\\target\\target_10.wav",
+        "sha256": "e78fb84ff911da1b9092689f03015770bb3e7e7c3bfa60f10a4ab1f1e36a3988",
+        "metadata": {}
+      },
+      "interferer": {
+        "path": "E:\\Code_Github\\Tools-main\\Tools-main\\python_acoustic_capture\\verification_10_pairs\\sources\\interferer\\interferer_10.wav",
+        "sha256": "4016cfb77d8af33e821b1cb60b97c6379608baa1b39f39c4c803363b3ec85e8d",
+        "metadata": {}
+      }
+    }
+  ]
+}

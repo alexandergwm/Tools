@@ -20,6 +20,13 @@ RECORDING_KEYS = (
     "mixture_recording",
 )
 
+RECORDING_DATASET_FOLDERS = {
+    "ambient_recording": "ambient",
+    "target_recording": "target-only",
+    "interferer_recording": "interferer-only",
+    "mixture_recording": "target-mixed",
+}
+
 DEFAULT_SPLIT_GROUP_KEYS = (
     "target_source_sha256",
     "split_group_id",
@@ -201,7 +208,12 @@ def _package_recordings(
                 row.get("dataset_validation_error") or f"missing file: {original}"
             )
             continue
-        relative = Path("audio") / run_id / Path(str(original))
+        relative = (
+            Path("audio")
+            / RECORDING_DATASET_FOLDERS[key]
+            / run_id
+            / Path(str(original)).name
+        )
         destination = dataset_root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         if (
@@ -468,6 +480,12 @@ def compile_speech_dataset(
         "supervised_input": "mixture_recording",
         "supervised_target": "target_recording",
         "microphone_storage": "one_multichannel_wav_per_recording",
+        "audio_layout": {
+            "mixture_recording": "audio/target-mixed/<run_id>/",
+            "target_recording": "audio/target-only/<run_id>/",
+            "interferer_recording": "audio/interferer-only/<run_id>/",
+            "ambient_recording": "audio/ambient/<run_id>/",
+        },
         "split_leakage_rule": "group by exact target content and physical capture group before train/valid/test split",
     }
     (dataset_root / "dataset_manifest.json").write_text(

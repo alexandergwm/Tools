@@ -1,0 +1,35 @@
+{
+  "additivity": {
+    "definition": "mixture_recording - (target_only_recording + interferer_only_recording)",
+    "interpretation": "quality-control only; real sequential acoustic captures are not exact source images",
+    "channels": [
+      {
+        "channel": 1,
+        "mixture_consistency_residual_db": -36.399589910144876,
+        "mixture_consistency_correlation": 0.9998854632172717,
+        "estimated_sir_db": 3.6977258578448478,
+        "target_rms_dbfs": -27.3771010309002,
+        "interferer_rms_dbfs": -31.074826888745047,
+        "mixture_rms_dbfs": -25.82888938866569
+      },
+      {
+        "channel": 2,
+        "mixture_consistency_residual_db": -35.9085959972858,
+        "mixture_consistency_correlation": 0.9998717556858926,
+        "estimated_sir_db": 3.6961333289371003,
+        "target_rms_dbfs": -27.75531071128281,
+        "interferer_rms_dbfs": -31.45144404021991,
+        "mixture_rms_dbfs": -26.206781824051696
+      }
+    ],
+    "residual_db_max": -35.9085959972858,
+    "correlation_min": 0.9998717556858926
+  },
+  "quality_gate": {
+    "enabled": false,
+    "passed": true,
+    "max_additivity_residual_db": -6.0,
+    "min_additivity_correlation": 0.7,
+    "reasons": []
+  }
+}

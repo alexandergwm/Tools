@@ -33,18 +33,20 @@ sweep:
 
 repeats:
   minimum: 5
-  maximum: 10
+  maximum: 8
   correlation_threshold: 0.90
   peak_drift_samples: 2
   minimum_sweep_snr_db: 6.0
-  required_stable_takes: 3
+  required_stable_takes: 2
+  aggregate_change_threshold_db: -40.0
+  reconstruction_change_threshold_db: 0.1
   reject_clipped: true
   clip_threshold: 0.999
   pause_s: 1.0
 
 scene:
   # 默认现场方案：目标人工嘴单独播放后，立即采集两路同时播放的 mixed。
-  items: [target_only, mixture]
+  items: [target_only, interferer_only, mixture]
   source_mode: folders
   duration_s: 4.0
   ambient_duration_s: 10.0

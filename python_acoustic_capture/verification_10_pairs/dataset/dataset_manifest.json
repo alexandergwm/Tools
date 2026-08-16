@@ -14,5 +14,11 @@
   "supervised_input": "mixture_recording",
   "supervised_target": "target_recording",
   "microphone_storage": "one_multichannel_wav_per_recording",
+  "audio_layout": {
+    "mixture_recording": "audio/target-mixed/<run_id>/",
+    "target_recording": "audio/target-only/<run_id>/",
+    "interferer_recording": "audio/interferer-only/<run_id>/",
+    "ambient_recording": "audio/ambient/<run_id>/"
+  },
   "split_leakage_rule": "group by exact target content and physical capture group before train/valid/test split"
 }

@@ -1,0 +1,2764 @@
+{
+  "schema_version": 2,
+  "run_uuid": "718edc3f-e2e9-4e71-90b8-1adeb5d010fd",
+  "software_version": "0.2.6",
+  "kind": "scene",
+  "created_at": "2026-08-16T15:52:17.996358+00:00",
+  "host": "GavinWin",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "python": "3.12.13",
+  "git_commit": null,
+  "config_sha256": "fa79b523b80d1b98a0b8230cffac002bed785350661d66e9959f86e540451c14",
+  "array_geometry_sha256": "",
+  "audio_backend": "simulated",
+  "audio_host_api": null,
+  "audio_input_device": null,
+  "audio_output_device": null,
+  "audio_input_channels": [
+    1,
+    2
+  ],
+  "status": "completed",
+  "metadata": {
+    "project_id": "verify_ten_supervised_pairs",
+    "room_id": "simulated_room",
+    "scene_id": "simulated_closed_loop_10_pairs",
+    "experiment_id": "simulated_closed_loop_10_pairs",
+    "artificial_head_id": "simulator",
+    "headset_model_id": "simulator_model",
+    "headset_unit_id": "simulator_headset",
+    "wearing_id": "fixed",
+    "boom_pose_id": "fixed",
+    "microphone_1": "left",
+    "microphone_2": "right",
+    "target": {
+      "source_id": "simulated_mouth",
+      "position_id": "front",
+      "azimuth_deg": 0,
+      "elevation_deg": 0,
+      "height_m": 1.4,
+      "distance_m": 0.05
+    },
+    "interferer": {
+      "source_id": "simulated_interferer",
+      "position_id": "right",
+      "azimuth_deg": 90,
+      "elevation_deg": 0,
+      "height_m": 1.4,
+      "distance_m": 1.0
+    }
+  },
+  "preflight": {
+    "schema_version": 1,
+    "workflow": "scene",
+    "capture_profile": "standard",
+    "status": "warning",
+    "can_start": true,
+    "production_ready": false,
+    "error_count": 0,
+    "warning_count": 2,
+    "checks": [
+      {
+        "check_id": "capture_profile",
+        "status": "pass",
+        "title": "采集配置级别",
+        "detail": "当前为 standard；production 模式会阻止缺少关键元数据的正式采集。"
+      },
+      {
+        "check_id": "traceability",
+        "status": "pass",
+        "title": "实验身份与物理条件",
+        "detail": "项目、房间、人工头、耳机个体、佩戴和麦杆姿态均已记录。"
+      },
+      {
+        "check_id": "array_geometry",
+        "status": "warning",
+        "title": "麦克风阵列定义",
+        "detail": "已使用 microphone_N 保存稳定通道身份；若模型显式使用阵列几何，再在项目模板中补 metadata.array。"
+      },
+      {
+        "check_id": "speech_source_geometry",
+        "status": "pass",
+        "title": "语音声源与几何",
+        "detail": "当前采集场景所需的目标/干扰声源身份与位置已记录。"
+      },
+      {
+        "check_id": "source_files",
+        "status": "pass",
+        "title": "播放素材",
+        "detail": "所需播放文件或文件夹存在。"
+      },
+      {
+        "check_id": "shared_hardware_clock",
+        "status": "pass",
+        "title": "监督配对硬件时钟",
+        "detail": "输入与输出使用同一可验证双工设备。"
+      },
+      {
+        "check_id": "source_output_routing",
+        "status": "pass",
+        "title": "目标/干扰输出路由",
+        "detail": "目标输出 1，干扰输出 2。"
+      },
+      {
+        "check_id": "calibration",
+        "status": "warning",
+        "title": "校准记录",
+        "detail": "未记录麦克风灵敏度/输入增益/播放 SPL 校准；相对训练可用，但跨批次电平不可严格比较。"
+      },
+      {
+        "check_id": "storage",
+        "status": "pass",
+        "title": "保存位置",
+        "detail": "保存目录：E:\\Code_Github\\Tools-main\\Tools-main\\python_acoustic_capture\\verification_10_pairs\\runs；可用空间 333.6 GiB；预计本批最多约 0.0 GiB（含 15% 余量）"
+      }
+    ]
+  },
+  "artifacts": [
+    {
+      "path": "config_resolved.yaml",
+      "bytes": 2640,
+      "sha256": "e773ddaf1a36e69f983b42ce6a16d8f970038a25b6a265b11d239679a2f38e55"
+    },
+    {
+      "path": "metrics/preflight_report.json",
+      "bytes": 2263,
+      "sha256": "d6d2f8e33355d814a4cd43eb2a8b934370da21b276d5250ec693f40ef4cf60f3"
+    },
+    {
+      "path": "metrics/scene_checkpoint.json",
+      "bytes": 163,
+      "sha256": "d4ac3b806d9d6809eac2ef353b753c33d2e433271ad8b2a44d830191bdcf7ff3"
+    },
+    {
+      "path": "references/sample_0001_target_emitted.wav",
+      "bytes": 20560,
+      "sha256": "d4fd6508619773e5e9cd5fb04c35d409c2ab9558d132eeb44f3807b8329c8101"
+    },
+    {
+      "path": "references/sample_0001_interferer_emitted.wav",
+      "bytes": 20560,
+      "sha256": "e08feb604141f7aa4586f1c4d8da7fb6df35be5b472c6bb2d51121ee07c8e04f"
+    },
+    {
+      "path": "raw/sample_0001_rep_001_paired_sequence_mics.wav",
+      "bytes": 135768,
+      "sha256": "4541ed56a68a383a9b103c2c80630321d336797c50aa66d6c562d4b978a37ed8"
+    },
+    {
+      "path": "references/sample_0001_rep_001_paired_sequence_playback.wav",
+      "bytes": 135768,
+      "sha256": "8cf20475f0ff6abf57cb3a04f7009a00a7327182f58aeab90299891a079eabf4"
+    },
+    {
+      "path": "metrics/sample_0001_rep_001_paired_sequence_layout.json",
+      "bytes": 577,
+      "sha256": "d3bd7043813aa79944afab96e665cb431366f8035d09562d7af1c4d4690b30c9"
+    },
+    {
+      "path": "raw/sample_0001_rep_001_target_only_mics.wav",
+      "bytes": 41048,
+      "sha256": "c57fef13a7461fd9958ed240e5e42e10aca7e795a3aff3e9a56c7ec5942d9a99"
+    },
+    {
+      "path": "references/sample_0001_rep_001_target_only_playback.wav",
+      "bytes": 41048,
+      "sha256": "93b57e3ef87bec4e8ea0ca1b0b67500ecf4b3aee789af11d864500b2f196b0d4"
+    },
+    {
+      "path": "metrics/sample_0001_rep_001_target_only.json",
+      "bytes": 1242,
+      "sha256": "1753b3776ca4ce6d9b9614310090c92301837b866a049cd665e5a67db064c367"
+    },
+    {
+      "path": "raw/sample_0001_rep_001_interferer_only_mics.wav",
+      "bytes": 41048,
+      "sha256": "2abec131bf3935ec37805cc16be35c043cd4cc9b67b12ec079021331196c19f6"
+    },
+    {
+      "path": "references/sample_0001_rep_001_interferer_only_playback.wav",
+      "bytes": 41048,
+      "sha256": "39d4ac1eca161383d67832104d9c6a98ce7e061db51b5089fc4774d2ac8724f6"
+    },
+    {
+      "path": "metrics/sample_0001_rep_001_interferer_only.json",
+      "bytes": 1252,
+      "sha256": "00837b25739d3d8963f566f21d98479c29ff96aaad78d59124a7221c15dbf674"
+    },
+    {
+      "path": "raw/sample_0001_rep_001_mixture_mics.wav",
+      "bytes": 41048,
+      "sha256": "e8d4f7d278dcf33b6ae608c9a4ea626869c7520d899ab92abfa8e5f0437b692c"
+    },
+    {
+      "path": "references/sample_0001_rep_001_mixture_playback.wav",
+      "bytes": 41048,
+      "sha256": "bba4d7af9ff13fff955de82d3924a5c4f76bcb87700e11a4c3280b2d58813dd8"
+    },
+    {
+      "path": "metrics/sample_0001_rep_001_mixture.json",
+      "bytes": 1237,
+      "sha256": "1c066b648da450a1cf434a25f8bcd40b96872c1ded3099b46af53485373a9b8c"
+    },
+    {
+      "path": "metrics/sample_0001_rep_001_paired_sequence_supervision_quality.json",
+      "bytes": 1251,
+      "sha256": "21350bfed50e7cb2a37bc7bda90ef51699c86e4ad73325c1dcf306775efcc2c2"
+    },
+    {
+      "path": "references/sample_0002_target_emitted.wav",
+      "bytes": 20560,
+      "sha256": "9bd6f8b3ee8fbc184f31598f639e23963f5b14af7af87a54c635b15b75e5a409"
+    },
+    {
+      "path": "references/sample_0002_interferer_emitted.wav",
+      "bytes": 20560,
+      "sha256": "a493dc91c2bff65d1eaec6d72874d4f05f3692d8ee7b834fd402da0bad098a80"
+    },
+    {
+      "path": "raw/sample_0002_rep_001_paired_sequence_mics.wav",
+      "bytes": 135768,
+      "sha256": "569842ba6ed2ad9ba587e6c91bfe9475ebf6dab375f82d4cb8a04b3fcb9c7548"
+    },
+    {
+      "path": "references/sample_0002_rep_001_paired_sequence_playback.wav",
+      "bytes": 135768,
+      "sha256": "cbc907c87f971fb9d03c5b78fc07b14d88324f8624b2fdb17b57abafa35f0d97"
+    },
+    {
+      "path": "metrics/sample_0002_rep_001_paired_sequence_layout.json",
+      "bytes": 577,
+      "sha256": "3530667b440ab653a52414a0d0cbf45c784c7036554aa056e118519ff7ed4012"
+    },
+    {
+      "path": "raw/sample_0002_rep_001_target_only_mics.wav",
+      "bytes": 41048,
+      "sha256": "b774d511803a6b14fc1629bf8dc338e75dcf1d06360ae38dbc7d7d278f623379"
+    },
+    {
+      "path": "references/sample_0002_rep_001_target_only_playback.wav",
+      "bytes": 41048,
+      "sha256": "fb66ed93c1408a847c929558b6c2572e319f89cb947df0cdde6309064a1b2c38"
+    },
+    {
+      "path": "metrics/sample_0002_rep_001_target_only.json",
+      "bytes": 1240,
+      "sha256": "3d065422f2ffa06c784355ad5fea3b36ba44e1f1209ed63c20a439aa30bafa74"
+    },
+    {
+      "path": "raw/sample_0002_rep_001_interferer_only_mics.wav",
+      "bytes": 41048,
+      "sha256": "c9e9af2d36f582abbdabcdd90a1bcd82d183f0e927dca89c804752d2f4d3b27b"
+    },
+    {
+      "path": "references/sample_0002_rep_001_interferer_only_playback.wav",
+      "bytes": 41048,
+      "sha256": "b91c9c86720c79da8c4f84ad85da7c6dfc63a92c7ba40e479e80814497ec82d9"
+    },
+    {
+      "path": "metrics/sample_0002_rep_001_interferer_only.json",
+      "bytes": 1252,
+      "sha256": "425087a69bcc6d59c8ba4e5729af2f9b4bd3fcc69e60ff6612a1e3a4d1f8b618"
+    },
+    {
+      "path": "raw/sample_0002_rep_001_mixture_mics.wav",
+      "bytes": 41048,
+      "sha256": "968841ad8f5956e0ffb85dae935122d43d33423aed7ead693feb5c19fcc70120"
+    },
+    {
+      "path": "references/sample_0002_rep_001_mixture_playback.wav",
+      "bytes": 41048,
+      "sha256": "869fb99857f3828fe46005fa486d8d06d755e61d06aed91cf7478dfe10cef368"
+    },
+    {
+      "path": "metrics/sample_0002_rep_001_mixture.json",
+      "bytes": 1236,
+      "sha256": "b8a214f9ed435f654eac4203ac5712a9b18e6d0b248bf0f790b91026bb6cebaa"
+    },
+    {
+      "path": "metrics/sample_0002_rep_001_paired_sequence_supervision_quality.json",
+      "bytes": 1250,
+      "sha256": "d81a123f24b45c73d5d471e49dccb9432b9f91a334eb6d5757d6c56c15d3fc82"
+    },
+    {
+      "path": "references/sample_0003_target_emitted.wav",
+      "bytes": 20560,
+      "sha256": "663441000918a8e18f4858b7dd54238beebc18f260f0ae4b6afdcd88272ff1c6"
+    },
+    {
+      "path": "references/sample_0003_interferer_emitted.wav",
+      "bytes": 20560,
+      "sha256": "f4661e7009943a4aaedee3c714ef4bf509f6ce9f602f288bcf5f974767b4128d"
+    },
+    {
+      "path": "raw/sample_0003_rep_001_paired_sequence_mics.wav",
+      "bytes": 135768,
+      "sha256": "a53e640cd723845f839b5afb98f6c46bef91232e154b4a42b13cced2e5332361"
+    },
+    {
+      "path": "references/sample_0003_rep_001_paired_sequence_playback.wav",
+      "bytes": 135768,
+      "sha256": "12eefb8a2b1e59d4229888bb6bd3048c16ebb9ef71ef55571404285788a9ea02"
+    },
+    {
+      "path": "metrics/sample_0003_rep_001_paired_sequence_layout.json",
+      "bytes": 577,
+      "sha256": "0110d5ddbda238b8344bbc47b274b53a8ec9f56a5199ce38d77e994855d32684"
+    },
+    {
+      "path": "raw/sample_0003_rep_001_target_only_mics.wav",
+      "bytes": 41048,
+      "sha256": "87f7ec30c70ff591d70211c64d3260c64f2f14e5b73fc5bed90971ecb66071ef"
+    },
+    {
+      "path": "references/sample_0003_rep_001_target_only_playback.wav",
+      "bytes": 41048,
+      "sha256": "1151e7d2584b86a4a91dc799e5107a4f85c80dc756cd421e601efb40ed10f88f"
+    },
+    {
+      "path": "metrics/sample_0003_rep_001_target_only.json",
+      "bytes": 1238,
+      "sha256": "066e3afa577e8336d47eb079200680380bb6c3d7bf48fbe76969c35d64f03733"
+    },
+    {
+      "path": "raw/sample_0003_rep_001_interferer_only_mics.wav",
+      "bytes": 41048,
+      "sha256": "5a05b0f44eaff638bbbd2f1a9e6e8642417d2b46d948f5e044d67de068a2f268"
+    },
+    {
+      "path": "references/sample_0003_rep_001_interferer_only_playback.wav",
+      "bytes": 41048,
+      "sha256": "2530ff95ebf5f900bcacabcb022a3dbd64b52540cc9adbc3b9378f04a75267e8"
+    },
+    {
+      "path": "metrics/sample_0003_rep_001_interferer_only.json",
+      "bytes": 1251,
+      "sha256": "58d9266a427de237222a288b2a102c24b97ee0f8bd19cb5e90886686b2c0e463"
+    },
+    {
+      "path": "raw/sample_0003_rep_001_mixture_mics.wav",
+      "bytes": 41048,
+      "sha256": "6ac12b1265ed3d5793fe963ae07a6025150b68d814874b956e6edf8df099405b"
+    },
+    {
+      "path": "references/sample_0003_rep_001_mixture_playback.wav",
+      "bytes": 41048,
+      "sha256": "f12eb83643a7ed4c0d64cdc7c82bbe33d0a70398335ef524f4faf0e5cb33aa9b"
+    },
+    {
+      "path": "metrics/sample_0003_rep_001_mixture.json",
+      "bytes": 1238,
+      "sha256": "01556f77a6c8a823b1eb48c6653b99a08993f3302c4a4ee7ad8e4f5c97592d7a"
+    },
+    {
+      "path": "metrics/sample_0003_rep_001_paired_sequence_supervision_quality.json",
+      "bytes": 1252,
+      "sha256": "d07b48a97ca24d65b263e0c943f033a7c971858a35d38b82d20103415027d529"
+    },
+    {
+      "path": "references/sample_0004_target_emitted.wav",
+      "bytes": 20560,
+      "sha256": "c3019264f1920422a3cbc9844d2a994400264c5c0a17d0717add9b572adf561f"
+    },
+    {
+      "path": "references/sample_0004_interferer_emitted.wav",
+      "bytes": 20560,
+      "sha256": "b82075f489e21d8536088f06de662b1a2eb49772f79408595027b8258ad3e123"
+    },
+    {
+      "path": "raw/sample_0004_rep_001_paired_sequence_mics.wav",
+      "bytes": 135768,
+      "sha256": "a3f03fc5cfa74934cf95c9228a01d376bdf0eb5f6243d4ddb170d0adec305f6c"
+    },
+    {
+      "path": "references/sample_0004_rep_001_paired_sequence_playback.wav",
+      "bytes": 135768,
+      "sha256": "994a9695dd8cc870f2285cc021147dc944a0b8a809267c918729b60a1b6ddddb"
+    },
+    {
+      "path": "metrics/sample_0004_rep_001_paired_sequence_layout.json",
+      "bytes": 577,
+      "sha256": "7790aa1fd281c59f5b6ccc64b7c444bd1f76f66f1b2ceafc99ea0b6651bde7c7"
+    },
+    {
+      "path": "raw/sample_0004_rep_001_target_only_mics.wav",
+      "bytes": 41048,
+      "sha256": "ee8ef5b071ba1ee2d1a2b31e94735fe72c342bd40986582d3e27d1dadf566907"
+    },
+    {
+      "path": "references/sample_0004_rep_001_target_only_playback.wav",
+      "bytes": 41048,
+      "sha256": "b40b4c55091473dabdb0d589f37adc4ffe628264ecd686815b279c416d87f6d0"
+    },
+    {
+      "path": "metrics/sample_0004_rep_001_target_only.json",
+      "bytes": 1244,
+      "sha256": "62e04714bc18f44a81968da7557bc5c907148c0e8ddbf78e5b2dbb14fed588ea"
+    },
+    {
+      "path": "raw/sample_0004_rep_001_interferer_only_mics.wav",
+      "bytes": 41048,
+      "sha256": "46ddf5b17309ab78136be675dd98e2d0851b2e9de3eb8edfc2806b2f616260e0"
+    },
+    {
+      "path": "references/sample_0004_rep_001_interferer_only_playback.wav",
+      "bytes": 41048,
+      "sha256": "eb9b4e88148db9e87269ab4ac084d3ef67c36f12357924d2b54d56eb2e953264"
+    },
+    {
+      "path": "metrics/sample_0004_rep_001_interferer_only.json",
+      "bytes": 1254,
+      "sha256": "d6d9bc8af53a86282aa042d7adf4a3abddee69ba9e93eba53c41b483b23ba1bc"
+    },
+    {
+      "path": "raw/sample_0004_rep_001_mixture_mics.wav",
+      "bytes": 41048,
+      "sha256": "ca254f22723ae71dbf36c690202484397e7b6e4a818fe2aa4f9894f80cc04be4"
+    },
+    {
+      "path": "references/sample_0004_rep_001_mixture_playback.wav",
+      "bytes": 41048,
+      "sha256": "99b08d5da68bcc55180221042120ef35278a9daaa0d8b36465e26687d56d5337"
+    },
+    {
+      "path": "metrics/sample_0004_rep_001_mixture.json",
+      "bytes": 1238,
+      "sha256": "6443cff812f8e84c32854214ff526dac9edbeec026eebe227664084cfccf0d4c"
+    },
+    {
+      "path": "metrics/sample_0004_rep_001_paired_sequence_supervision_quality.json",
+      "bytes": 1251,
+      "sha256": "3299cb83ff893d9a2c1f9a4e1e04b76dcdb63bf7c8731e720a324fdea9c7b233"
+    },
+    {
+      "path": "references/sample_0005_target_emitted.wav",
+      "bytes": 20560,
+      "sha256": "fc84151017055e3fb9842fe9a1a8d1210e07ef8c01d73ea1562c6666f43e138e"
+    },
+    {
+      "path": "references/sample_0005_interferer_emitted.wav",
+      "bytes": 20560,
+      "sha256": "2705aa8e7fad4f559fca01229014fe2b96b5ec5b4eab9a8a9d2c2836b51dd237"
+    },
+    {
+      "path": "raw/sample_0005_rep_001_paired_sequence_mics.wav",
+      "bytes": 135768,
+      "sha256": "46173f14bceff746092c7af14da0f93f083529ba7d068ed8340b6451b7222435"
+    },
+    {
+      "path": "references/sample_0005_rep_001_paired_sequence_playback.wav",
+      "bytes": 135768,
+      "sha256": "082e6453bc238170245523263e90fc116de43fe956bb9403db6b01d5b0f57d44"
+    },
+    {
+      "path": "metrics/sample_0005_rep_001_paired_sequence_layout.json",
+      "bytes": 577,
+      "sha256": "51646ad494420cf9d6b7f6261df4e06452bd85c976b72e51cffba960991f8207"
+    },
+    {
+      "path": "raw/sample_0005_rep_001_target_only_mics.wav",
+      "bytes": 41048,
+      "sha256": "5af9fe8ba0c7f462e653b3a29a14954fc4368d3787c328ed42a622c7e5507bf2"
+    },
+    {
+      "path": "references/sample_0005_rep_001_target_only_playback.wav",
+      "bytes": 41048,
+      "sha256": "f56261d0703bf44a5f3a7dd2849543e2b03150364084bf5d90234579a5de243d"
+    },
+    {
+      "path": "metrics/sample_0005_rep_001_target_only.json",
+      "bytes": 1241,
+      "sha256": "b6f6858730865d926681cde8ba0ee33b901af1f1d303b5d2ea4f882d9293038e"
+    },
+    {
+      "path": "raw/sample_0005_rep_001_interferer_only_mics.wav",
+      "bytes": 41048,
+      "sha256": "eec03c0600b43c42254e541d42926429a1b6145c7cff93f640d3bc957b441b70"
+    },
+    {
+      "path": "references/sample_0005_rep_001_interferer_only_playback.wav",
+      "bytes": 41048,
+      "sha256": "b4cbfe3ece1cc85e3d985e5f772f5a76d3b40d627e32e123a29ca8f858799e2a"
+    },
+    {
+      "path": "metrics/sample_0005_rep_001_interferer_only.json",
+      "bytes": 1250,
+      "sha256": "8b31f40cad902cb244a9db3082a47d7ff62f838f7e0b5b6949a5aa1e5278078e"
+    },
+    {
+      "path": "raw/sample_0005_rep_001_mixture_mics.wav",
+      "bytes": 41048,
+      "sha256": "3a5eae1928df7de9f8aba88d468de4efa1b96a60a8f776a6b705324fc59402af"
+    },
+    {
+      "path": "references/sample_0005_rep_001_mixture_playback.wav",
+      "bytes": 41048,
+      "sha256": "49c13c0f2aeaae1f556792ae4e5d99b20cacf4bcc586b922139081a1eb4b9147"
+    },
+    {
+      "path": "metrics/sample_0005_rep_001_mixture.json",
+      "bytes": 1238,
+      "sha256": "cb7aa7e7a04dad398c5120a3f47a11158ce8626cec0dc6998b4e746c2c2e18e5"
+    },
+    {
+      "path": "metrics/sample_0005_rep_001_paired_sequence_supervision_quality.json",
+      "bytes": 1252,
+      "sha256": "ca97658c5a7e5cb63a68f0ee250484b52ce7f474821eaaedf3baa1a27712646c"
+    },
+    {
+      "path": "references/sample_0006_target_emitted.wav",
+      "bytes": 20560,
+      "sha256": "5ae264182a71f93ee1f43b53f65b92c1cfd0a637b67f25dcd7847ad85cbe2584"
+    },
+    {
+      "path": "references/sample_0006_interferer_emitted.wav",
+      "bytes": 20560,
+      "sha256": "024324116971e3d5d736eb3125a74eb44b724c8ab37680d715bfa164900f6dde"
+    },
+    {
+      "path": "raw/sample_0006_rep_001_paired_sequence_mics.wav",
+      "bytes": 135768,
+      "sha256": "adedc838bd5e9160ad881c59444965ac58f738d04055841353f5c2331bb16155"
+    },
+    {
+      "path": "references/sample_0006_rep_001_paired_sequence_playback.wav",
+      "bytes": 135768,
+      "sha256": "b875619ea383c15f139fcc4551215444e58498d61fdfa03ef3a839ddee68bfcd"
+    },
+    {
+      "path": "metrics/sample_0006_rep_001_paired_sequence_layout.json",
+      "bytes": 577,
+      "sha256": "0ea4596000ebab7ff4225c69af4b58125dfe8b41e32c2c7629c33e96aba89a20"
+    },
+    {
+      "path": "raw/sample_0006_rep_001_target_only_mics.wav",
+      "bytes": 41048,
+      "sha256": "a3d0728cd4e9566fda926bad3024f5d40484dca38f378f37c71d806744aafed9"
+    },
+    {
+      "path": "references/sample_0006_rep_001_target_only_playback.wav",
+      "bytes": 41048,
+      "sha256": "7d43847e04efd202579c3fbf0cd2f812f1aba5c1b58ab826787c06b1d9ecbb2b"
+    },
+    {
+      "path": "metrics/sample_0006_rep_001_target_only.json",
+      "bytes": 1245,
+      "sha256": "ded52fc36b019ef87655aa780086129c87786b5509ec7ad4596c4ce1cfe3ee6a"
+    },
+    {
+      "path": "raw/sample_0006_rep_001_interferer_only_mics.wav",
+      "bytes": 41048,
+      "sha256": "4edc210d6483075102376de88fc7516eb312111f9e6cbac6082d58b1ace9911b"
+    },
+    {
+      "path": "references/sample_0006_rep_001_interferer_only_playback.wav",
+      "bytes": 41048,
+      "sha256": "ab2d5d1628b1cf1e2824b67adbcc7cff0002d9f136721ecf273f59cf762888c3"
+    },
+    {
+      "path": "metrics/sample_0006_rep_001_interferer_only.json",
+      "bytes": 1253,
+      "sha256": "1d63e2232ff6e058f13d0c6f629e2f651da363af6648c5186b9373ea97e3fa3d"
+    },
+    {
+      "path": "raw/sample_0006_rep_001_mixture_mics.wav",
+      "bytes": 41048,
+      "sha256": "ef5a8e30615befcf550bd078955f034507711100b400303849376b912380e785"
+    },
+    {
+      "path": "references/sample_0006_rep_001_mixture_playback.wav",
+      "bytes": 41048,
+      "sha256": "59cecf1dde02dbf9888108716cd69ce4ce7e38e16de528205c7505561c11d2ad"
+    },
+    {
+      "path": "metrics/sample_0006_rep_001_mixture.json",
+      "bytes": 1237,
+      "sha256": "c26c4a23fdcb415a287dc4484f4f7f9f8ba9f7dbf9060e976d7032739d00918c"
+    },
+    {
+      "path": "metrics/sample_0006_rep_001_paired_sequence_supervision_quality.json",
+      "bytes": 1254,
+      "sha256": "a48c43f0ecbd247b0297c8c900770b22176cff24dc37aba98b6a8bec0d939da0"
+    },
+    {
+      "path": "references/sample_0007_target_emitted.wav",
+      "bytes": 20560,
+      "sha256": "006d5bf2216aacad91aaf5642ab9e8152d07cba43bcead2631cba2e01fc95e0c"
+    },
+    {
+      "path": "references/sample_0007_interferer_emitted.wav",
+      "bytes": 20560,
+      "sha256": "c24ee8dac4f7a037f828e0069fcde23cc6bdad7e6dc49bed2a73b07a566f67cb"
+    },
+    {
+      "path": "raw/sample_0007_rep_001_paired_sequence_mics.wav",
+      "bytes": 135768,
+      "sha256": "81caff85c13a0c168604359db06c1a13a0a1ad82ec5143735990188a09b53397"
+    },
+    {
+      "path": "references/sample_0007_rep_001_paired_sequence_playback.wav",
+      "bytes": 135768,
+      "sha256": "8d72e2d193512fa5aea10edc345bbd30cfabfba5874fdd66719d5bfbb220dfcc"
+    },
+    {
+      "path": "metrics/sample_0007_rep_001_paired_sequence_layout.json",
+      "bytes": 577,
+      "sha256": "673e98a6d527b5dabaada31626bce0db4b47d5bea287953ca4633555d4c6eceb"
+    },
+    {
+      "path": "raw/sample_0007_rep_001_target_only_mics.wav",
+      "bytes": 41048,
+      "sha256": "236cfbc5eb29866bc9ac10b529bcdfce012541e67e21452d431ca37ff8c6df75"
+    },
+    {
+      "path": "references/sample_0007_rep_001_target_only_playback.wav",
+      "bytes": 41048,
+      "sha256": "4e4230a254074052eeb585ec6ccc627843739678462ed22148b36cc3980343dc"
+    },
+    {
+      "path": "metrics/sample_0007_rep_001_target_only.json",
+      "bytes": 1241,
+      "sha256": "2f85de0216b68baf3de034b81b8b741d8eea0168c328f64843d20b6af7f20a16"
+    },
+    {
+      "path": "raw/sample_0007_rep_001_interferer_only_mics.wav",
+      "bytes": 41048,
+      "sha256": "7b6dbc184e1aee6516a76f7fa2862de67bbc27549d01e65fcde99f2298fa0e30"
+    },
+    {
+      "path": "references/sample_0007_rep_001_interferer_only_playback.wav",
+      "bytes": 41048,
+      "sha256": "401bb402f0e91a54f689570ed9b91303f26d6df5bf14a39060069c8b973666ec"
+    },
+    {
+      "path": "metrics/sample_0007_rep_001_interferer_only.json",
+      "bytes": 1250,
+      "sha256": "4f90436567c84e6741830128d2c5bc0e2beb2be101e67f9d37a5c91f5cf7f370"
+    },
+    {
+      "path": "raw/sample_0007_rep_001_mixture_mics.wav",
+      "bytes": 41048,
+      "sha256": "373e99a28aacfd63037d5d528903eed175114a7992f2b519417d4db171a16d57"
+    },
+    {
+      "path": "references/sample_0007_rep_001_mixture_playback.wav",
+      "bytes": 41048,
+      "sha256": "fc3818811d92829e021aba725c32111432a756e0665eb330efcb7cf456b665ba"
+    },
+    {
+      "path": "metrics/sample_0007_rep_001_mixture.json",
+      "bytes": 1238,
+      "sha256": "38a9d9827d7c6153fd6227ba3c5361014beb39cb8600b9d5d874122aef1817a3"
+    },
+    {
+      "path": "metrics/sample_0007_rep_001_paired_sequence_supervision_quality.json",
+      "bytes": 1251,
+      "sha256": "73724739285d4244f89f993d0b129fb11e26256458c163c43c96670eb623a334"
+    },
+    {
+      "path": "references/sample_0008_target_emitted.wav",
+      "bytes": 20560,
+      "sha256": "3c7cb2e4707dbeb7850694bb26de2494b096a2dbb7b7560437398313e4e3009a"
+    },
+    {
+      "path": "references/sample_0008_interferer_emitted.wav",
+      "bytes": 20560,
+      "sha256": "606158bc9aadcb90253ca1e8ceb52d98bd25a7bb1dea320544c5a34d38d58a24"
+    },
+    {
+      "path": "raw/sample_0008_rep_001_paired_sequence_mics.wav",
+      "bytes": 135768,
+      "sha256": "fd8123faca04301787191c17800bf592f5856e9dfc4ef8c79f57200482b00ecf"
+    },
+    {
+      "path": "references/sample_0008_rep_001_paired_sequence_playback.wav",
+      "bytes": 135768,
+      "sha256": "2755103e2daf8be0df7b8805e9e03a7188002528481baac60c59cc8213b98525"
+    },
+    {
+      "path": "metrics/sample_0008_rep_001_paired_sequence_layout.json",
+      "bytes": 577,
+      "sha256": "ab103be668db2bae72519c4135a6381f93b27eb34e60e938e02d640502443f2f"
+    },
+    {
+      "path": "raw/sample_0008_rep_001_target_only_mics.wav",
+      "bytes": 41048,
+      "sha256": "bef36bffaae6f44fd83b0f437878a9559a19ba674b3ff76ab46c437f1b81c0bb"
+    },
+    {
+      "path": "references/sample_0008_rep_001_target_only_playback.wav",
+      "bytes": 41048,
+      "sha256": "db7fc60663512460249aef225531a9270a53c7c9668734124aef18026d8712ee"
+    },
+    {
+      "path": "metrics/sample_0008_rep_001_target_only.json",
+      "bytes": 1241,
+      "sha256": "87b872a4a170a686a1f45ee03be92aa400a983874c7a2a1286aa187fc8558b3a"
+    },
+    {
+      "path": "raw/sample_0008_rep_001_interferer_only_mics.wav",
+      "bytes": 41048,
+      "sha256": "ed2fc316b6551029e9a0712b272c15c094ef7ba04bbc3dcb14838069a18b67a7"
+    },
+    {
+      "path": "references/sample_0008_rep_001_interferer_only_playback.wav",
+      "bytes": 41048,
+      "sha256": "2052b89f04f3e53361df37509b50a7771ffed4b0e0f1db7edc265c809842a08a"
+    },
+    {
+      "path": "metrics/sample_0008_rep_001_interferer_only.json",
+      "bytes": 1249,
+      "sha256": "21952eb9d738a642b54f9b3e249a532c0cf0f3697ba263332e678d10ac134640"
+    },
+    {
+      "path": "raw/sample_0008_rep_001_mixture_mics.wav",
+      "bytes": 41048,
+      "sha256": "300a35e990acd84ff11a9bed739c7c9dd509ce9fd5144a339a9ae359ad4e13ca"
+    },
+    {
+      "path": "references/sample_0008_rep_001_mixture_playback.wav",
+      "bytes": 41048,
+      "sha256": "a47a685b03f30d0f1419eeecf9137406feca0cd899bfcf73e38a66bf53335d1c"
+    },
+    {
+      "path": "metrics/sample_0008_rep_001_mixture.json",
+      "bytes": 1238,
+      "sha256": "0d3769b47873555435d0a391e7cb038dc7c066d3f6ad6e663aed8c44adb4114d"
+    },
+    {
+      "path": "metrics/sample_0008_rep_001_paired_sequence_supervision_quality.json",
+      "bytes": 1251,
+      "sha256": "ef0e20842c2ae29996dae7cc25e829b60fa04f8f764e2d8f7f97a30d613429d0"
+    },
+    {
+      "path": "references/sample_0009_target_emitted.wav",
+      "bytes": 20560,
+      "sha256": "eff826a0831826a36dfc68da82366c3120ee8c5cf643b23b527fc4c93c0acddb"
+    },
+    {
+      "path": "references/sample_0009_interferer_emitted.wav",
+      "bytes": 20560,
+      "sha256": "7ac08f0e765107471a07cd0ca0f8220c47bdbe243616aa749c6d4241991b22af"
+    },
+    {
+      "path": "raw/sample_0009_rep_001_paired_sequence_mics.wav",
+      "bytes": 135768,
+      "sha256": "15367a093388782fa2d6cca21209fa4e9f81a27d29aaca9790a2af8ec4060a6b"
+    },
+    {
+      "path": "references/sample_0009_rep_001_paired_sequence_playback.wav",
+      "bytes": 135768,
+      "sha256": "81658d15f33374bc81dde3eaa43785008a381f8ba9f9a4b6873c7c88357921a9"
+    },
+    {
+      "path": "metrics/sample_0009_rep_001_paired_sequence_layout.json",
+      "bytes": 577,
+      "sha256": "e3c4ef396884d3b0f35bdf255dbc478d3bd94f531399f2b44413664cc8dcbae2"
+    },
+    {
+      "path": "raw/sample_0009_rep_001_target_only_mics.wav",
+      "bytes": 41048,
+      "sha256": "fd6dd2c559c1807e76c7bd48674ea9defa667f61bd15af4bdacd3332315135b1"
+    },
+    {
+      "path": "references/sample_0009_rep_001_target_only_playback.wav",
+      "bytes": 41048,
+      "sha256": "905f905d517f2a201ecb22227717745503942ca852b87d51dd8b817fbbf537aa"
+    },
+    {
+      "path": "metrics/sample_0009_rep_001_target_only.json",
+      "bytes": 1243,
+      "sha256": "a87ed0679345b0b29d542b7035a1c7778849f8484f7a59fa0a097b3144e950bf"
+    },
+    {
+      "path": "raw/sample_0009_rep_001_interferer_only_mics.wav",
+      "bytes": 41048,
+      "sha256": "da77378eadd2b64baa448b9cc5caac92401430e4bfa19fab55b9c7d8cce48b16"
+    },
+    {
+      "path": "references/sample_0009_rep_001_interferer_only_playback.wav",
+      "bytes": 41048,
+      "sha256": "5275835da0dd6d975569169cff8fc7923b06448e8bd0dcddf57f9ec4836c0a02"
+    },
+    {
+      "path": "metrics/sample_0009_rep_001_interferer_only.json",
+      "bytes": 1250,
+      "sha256": "2937bb80fe3e48a35a0cb6adbe0abaf2d337f056edcdc4572cd7bfa37a4bcc27"
+    },
+    {
+      "path": "raw/sample_0009_rep_001_mixture_mics.wav",
+      "bytes": 41048,
+      "sha256": "04081f1670fb446d6d8b1fc5e07c3980ea8f1cc8a8e9847c51238760f67357bd"
+    },
+    {
+      "path": "references/sample_0009_rep_001_mixture_playback.wav",
+      "bytes": 41048,
+      "sha256": "8f6c35cca71e82a9fb8181d4a7ac151f3991fa1b16061c03878e98c3a3357293"
+    },
+    {
+      "path": "metrics/sample_0009_rep_001_mixture.json",
+      "bytes": 1238,
+      "sha256": "2a626703d327483706d06be05aeb1578cd7f8b06c3f47b8b479e8ff73d0a3269"
+    },
+    {
+      "path": "metrics/sample_0009_rep_001_paired_sequence_supervision_quality.json",
+      "bytes": 1252,
+      "sha256": "5761c087089b2fb9c6ff7148be39fe7e7b18bff35a569eca0b97e471a672467c"
+    },
+    {
+      "path": "references/sample_0010_target_emitted.wav",
+      "bytes": 20560,
+      "sha256": "dc497637730dede5832c3d64fc1526888bec1e70203c63d9d4b88e25227138e4"
+    },
+    {
+      "path": "references/sample_0010_interferer_emitted.wav",
+      "bytes": 20560,
+      "sha256": "e13e162de01fe4c0712a4f70b939ce3d896f659f1c42f840e81ef0e4ab52f80d"
+    },
+    {
+      "path": "raw/sample_0010_rep_001_paired_sequence_mics.wav",
+      "bytes": 135768,
+      "sha256": "05e86e5ff1248ec6c4c55d7079e8f73b07ceb1e02a738b4a55f573c595a17269"
+    },
+    {
+      "path": "references/sample_0010_rep_001_paired_sequence_playback.wav",
+      "bytes": 135768,
+      "sha256": "5fd25f13e9b4b9f8f8ed44f6065271a627d5b0e0b6a20359648571f37709efda"
+    },
+    {
+      "path": "metrics/sample_0010_rep_001_paired_sequence_layout.json",
+      "bytes": 578,
+      "sha256": "6347a87196d64714e8f3cab294dce67e44eea0b763f0e8c0300eec47fd731fca"
+    },
+    {
+      "path": "raw/sample_0010_rep_001_target_only_mics.wav",
+      "bytes": 41048,
+      "sha256": "80c0c8c3cd55c0540dc763ff8d90a3385d56aa7b9d40b1b7cc5b3c86021fe35e"
+    },
+    {
+      "path": "references/sample_0010_rep_001_target_only_playback.wav",
+      "bytes": 41048,
+      "sha256": "a99fe497f29eff2ddd2e5650b314f865d001743dbe0d2aefcfebc45ebe6afbd8"
+    },
+    {
+      "path": "metrics/sample_0010_rep_001_target_only.json",
+      "bytes": 1242,
+      "sha256": "5b16f2aba96d1d08aaa3faf465ecb97f611160f83ab4b55217742d5d4f189393"
+    },
+    {
+      "path": "raw/sample_0010_rep_001_interferer_only_mics.wav",
+      "bytes": 41048,
+      "sha256": "47b69336c9598892e686bcd5cc5f4babd4e11d0204b91c4d4490ab67e13c88e2"
+    },
+    {
+      "path": "references/sample_0010_rep_001_interferer_only_playback.wav",
+      "bytes": 41048,
+      "sha256": "0472e32ece025bf9ec6ba4ec7d507e0a0dc0211acbc9cd9a3b446e392b82fc6e"
+    },
+    {
+      "path": "metrics/sample_0010_rep_001_interferer_only.json",
+      "bytes": 1255,
+      "sha256": "3015bb7c2392402dfe2e05144ea9f2484ce7898440c71a79dd166491256cda4b"
+    },
+    {
+      "path": "raw/sample_0010_rep_001_mixture_mics.wav",
+      "bytes": 41048,
+      "sha256": "3462717c427b1215b1c087163a448a01268d6c603f13364af1eb665409a7b9b2"
+    },
+    {
+      "path": "references/sample_0010_rep_001_mixture_playback.wav",
+      "bytes": 41048,
+      "sha256": "74acdc3b54b62c4a35b10968c9bb45fa257bde037768596324b8606b56aaa5e7"
+    },
+    {
+      "path": "metrics/sample_0010_rep_001_mixture.json",
+      "bytes": 1240,
+      "sha256": "d008264c35ef5cff0e7535ebda35d9d01a87e564a0dd0c061852ae1b6184979f"
+    },
+    {
+      "path": "metrics/sample_0010_rep_001_paired_sequence_supervision_quality.json",
+      "bytes": 1252,
+      "sha256": "a773175719acef6f53b2939261515749a7e354c25fb95b27e36da01c9e6b2f97"
+    },
+    {
+      "path": "references/sources.json",
+      "bytes": 6835,
+      "sha256": "47c281e54241f2249012149a645022d5bdf7420be605a8470355e8ddb2faa36b"
+    },
+    {
+      "path": "labels.jsonl",
+      "bytes": 56136,
+      "sha256": "3b406dfe120aa09aee66d87e061c25b8d49e0a673aca0d9da2f4ae87170d78a6"
+    },
+    {
+      "path": "labels.csv",
+      "bytes": 37460,
+      "sha256": "b5ac6598d5a7217fd4f1f861a2413f7441d7455bc26ccbe5ca59073b23bec234"
+    },
+    {
+      "path": "labels.xlsx",
+      "bytes": 22475,
+      "sha256": "a98a995f7d80c8d52fe58e8cad4c114658f451d604312461b9d8e808fab4b7cb"
+    },
+    {
+      "path": "supervised_pairs.jsonl",
+      "bytes": 56136,
+      "sha256": "3b406dfe120aa09aee66d87e061c25b8d49e0a673aca0d9da2f4ae87170d78a6"
+    },
+    {
+      "path": "supervised_pairs.csv",
+      "bytes": 37460,
+      "sha256": "b5ac6598d5a7217fd4f1f861a2413f7441d7455bc26ccbe5ca59073b23bec234"
+    },
+    {
+      "path": "metrics/summary.json",
+      "bytes": 57303,
+      "sha256": "13cd34dfa16cbbe0aceef1a177d43efbef5cccb4d83d1f02261e8ca64d496b5c"
+    },
+    {
+      "path": "report.md",
+      "bytes": 58364,
+      "sha256": "37bc8e55f479506791ec762e60403c5a949c14a25662ae4f85314e8fe7e067d5"
+    }
+  ],
+  "finished_at": "2026-08-16T15:52:19.071150+00:00",
+  "summary": {
+    "source_mode": "folders",
+    "pairing_mode": "cycle",
+    "pair_count": 10,
+    "items": [
+      "target_only",
+      "interferer_only",
+      "mixture"
+    ],
+    "repetitions": 1,
+    "capture_strategy": "paired_sequence",
+    "sample_alignment": "single_continuous_full_duplex_stream",
+    "captures": [
+      {
+        "sample_index": 1,
+        "automatic_label": "verify10_0001_target_01_interferer_01",
+        "item": "target_only",
+        "repetition": 1,
+        "file": "raw/sample_0001_rep_001_target_only_mics.wav",
+        "paired_stream": "sample_0001_rep_001_paired_sequence",
+        "segment_start_sample": 400,
+        "segment_end_sample": 5520,
+        "channels": [
+          {
+            "channel": 1,
+            "peak": 0.15271542966365814,
+            "peak_dbfs": -16.322341632250364,
+            "rms_dbfs": -23.243623764669277,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 0.000283831585493805
+          },
+          {
+            "channel": 2,
+            "peak": 0.14621609449386597,
+            "peak_dbfs": -16.700096410057238,
+            "rms_dbfs": -23.620908498525594,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 0.0002936974208099727
+          }
+        ],
+        "array_health": {
+          "channel_count": 2,
+          "exact_duplicate_channel_pairs": [],
+          "rms_spread_db": 0.37728473385631744,
+          "has_nonfinite_samples": false,
+          "has_silent_channel": false
+        },
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 1,
+        "automatic_label": "verify10_0001_target_01_interferer_01",
+        "item": "interferer_only",
+        "repetition": 1,
+        "file": "raw/sample_0001_rep_001_interferer_only_mics.wav",
+        "paired_stream": "sample_0001_rep_001_paired_sequence",
+        "segment_start_sample": 5920,
+        "segment_end_sample": 11040,
+        "channels": [
+          {
+            "channel": 1,
+            "peak": 0.07597789913415909,
+            "peak_dbfs": -22.386254385948718,
+            "rms_dbfs": -33.57090650094036,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": -4.779559391197008e-05
+          },
+          {
+            "channel": 2,
+            "peak": 0.07272111624479294,
+            "peak_dbfs": -22.76678926919994,
+            "rms_dbfs": -33.94737467341614,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": -3.7908301006948916e-05
+          }
+        ],
+        "array_health": {
+          "channel_count": 2,
+          "exact_duplicate_channel_pairs": [],
+          "rms_spread_db": 0.3764681724757821,
+          "has_nonfinite_samples": false,
+          "has_silent_channel": false
+        },
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 1,
+        "automatic_label": "verify10_0001_target_01_interferer_01",
+        "item": "mixture",
+        "repetition": 1,
+        "file": "raw/sample_0001_rep_001_mixture_mics.wav",
+        "paired_stream": "sample_0001_rep_001_paired_sequence",
+        "segment_start_sample": 11440,
+        "segment_end_sample": 16560,
+        "channels": [
+          {
+            "channel": 1,
+            "peak": 0.21064196527004242,
+            "peak_dbfs": -13.529102039115221,
+            "rms_dbfs": -22.858214678903895,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 0.00026488416021974714
+          },
+          {
+            "channel": 2,
+            "peak": 0.20171573758125305,
+            "peak_dbfs": -13.90520434828102,
+            "rms_dbfs": -23.23540551139552,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 0.0002756871708941344
+          }
+        ],
+        "array_health": {
+          "channel_count": 2,
+          "exact_duplicate_channel_pairs": [],
+          "rms_spread_db": 0.37719083249162466,
+          "has_nonfinite_samples": false,
+          "has_silent_channel": false
+        },
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 2,
+        "automatic_label": "verify10_0002_target_02_interferer_02",
+        "item": "target_only",
+        "repetition": 1,
+        "file": "raw/sample_0002_rep_001_target_only_mics.wav",
+        "paired_stream": "sample_0002_rep_001_paired_sequence",
+        "segment_start_sample": 400,
+        "segment_end_sample": 5520,
+        "channels": [
+          {
+            "channel": 1,
+            "peak": 0.11300340294837952,
+            "peak_dbfs": -18.938169562287186,
+            "rms_dbfs": -27.3771010309002,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 0.00021276055138410576
+          },
+          {
+            "channel": 2,
+            "peak": 0.1081804409623146,
+            "peak_dbfs": -19.317025052608308,
+            "rms_dbfs": -27.75531071128281,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 0.00017874695551530205
+          }
+        ],
+        "array_health": {
+          "channel_count": 2,
+          "exact_duplicate_channel_pairs": [],
+          "rms_spread_db": 0.3782096803826107,
+          "has_nonfinite_samples": false,
+          "has_silent_channel": false
+        },
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 2,
+        "automatic_label": "verify10_0002_target_02_interferer_02",
+        "item": "interferer_only",
+        "repetition": 1,
+        "file": "raw/sample_0002_rep_001_interferer_only_mics.wav",
+        "paired_stream": "sample_0002_rep_001_paired_sequence",
+        "segment_start_sample": 5920,
+        "segment_end_sample": 11040,
+        "channels": [
+          {
+            "channel": 1,
+            "peak": 0.1119406446814537,
+            "peak_dbfs": -19.0202439252176,
+            "rms_dbfs": -31.074826888745047,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": -0.00014423388464153143
+          },
+          {
+            "channel": 2,
+            "peak": 0.10721028596162796,
+            "peak_dbfs": -19.395270911880573,
+            "rms_dbfs": -31.45144404021991,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": -0.00012980035034205472
+          }
+        ],
+        "array_health": {
+          "channel_count": 2,
+          "exact_duplicate_channel_pairs": [],
+          "rms_spread_db": 0.3766171514748642,
+          "has_nonfinite_samples": false,
+          "has_silent_channel": false
+        },
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 2,
+        "automatic_label": "verify10_0002_target_02_interferer_02",
+        "item": "mixture",
+        "repetition": 1,
+        "file": "raw/sample_0002_rep_001_mixture_mics.wav",
+        "paired_stream": "sample_0002_rep_001_paired_sequence",
+        "segment_start_sample": 11440,
+        "segment_end_sample": 16560,
+        "channels": [
+          {
+            "channel": 1,
+            "peak": 0.16418004035949707,
+            "peak_dbfs": -15.693592838195558,
+            "rms_dbfs": -25.82888938866569,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 8.984534743996519e-05
+          },
+          {
+            "channel": 2,
+            "peak": 0.15721747279167175,
+            "peak_dbfs": -16.069983782304277,
+            "rms_dbfs": -26.206781824051696,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 5.924867158491054e-05
+          }
+        ],
+        "array_health": {
+          "channel_count": 2,
+          "exact_duplicate_channel_pairs": [],
+          "rms_spread_db": 0.3778924353860056,
+          "has_nonfinite_samples": false,
+          "has_silent_channel": false
+        },
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 3,
+        "automatic_label": "verify10_0003_target_03_interferer_03",
+        "item": "target_only",
+        "repetition": 1,
+        "file": "raw/sample_0003_rep_001_target_only_mics.wav",
+        "paired_stream": "sample_0003_rep_001_paired_sequence",
+        "segment_start_sample": 400,
+        "segment_end_sample": 5520,
+        "channels": [
+          {
+            "channel": 1,
+            "peak": 0.11764759570360184,
+            "peak_dbfs": -18.588338876487306,
+            "rms_dbfs": -26.327056652683837,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 0.000175081135210486
+          },
+          {
+            "channel": 2,
+            "peak": 0.11265021562576294,
+            "peak_dbfs": -18.96535945297267,
+            "rms_dbfs": -26.70400186959612,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 0.000157961346182689
+          }
+        ],
+        "array_health": {
+          "channel_count": 2,
+          "exact_duplicate_channel_pairs": [],
+          "rms_spread_db": 0.3769452169122829,
+          "has_nonfinite_samples": false,
+          "has_silent_channel": false
+        },
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 3,
+        "automatic_label": "verify10_0003_target_03_interferer_03",
+        "item": "interferer_only",
+        "repetition": 1,
+        "file": "raw/sample_0003_rep_001_interferer_only_mics.wav",
+        "paired_stream": "sample_0003_rep_001_paired_sequence",
+        "segment_start_sample": 5920,
+        "segment_end_sample": 11040,
+        "channels": [
+          {
+            "channel": 1,
+            "peak": 0.08655455708503723,
+            "peak_dbfs": -21.254201232886892,
+            "rms_dbfs": -32.919439839512144,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 6.247872887701068e-05
+          },
+          {
+            "channel": 2,
+            "peak": 0.0828527882695198,
+            "peak_dbfs": -21.633857431147476,
+            "rms_dbfs": -33.29590516324285,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 6.637342421031978e-05
+          }
+        ],
+        "array_health": {
+          "channel_count": 2,
+          "exact_duplicate_channel_pairs": [],
+          "rms_spread_db": 0.37646532373070585,
+          "has_nonfinite_samples": false,
+          "has_silent_channel": false
+        },
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 3,
+        "automatic_label": "verify10_0003_target_03_interferer_03",
+        "item": "mixture",
+        "repetition": 1,
+        "file": "raw/sample_0003_rep_001_mixture_mics.wav",
+        "paired_stream": "sample_0003_rep_001_paired_sequence",
+        "segment_start_sample": 11440,
+        "segment_end_sample": 16560,
+        "channels": [
+          {
+            "channel": 1,
+            "peak": 0.19073136150836945,
+            "peak_dbfs": -14.391557821281808,
+            "rms_dbfs": -25.458579977984492,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 0.0002495172532161249
+          },
+          {
+            "channel": 2,
+            "peak": 0.1826196312904358,
+            "peak_dbfs": -14.769050767924837,
+            "rms_dbfs": -25.835633880798557,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 0.00022916506938590043
+          }
+        ],
+        "array_health": {
+          "channel_count": 2,
+          "exact_duplicate_channel_pairs": [],
+          "rms_spread_db": 0.37705390281406537,
+          "has_nonfinite_samples": false,
+          "has_silent_channel": false
+        },
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 4,
+        "automatic_label": "verify10_0004_target_04_interferer_04",
+        "item": "target_only",
+        "repetition": 1,
+        "file": "raw/sample_0004_rep_001_target_only_mics.wav",
+        "paired_stream": "sample_0004_rep_001_paired_sequence",
+        "segment_start_sample": 400,
+        "segment_end_sample": 5520,
+        "channels": [
+          {
+            "channel": 1,
+            "peak": 0.11589401215314865,
+            "peak_dbfs": -18.718780039317217,
+            "rms_dbfs": -27.270972074750233,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 0.00014247984075023076
+          },
+          {
+            "channel": 2,
+            "peak": 0.11099400371313095,
+            "peak_dbfs": -19.094009653931835,
+            "rms_dbfs": -27.64896185483057,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 0.00011321925424288559
+          }
+        ],
+        "array_health": {
+          "channel_count": 2,
+          "exact_duplicate_channel_pairs": [],
+          "rms_spread_db": 0.37798978008033757,
+          "has_nonfinite_samples": false,
+          "has_silent_channel": false
+        },
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 4,
+        "automatic_label": "verify10_0004_target_04_interferer_04",
+        "item": "interferer_only",
+        "repetition": 1,
+        "file": "raw/sample_0004_rep_001_interferer_only_mics.wav",
+        "paired_stream": "sample_0004_rep_001_paired_sequence",
+        "segment_start_sample": 5920,
+        "segment_end_sample": 11040,
+        "channels": [
+          {
+            "channel": 1,
+            "peak": 0.09851199388504028,
+            "peak_dbfs": -20.13021781421326,
+            "rms_dbfs": -30.57277106442502,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": -0.00023012705038987223
+          },
+          {
+            "channel": 2,
+            "peak": 0.09434287250041962,
+            "peak_dbfs": -20.505818094541226,
+            "rms_dbfs": -30.949450639405573,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": -0.0002154757239705707
+          }
+        ],
+        "array_health": {
+          "channel_count": 2,
+          "exact_duplicate_channel_pairs": [],
+          "rms_spread_db": 0.37667957498055316,
+          "has_nonfinite_samples": false,
+          "has_silent_channel": false
+        },
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 4,
+        "automatic_label": "verify10_0004_target_04_interferer_04",
+        "item": "mixture",
+        "repetition": 1,
+        "file": "raw/sample_0004_rep_001_mixture_mics.wav",
+        "paired_stream": "sample_0004_rep_001_paired_sequence",
+        "segment_start_sample": 11440,
+        "segment_end_sample": 16560,
+        "channels": [
+          {
+            "channel": 1,
+            "peak": 0.20273256301879883,
+            "peak_dbfs": -13.861529781583883,
+            "rms_dbfs": -25.59174263828343,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": -8.162323986289355e-05
+          },
+          {
+            "channel": 2,
+            "peak": 0.19415438175201416,
+            "peak_dbfs": -14.237056073592546,
+            "rms_dbfs": -25.9692686848345,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": -0.00010079018539699558
+          }
+        ],
+        "array_health": {
+          "channel_count": 2,
+          "exact_duplicate_channel_pairs": [],
+          "rms_spread_db": 0.37752604655106836,
+          "has_nonfinite_samples": false,
+          "has_silent_channel": false
+        },
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 5,
+        "automatic_label": "verify10_0005_target_05_interferer_05",
+        "item": "target_only",
+        "repetition": 1,
+        "file": "raw/sample_0005_rep_001_target_only_mics.wav",
+        "paired_stream": "sample_0005_rep_001_paired_sequence",
+        "segment_start_sample": 400,
+        "segment_end_sample": 5520,
+        "channels": [
+          {
+            "channel": 1,
+            "peak": 0.1554711014032364,
+            "peak_dbfs": -16.167006495117857,
+            "rms_dbfs": -24.647404299472832,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 0.00010689520392537789
+          },
+          {
+            "channel": 2,
+            "peak": 0.14886897802352905,
+            "peak_dbfs": -16.54391586051715,
+            "rms_dbfs": -25.029307415181886,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 3.168331048789552e-05
+          }
+        ],
+        "array_health": {
+          "channel_count": 2,
+          "exact_duplicate_channel_pairs": [],
+          "rms_spread_db": 0.3819031157090542,
+          "has_nonfinite_samples": false,
+          "has_silent_channel": false
+        },
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 5,
+        "automatic_label": "verify10_0005_target_05_interferer_05",
+        "item": "interferer_only",
+        "repetition": 1,
+        "file": "raw/sample_0005_rep_001_interferer_only_mics.wav",
+        "paired_stream": "sample_0005_rep_001_paired_sequence",
+        "segment_start_sample": 5920,
+        "segment_end_sample": 11040,
+        "channels": [
+          {
+            "channel": 1,
+            "peak": 0.07820628583431244,
+            "peak_dbfs": -22.13516678191172,
+            "rms_dbfs": -33.84450157041768,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": -8.428128939831358e-05
+          },
+          {
+            "channel": 2,
+            "peak": 0.07489950209856033,
+            "peak_dbfs": -22.51042138608183,
+            "rms_dbfs": -34.22119377227449,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": -7.978424361831937e-05
+          }
+        ],
+        "array_health": {
+          "channel_count": 2,
+          "exact_duplicate_channel_pairs": [],
+          "rms_spread_db": 0.3766922018568124,
+          "has_nonfinite_samples": false,
+          "has_silent_channel": false
+        },
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 5,
+        "automatic_label": "verify10_0005_target_05_interferer_05",
+        "item": "mixture",
+        "repetition": 1,
+        "file": "raw/sample_0005_rep_001_mixture_mics.wav",
+        "paired_stream": "sample_0005_rep_001_paired_sequence",
+        "segment_start_sample": 11440,
+        "segment_end_sample": 16560,
+        "channels": [
+          {
+            "channel": 1,
+            "peak": 0.22171849012374878,
+            "peak_dbfs": -13.083961751253891,
+            "rms_dbfs": -24.17575658067383,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 2.3343811709580776e-05
+          },
+          {
+            "channel": 2,
+            "peak": 0.21232540905475616,
+            "peak_dbfs": -13.459960611078255,
+            "rms_dbfs": -24.557213601977523,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": -4.911171147177762e-05
+          }
+        ],
+        "array_health": {
+          "channel_count": 2,
+          "exact_duplicate_channel_pairs": [],
+          "rms_spread_db": 0.3814570213036923,
+          "has_nonfinite_samples": false,
+          "has_silent_channel": false
+        },
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 6,
+        "automatic_label": "verify10_0006_target_06_interferer_06",
+        "item": "target_only",
+        "repetition": 1,
+        "file": "raw/sample_0006_rep_001_target_only_mics.wav",
+        "paired_stream": "sample_0006_rep_001_paired_sequence",
+        "segment_start_sample": 400,
+        "segment_end_sample": 5520,
+        "channels": [
+          {
+            "channel": 1,
+            "peak": 0.16677114367485046,
+            "peak_dbfs": -15.557581858969563,
+            "rms_dbfs": -23.273850219424347,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 2.8718984596337246e-06
+          },
+          {
+            "channel": 2,
+            "peak": 0.15962189435958862,
+            "peak_dbfs": -15.93815078759976,
+            "rms_dbfs": -23.651202542881002,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": -1.9202936044779296e-06
+          }
+        ],
+        "array_health": {
+          "channel_count": 2,
+          "exact_duplicate_channel_pairs": [],
+          "rms_spread_db": 0.37735232345665537,
+          "has_nonfinite_samples": false,
+          "has_silent_channel": false
+        },
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 6,
+        "automatic_label": "verify10_0006_target_06_interferer_06",
+        "item": "interferer_only",
+        "repetition": 1,
+        "file": "raw/sample_0006_rep_001_interferer_only_mics.wav",
+        "paired_stream": "sample_0006_rep_001_paired_sequence",
+        "segment_start_sample": 5920,
+        "segment_end_sample": 11040,
+        "channels": [
+          {
+            "channel": 1,
+            "peak": 0.11665017157793045,
+            "peak_dbfs": -18.662292361529115,
+            "rms_dbfs": -29.30202367896266,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": -3.4396039116099676e-05
+          },
+          {
+            "channel": 2,
+            "peak": 0.1117253452539444,
+            "peak_dbfs": -19.03696589215247,
+            "rms_dbfs": -29.678914728687616,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": -3.661492920757903e-05
+          }
+        ],
+        "array_health": {
+          "channel_count": 2,
+          "exact_duplicate_channel_pairs": [],
+          "rms_spread_db": 0.37689104972495713,
+          "has_nonfinite_samples": false,
+          "has_silent_channel": false
+        },
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 6,
+        "automatic_label": "verify10_0006_target_06_interferer_06",
+        "item": "mixture",
+        "repetition": 1,
+        "file": "raw/sample_0006_rep_001_mixture_mics.wav",
+        "paired_stream": "sample_0006_rep_001_paired_sequence",
+        "segment_start_sample": 11440,
+        "segment_end_sample": 16560,
+        "channels": [
+          {
+            "channel": 1,
+            "peak": 0.2636208236217499,
+            "peak_dbfs": -11.580405749024152,
+            "rms_dbfs": -22.31394309412942,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": -3.518595829571369e-05
+          },
+          {
+            "channel": 2,
+            "peak": 0.25241509079933167,
+            "peak_dbfs": -11.957693681508918,
+            "rms_dbfs": -22.691102958761338,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": -3.9909834820217593e-05
+          }
+        ],
+        "array_health": {
+          "channel_count": 2,
+          "exact_duplicate_channel_pairs": [],
+          "rms_spread_db": 0.377159864631917,
+          "has_nonfinite_samples": false,
+          "has_silent_channel": false
+        },
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 7,
+        "automatic_label": "verify10_0007_target_07_interferer_07",
+        "item": "target_only",
+        "repetition": 1,
+        "file": "raw/sample_0007_rep_001_target_only_mics.wav",
+        "paired_stream": "sample_0007_rep_001_paired_sequence",
+        "segment_start_sample": 400,
+        "segment_end_sample": 5520,
+        "channels": [
+          {
+            "channel": 1,
+            "peak": 0.15511839091777802,
+            "peak_dbfs": -16.186734179045303,
+            "rms_dbfs": -23.319998296366453,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 6.978562669238825e-06
+          },
+          {
+            "channel": 2,
+            "peak": 0.14852219820022583,
+            "peak_dbfs": -16.564172632606855,
+            "rms_dbfs": -23.70019629540023,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 7.234714311259178e-05
+          }
+        ],
+        "array_health": {
+          "channel_count": 2,
+          "exact_duplicate_channel_pairs": [],
+          "rms_spread_db": 0.3801979990337756,
+          "has_nonfinite_samples": false,
+          "has_silent_channel": false
+        },
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 7,
+        "automatic_label": "verify10_0007_target_07_interferer_07",
+        "item": "interferer_only",
+        "repetition": 1,
+        "file": "raw/sample_0007_rep_001_interferer_only_mics.wav",
+        "paired_stream": "sample_0007_rep_001_paired_sequence",
+        "segment_start_sample": 5920,
+        "segment_end_sample": 11040,
+        "channels": [
+          {
+            "channel": 1,
+            "peak": 0.07325903326272964,
+            "peak_dbfs": -22.702776332985074,
+            "rms_dbfs": -35.11130971700277,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": -3.837442731733365e-05
+          },
+          {
+            "channel": 2,
+            "peak": 0.07011006772518158,
+            "peak_dbfs": -23.084392267330482,
+            "rms_dbfs": -35.48810765587489,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": -4.01342910958391e-05
+          }
+        ],
+        "array_health": {
+          "channel_count": 2,
+          "exact_duplicate_channel_pairs": [],
+          "rms_spread_db": 0.376797938872123,
+          "has_nonfinite_samples": false,
+          "has_silent_channel": false
+        },
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 7,
+        "automatic_label": "verify10_0007_target_07_interferer_07",
+        "item": "mixture",
+        "repetition": 1,
+        "file": "raw/sample_0007_rep_001_mixture_mics.wav",
+        "paired_stream": "sample_0007_rep_001_paired_sequence",
+        "segment_start_sample": 11440,
+        "segment_end_sample": 16560,
+        "channels": [
+          {
+            "channel": 1,
+            "peak": 0.20846666395664215,
+            "peak_dbfs": -13.61926766916977,
+            "rms_dbfs": -23.052155238820305,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": -3.916328116326251e-05
+          },
+          {
+            "channel": 2,
+            "peak": 0.19962500035762787,
+            "peak_dbfs": -13.995701401508455,
+            "rms_dbfs": -23.432231158066763,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 3.0113408244442085e-05
+          }
+        ],
+        "array_health": {
+          "channel_count": 2,
+          "exact_duplicate_channel_pairs": [],
+          "rms_spread_db": 0.3800759192464582,
+          "has_nonfinite_samples": false,
+          "has_silent_channel": false
+        },
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 8,
+        "automatic_label": "verify10_0008_target_08_interferer_08",
+        "item": "target_only",
+        "repetition": 1,
+        "file": "raw/sample_0008_rep_001_target_only_mics.wav",
+        "paired_stream": "sample_0008_rep_001_paired_sequence",
+        "segment_start_sample": 400,
+        "segment_end_sample": 5520,
+        "channels": [
+          {
+            "channel": 1,
+            "peak": 0.1579161137342453,
+            "peak_dbfs": -16.031471047863164,
+            "rms_dbfs": -23.151839596367722,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 9.758668858049907e-05
+          },
+          {
+            "channel": 2,
+            "peak": 0.15122193098068237,
+            "peak_dbfs": -16.40770441304367,
+            "rms_dbfs": -23.53106806066354,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 0.00014993466351092866
+          }
+        ],
+        "array_health": {
+          "channel_count": 2,
+          "exact_duplicate_channel_pairs": [],
+          "rms_spread_db": 0.37922846429581725,
+          "has_nonfinite_samples": false,
+          "has_silent_channel": false
+        },
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 8,
+        "automatic_label": "verify10_0008_target_08_interferer_08",
+        "item": "interferer_only",
+        "repetition": 1,
+        "file": "raw/sample_0008_rep_001_interferer_only_mics.wav",
+        "paired_stream": "sample_0008_rep_001_paired_sequence",
+        "segment_start_sample": 5920,
+        "segment_end_sample": 11040,
+        "channels": [
+          {
+            "channel": 1,
+            "peak": 0.1097579076886177,
+            "peak_dbfs": -19.19128360999661,
+            "rms_dbfs": -29.39835593348517,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 8.677448468485949e-05
+          },
+          {
+            "channel": 2,
+            "peak": 0.10507430881261826,
+            "peak_dbfs": -19.570069162753747,
+            "rms_dbfs": -29.775373912350066,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 7.874006308041803e-05
+          }
+        ],
+        "array_health": {
+          "channel_count": 2,
+          "exact_duplicate_channel_pairs": [],
+          "rms_spread_db": 0.3770179788648953,
+          "has_nonfinite_samples": false,
+          "has_silent_channel": false
+        },
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 8,
+        "automatic_label": "verify10_0008_target_08_interferer_08",
+        "item": "mixture",
+        "repetition": 1,
+        "file": "raw/sample_0008_rep_001_mixture_mics.wav",
+        "paired_stream": "sample_0008_rep_001_paired_sequence",
+        "segment_start_sample": 11440,
+        "segment_end_sample": 16560,
+        "channels": [
+          {
+            "channel": 1,
+            "peak": 0.2512831687927246,
+            "peak_dbfs": -11.996731998561824,
+            "rms_dbfs": -22.23298950985557,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 0.00017377763508380495
+          },
+          {
+            "channel": 2,
+            "peak": 0.24057942628860474,
+            "peak_dbfs": -12.374830302298472,
+            "rms_dbfs": -22.611752642898967,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 0.00022233869953561247
+          }
+        ],
+        "array_health": {
+          "channel_count": 2,
+          "exact_duplicate_channel_pairs": [],
+          "rms_spread_db": 0.37876313304339604,
+          "has_nonfinite_samples": false,
+          "has_silent_channel": false
+        },
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 9,
+        "automatic_label": "verify10_0009_target_09_interferer_09",
+        "item": "target_only",
+        "repetition": 1,
+        "file": "raw/sample_0009_rep_001_target_only_mics.wav",
+        "paired_stream": "sample_0009_rep_001_paired_sequence",
+        "segment_start_sample": 400,
+        "segment_end_sample": 5520,
+        "channels": [
+          {
+            "channel": 1,
+            "peak": 0.09825703501701355,
+            "peak_dbfs": -20.15272690359204,
+            "rms_dbfs": -27.354326885490128,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 0.00011700146919650934
+          },
+          {
+            "channel": 2,
+            "peak": 0.09408930689096451,
+            "peak_dbfs": -20.529194613734983,
+            "rms_dbfs": -27.731537416033575,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 0.00012030138474352498
+          }
+        ],
+        "array_health": {
+          "channel_count": 2,
+          "exact_duplicate_channel_pairs": [],
+          "rms_spread_db": 0.3772105305434472,
+          "has_nonfinite_samples": false,
+          "has_silent_channel": false
+        },
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 9,
+        "automatic_label": "verify10_0009_target_09_interferer_09",
+        "item": "interferer_only",
+        "repetition": 1,
+        "file": "raw/sample_0009_rep_001_interferer_only_mics.wav",
+        "paired_stream": "sample_0009_rep_001_paired_sequence",
+        "segment_start_sample": 5920,
+        "segment_end_sample": 11040,
+        "channels": [
+          {
+            "channel": 1,
+            "peak": 0.08314475417137146,
+            "peak_dbfs": -21.60330292799805,
+            "rms_dbfs": -33.704629809575565,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 3.687501801843407e-05
+          },
+          {
+            "channel": 2,
+            "peak": 0.079640232026577,
+            "peak_dbfs": -21.977349667087623,
+            "rms_dbfs": -34.080963791339435,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 2.9906433069681883e-05
+          }
+        ],
+        "array_health": {
+          "channel_count": 2,
+          "exact_duplicate_channel_pairs": [],
+          "rms_spread_db": 0.3763339817638709,
+          "has_nonfinite_samples": false,
+          "has_silent_channel": false
+        },
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 9,
+        "automatic_label": "verify10_0009_target_09_interferer_09",
+        "item": "mixture",
+        "repetition": 1,
+        "file": "raw/sample_0009_rep_001_mixture_mics.wav",
+        "paired_stream": "sample_0009_rep_001_paired_sequence",
+        "segment_start_sample": 11440,
+        "segment_end_sample": 16560,
+        "channels": [
+          {
+            "channel": 1,
+            "peak": 0.17013120651245117,
+            "peak_dbfs": -15.384320362303525,
+            "rms_dbfs": -26.452733846004556,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 0.0001421645915594058
+          },
+          {
+            "channel": 2,
+            "peak": 0.16290326416492462,
+            "peak_dbfs": -15.761404269064672,
+            "rms_dbfs": -26.830025607347572,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 0.00014340787306542092
+          }
+        ],
+        "array_health": {
+          "channel_count": 2,
+          "exact_duplicate_channel_pairs": [],
+          "rms_spread_db": 0.3772917613430167,
+          "has_nonfinite_samples": false,
+          "has_silent_channel": false
+        },
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 10,
+        "automatic_label": "verify10_0010_target_10_interferer_10",
+        "item": "target_only",
+        "repetition": 1,
+        "file": "raw/sample_0010_rep_001_target_only_mics.wav",
+        "paired_stream": "sample_0010_rep_001_paired_sequence",
+        "segment_start_sample": 400,
+        "segment_end_sample": 5520,
+        "channels": [
+          {
+            "channel": 1,
+            "peak": 0.11754541844129562,
+            "peak_dbfs": -18.595885873433392,
+            "rms_dbfs": -25.91070691615618,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 0.00012437268179062987
+          },
+          {
+            "channel": 2,
+            "peak": 0.11256556212902069,
+            "peak_dbfs": -18.9718891106382,
+            "rms_dbfs": -26.288680883383904,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": 9.246612357347028e-05
+          }
+        ],
+        "array_health": {
+          "channel_count": 2,
+          "exact_duplicate_channel_pairs": [],
+          "rms_spread_db": 0.37797396722772447,
+          "has_nonfinite_samples": false,
+          "has_silent_channel": false
+        },
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 10,
+        "automatic_label": "verify10_0010_target_10_interferer_10",
+        "item": "interferer_only",
+        "repetition": 1,
+        "file": "raw/sample_0010_rep_001_interferer_only_mics.wav",
+        "paired_stream": "sample_0010_rep_001_paired_sequence",
+        "segment_start_sample": 5920,
+        "segment_end_sample": 11040,
+        "channels": [
+          {
+            "channel": 1,
+            "peak": 0.10584381222724915,
+            "peak_dbfs": -19.50669052693229,
+            "rms_dbfs": -29.91093210142084,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": -0.00014943388199213924
+          },
+          {
+            "channel": 2,
+            "peak": 0.10138054192066193,
+            "peak_dbfs": -19.880907832478407,
+            "rms_dbfs": -30.287560972025002,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": -0.00014909338339974543
+          }
+        ],
+        "array_health": {
+          "channel_count": 2,
+          "exact_duplicate_channel_pairs": [],
+          "rms_spread_db": 0.3766288706041614,
+          "has_nonfinite_samples": false,
+          "has_silent_channel": false
+        },
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 10,
+        "automatic_label": "verify10_0010_target_10_interferer_10",
+        "item": "mixture",
+        "repetition": 1,
+        "file": "raw/sample_0010_rep_001_mixture_mics.wav",
+        "paired_stream": "sample_0010_rep_001_paired_sequence",
+        "segment_start_sample": 11440,
+        "segment_end_sample": 16560,
+        "channels": [
+          {
+            "channel": 1,
+            "peak": 0.21098950505256653,
+            "peak_dbfs": -13.514782933014375,
+            "rms_dbfs": -24.458171979416505,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": -3.496049685942082e-05
+          },
+          {
+            "channel": 2,
+            "peak": 0.20201805233955383,
+            "peak_dbfs": -13.89219640501302,
+            "rms_dbfs": -24.835708610604147,
+            "clipped_samples": 0,
+            "clipped": false,
+            "nonfinite_samples": 0,
+            "zero_fraction": 0.0,
+            "dc_offset": -5.9677890625959434e-05
+          }
+        ],
+        "array_health": {
+          "channel_count": 2,
+          "exact_duplicate_channel_pairs": [],
+          "rms_spread_db": 0.3775366311876418,
+          "has_nonfinite_samples": false,
+          "has_silent_channel": false
+        },
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      }
+    ],
+    "paired_sequences": [
+      {
+        "sample_index": 1,
+        "repetition": 1,
+        "sample_rate_hz": 16000,
+        "stream_sample_count": 16960,
+        "gap_samples": 400,
+        "gap_s": 0.025,
+        "alignment_method": "single_continuous_full_duplex_stream",
+        "segments": {
+          "target_only": {
+            "start_sample": 400,
+            "end_sample": 5520,
+            "sample_count": 5120
+          },
+          "interferer_only": {
+            "start_sample": 5920,
+            "end_sample": 11040,
+            "sample_count": 5120
+          },
+          "mixture": {
+            "start_sample": 11440,
+            "end_sample": 16560,
+            "sample_count": 5120
+          }
+        },
+        "recording": "raw/sample_0001_rep_001_paired_sequence_mics.wav",
+        "playback": "references/sample_0001_rep_001_paired_sequence_playback.wav",
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 2,
+        "repetition": 1,
+        "sample_rate_hz": 16000,
+        "stream_sample_count": 16960,
+        "gap_samples": 400,
+        "gap_s": 0.025,
+        "alignment_method": "single_continuous_full_duplex_stream",
+        "segments": {
+          "target_only": {
+            "start_sample": 400,
+            "end_sample": 5520,
+            "sample_count": 5120
+          },
+          "interferer_only": {
+            "start_sample": 5920,
+            "end_sample": 11040,
+            "sample_count": 5120
+          },
+          "mixture": {
+            "start_sample": 11440,
+            "end_sample": 16560,
+            "sample_count": 5120
+          }
+        },
+        "recording": "raw/sample_0002_rep_001_paired_sequence_mics.wav",
+        "playback": "references/sample_0002_rep_001_paired_sequence_playback.wav",
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 3,
+        "repetition": 1,
+        "sample_rate_hz": 16000,
+        "stream_sample_count": 16960,
+        "gap_samples": 400,
+        "gap_s": 0.025,
+        "alignment_method": "single_continuous_full_duplex_stream",
+        "segments": {
+          "target_only": {
+            "start_sample": 400,
+            "end_sample": 5520,
+            "sample_count": 5120
+          },
+          "interferer_only": {
+            "start_sample": 5920,
+            "end_sample": 11040,
+            "sample_count": 5120
+          },
+          "mixture": {
+            "start_sample": 11440,
+            "end_sample": 16560,
+            "sample_count": 5120
+          }
+        },
+        "recording": "raw/sample_0003_rep_001_paired_sequence_mics.wav",
+        "playback": "references/sample_0003_rep_001_paired_sequence_playback.wav",
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 4,
+        "repetition": 1,
+        "sample_rate_hz": 16000,
+        "stream_sample_count": 16960,
+        "gap_samples": 400,
+        "gap_s": 0.025,
+        "alignment_method": "single_continuous_full_duplex_stream",
+        "segments": {
+          "target_only": {
+            "start_sample": 400,
+            "end_sample": 5520,
+            "sample_count": 5120
+          },
+          "interferer_only": {
+            "start_sample": 5920,
+            "end_sample": 11040,
+            "sample_count": 5120
+          },
+          "mixture": {
+            "start_sample": 11440,
+            "end_sample": 16560,
+            "sample_count": 5120
+          }
+        },
+        "recording": "raw/sample_0004_rep_001_paired_sequence_mics.wav",
+        "playback": "references/sample_0004_rep_001_paired_sequence_playback.wav",
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 5,
+        "repetition": 1,
+        "sample_rate_hz": 16000,
+        "stream_sample_count": 16960,
+        "gap_samples": 400,
+        "gap_s": 0.025,
+        "alignment_method": "single_continuous_full_duplex_stream",
+        "segments": {
+          "target_only": {
+            "start_sample": 400,
+            "end_sample": 5520,
+            "sample_count": 5120
+          },
+          "interferer_only": {
+            "start_sample": 5920,
+            "end_sample": 11040,
+            "sample_count": 5120
+          },
+          "mixture": {
+            "start_sample": 11440,
+            "end_sample": 16560,
+            "sample_count": 5120
+          }
+        },
+        "recording": "raw/sample_0005_rep_001_paired_sequence_mics.wav",
+        "playback": "references/sample_0005_rep_001_paired_sequence_playback.wav",
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 6,
+        "repetition": 1,
+        "sample_rate_hz": 16000,
+        "stream_sample_count": 16960,
+        "gap_samples": 400,
+        "gap_s": 0.025,
+        "alignment_method": "single_continuous_full_duplex_stream",
+        "segments": {
+          "target_only": {
+            "start_sample": 400,
+            "end_sample": 5520,
+            "sample_count": 5120
+          },
+          "interferer_only": {
+            "start_sample": 5920,
+            "end_sample": 11040,
+            "sample_count": 5120
+          },
+          "mixture": {
+            "start_sample": 11440,
+            "end_sample": 16560,
+            "sample_count": 5120
+          }
+        },
+        "recording": "raw/sample_0006_rep_001_paired_sequence_mics.wav",
+        "playback": "references/sample_0006_rep_001_paired_sequence_playback.wav",
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 7,
+        "repetition": 1,
+        "sample_rate_hz": 16000,
+        "stream_sample_count": 16960,
+        "gap_samples": 400,
+        "gap_s": 0.025,
+        "alignment_method": "single_continuous_full_duplex_stream",
+        "segments": {
+          "target_only": {
+            "start_sample": 400,
+            "end_sample": 5520,
+            "sample_count": 5120
+          },
+          "interferer_only": {
+            "start_sample": 5920,
+            "end_sample": 11040,
+            "sample_count": 5120
+          },
+          "mixture": {
+            "start_sample": 11440,
+            "end_sample": 16560,
+            "sample_count": 5120
+          }
+        },
+        "recording": "raw/sample_0007_rep_001_paired_sequence_mics.wav",
+        "playback": "references/sample_0007_rep_001_paired_sequence_playback.wav",
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 8,
+        "repetition": 1,
+        "sample_rate_hz": 16000,
+        "stream_sample_count": 16960,
+        "gap_samples": 400,
+        "gap_s": 0.025,
+        "alignment_method": "single_continuous_full_duplex_stream",
+        "segments": {
+          "target_only": {
+            "start_sample": 400,
+            "end_sample": 5520,
+            "sample_count": 5120
+          },
+          "interferer_only": {
+            "start_sample": 5920,
+            "end_sample": 11040,
+            "sample_count": 5120
+          },
+          "mixture": {
+            "start_sample": 11440,
+            "end_sample": 16560,
+            "sample_count": 5120
+          }
+        },
+        "recording": "raw/sample_0008_rep_001_paired_sequence_mics.wav",
+        "playback": "references/sample_0008_rep_001_paired_sequence_playback.wav",
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 9,
+        "repetition": 1,
+        "sample_rate_hz": 16000,
+        "stream_sample_count": 16960,
+        "gap_samples": 400,
+        "gap_s": 0.025,
+        "alignment_method": "single_continuous_full_duplex_stream",
+        "segments": {
+          "target_only": {
+            "start_sample": 400,
+            "end_sample": 5520,
+            "sample_count": 5120
+          },
+          "interferer_only": {
+            "start_sample": 5920,
+            "end_sample": 11040,
+            "sample_count": 5120
+          },
+          "mixture": {
+            "start_sample": 11440,
+            "end_sample": 16560,
+            "sample_count": 5120
+          }
+        },
+        "recording": "raw/sample_0009_rep_001_paired_sequence_mics.wav",
+        "playback": "references/sample_0009_rep_001_paired_sequence_playback.wav",
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      },
+      {
+        "sample_index": 10,
+        "repetition": 1,
+        "sample_rate_hz": 16000,
+        "stream_sample_count": 16960,
+        "gap_samples": 400,
+        "gap_s": 0.025,
+        "alignment_method": "single_continuous_full_duplex_stream",
+        "segments": {
+          "target_only": {
+            "start_sample": 400,
+            "end_sample": 5520,
+            "sample_count": 5120
+          },
+          "interferer_only": {
+            "start_sample": 5920,
+            "end_sample": 11040,
+            "sample_count": 5120
+          },
+          "mixture": {
+            "start_sample": 11440,
+            "end_sample": 16560,
+            "sample_count": 5120
+          }
+        },
+        "recording": "raw/sample_0010_rep_001_paired_sequence_mics.wav",
+        "playback": "references/sample_0010_rep_001_paired_sequence_playback.wav",
+        "backend_status": {
+          "backend": "simulated",
+          "overflow": false
+        }
+      }
+    ],
+    "supervision_quality": [
+      {
+        "sample_index": 1,
+        "repetition": 1,
+        "metrics_file": "metrics/sample_0001_rep_001_paired_sequence_supervision_quality.json",
+        "residual_db_max": -39.01192195562083,
+        "correlation_min": 0.9999372326247293,
+        "quality_gate": {
+          "enabled": false,
+          "passed": true,
+          "max_additivity_residual_db": -6.0,
+          "min_additivity_correlation": 0.7,
+          "reasons": []
+        }
+      },
+      {
+        "sample_index": 2,
+        "repetition": 1,
+        "metrics_file": "metrics/sample_0002_rep_001_paired_sequence_supervision_quality.json",
+        "residual_db_max": -35.9085959972858,
+        "correlation_min": 0.9998717556858926,
+        "quality_gate": {
+          "enabled": false,
+          "passed": true,
+          "max_additivity_residual_db": -6.0,
+          "min_additivity_correlation": 0.7,
+          "reasons": []
+        }
+      },
+      {
+        "sample_index": 3,
+        "repetition": 1,
+        "metrics_file": "metrics/sample_0003_rep_001_paired_sequence_supervision_quality.json",
+        "residual_db_max": -36.40797493399384,
+        "correlation_min": 0.9998856867895538,
+        "quality_gate": {
+          "enabled": false,
+          "passed": true,
+          "max_additivity_residual_db": -6.0,
+          "min_additivity_correlation": 0.7,
+          "reasons": []
+        }
+      },
+      {
+        "sample_index": 4,
+        "repetition": 1,
+        "metrics_file": "metrics/sample_0004_rep_001_paired_sequence_supervision_quality.json",
+        "residual_db_max": -36.52018506395792,
+        "correlation_min": 0.9998886011686079,
+        "quality_gate": {
+          "enabled": false,
+          "passed": true,
+          "max_additivity_residual_db": -6.0,
+          "min_additivity_correlation": 0.7,
+          "reasons": []
+        }
+      },
+      {
+        "sample_index": 5,
+        "repetition": 1,
+        "metrics_file": "metrics/sample_0005_rep_001_paired_sequence_supervision_quality.json",
+        "residual_db_max": -38.257895016387664,
+        "correlation_min": 0.9999253334251785,
+        "quality_gate": {
+          "enabled": false,
+          "passed": true,
+          "max_additivity_residual_db": -6.0,
+          "min_additivity_correlation": 0.7,
+          "reasons": []
+        }
+      },
+      {
+        "sample_index": 6,
+        "repetition": 1,
+        "metrics_file": "metrics/sample_0006_rep_001_paired_sequence_supervision_quality.json",
+        "residual_db_max": -40.299127987231145,
+        "correlation_min": 0.9999533304127513,
+        "quality_gate": {
+          "enabled": false,
+          "passed": true,
+          "max_additivity_residual_db": -6.0,
+          "min_additivity_correlation": 0.7,
+          "reasons": []
+        }
+      },
+      {
+        "sample_index": 7,
+        "repetition": 1,
+        "metrics_file": "metrics/sample_0007_rep_001_paired_sequence_supervision_quality.json",
+        "residual_db_max": -39.4848406929206,
+        "correlation_min": 0.9999437071722889,
+        "quality_gate": {
+          "enabled": false,
+          "passed": true,
+          "max_additivity_residual_db": -6.0,
+          "min_additivity_correlation": 0.7,
+          "reasons": []
+        }
+      },
+      {
+        "sample_index": 8,
+        "repetition": 1,
+        "metrics_file": "metrics/sample_0008_rep_001_paired_sequence_supervision_quality.json",
+        "residual_db_max": -40.07565104645616,
+        "correlation_min": 0.9999508670423517,
+        "quality_gate": {
+          "enabled": false,
+          "passed": true,
+          "max_additivity_residual_db": -6.0,
+          "min_additivity_correlation": 0.7,
+          "reasons": []
+        }
+      },
+      {
+        "sample_index": 9,
+        "repetition": 1,
+        "metrics_file": "metrics/sample_0009_rep_001_paired_sequence_supervision_quality.json",
+        "residual_db_max": -35.65184168375041,
+        "correlation_min": 0.9998639538932517,
+        "quality_gate": {
+          "enabled": false,
+          "passed": true,
+          "max_additivity_residual_db": -6.0,
+          "min_additivity_correlation": 0.7,
+          "reasons": []
+        }
+      },
+      {
+        "sample_index": 10,
+        "repetition": 1,
+        "metrics_file": "metrics/sample_0010_rep_001_paired_sequence_supervision_quality.json",
+        "residual_db_max": -37.51891954140044,
+        "correlation_min": 0.9999114853729923,
+        "quality_gate": {
+          "enabled": false,
+          "passed": true,
+          "max_additivity_residual_db": -6.0,
+          "min_additivity_correlation": 0.7,
+          "reasons": []
+        }
+      }
+    ],
+    "labels": {
+      "jsonl": "labels.jsonl",
+      "csv": "labels.csv",
+      "xlsx": "labels.xlsx",
+      "supervised_jsonl": "supervised_pairs.jsonl",
+      "supervised_csv": "supervised_pairs.csv"
+    },
+    "label_rows": 10,
+    "supervision_ready_rows": 10,
+    "cancelled": false
+  }
+}

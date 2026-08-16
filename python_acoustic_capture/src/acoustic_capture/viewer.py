@@ -572,7 +572,7 @@ class ResultsViewer(ttk.Frame):
             transform=self.axes[2].transAxes,
         )
         self.summary_var.set(
-            "配对监督采集会在一次连续声卡流中录制 target-only 与 mixed；"
+            "默认监督采集会在一次连续声卡流中录制 target-only、interferer-only 与 mixed；"
             "两段复用完全相同的目标语音。训练输入是 mixed，监督标签是同一行的 target-only。"
         )
         self.canvas.draw_idle()
@@ -668,6 +668,27 @@ class ResultsViewer(ttk.Frame):
             values=["自动选择电平最高的通道", "混合全部通道"]
             + [f"通道 {channel}" for channel in range(1, channel_max + 1)]
         )
+        if self.run_dir is not None:
+            try:
+                manifest = json.loads(
+                    (self.run_dir / "manifest.json").read_text(encoding="utf-8")
+                )
+                result = manifest.get("summary") or {}
+                method = result.get("selection_method")
+                if method:
+                    method_label = {
+                        "best_single": "最佳单次",
+                        "aligned_mean": "全部对齐均值",
+                        "consensus_mean": "去离群一致性均值",
+                    }.get(method, method)
+                    selected = ",".join(map(str, result.get("selected_take_ids", [])))
+                    converged = (result.get("convergence") or {}).get("converged")
+                    summaries.append(
+                        f"RIR 选优：{method_label}（take {selected or '-'}；"
+                        f"{'已收敛' if converged else '未达到收敛阈值'}）"
+                    )
+            except (OSError, TypeError, ValueError, json.JSONDecodeError):
+                pass
         self.summary_var.set("  |  ".join(summaries) if summaries else "没有找到音频结果文件")
         self.canvas.draw_idle()
 

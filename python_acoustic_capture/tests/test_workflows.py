@@ -47,12 +47,25 @@ def test_rir_end_to_end(tmp_path: Path):
     assert int(np.argmax(np.abs(average[:, 1]))) - int(np.argmax(np.abs(average[:, 0]))) == 7
     assert store.path("processed/average_rir_mic_01.wav").is_file()
     assert store.path("processed/average_rir_mic_02.wav").is_file()
+    assert store.path("processed/selected_rir.wav").is_file()
+    assert store.path("processed/best_single_rir.wav").is_file()
+    assert store.path("processed/all_accepted_mean_rir.wav").is_file()
     assert store.manifest["summary"]["mean_rir_per_microphone"] == [
         "processed/average_rir_mic_01.wav",
         "processed/average_rir_mic_02.wav",
     ]
     assert store.manifest["summary"]["attempted_takes"] == 5
     assert store.manifest["summary"]["accepted_takes"] == [1, 2, 3, 4, 5]
+    assert store.manifest["summary"]["selection_method"] in {
+        "best_single",
+        "aligned_mean",
+        "consensus_mean",
+    }
+    assert set(store.manifest["summary"]["selected_take_ids"]).issubset({1, 2, 3, 4, 5})
+    assert store.manifest["summary"]["convergence"]["converged"] is True
+    assert store.manifest["summary"]["convergence"]["stop_reason"] == (
+        "aggregate_and_reconstruction_error_converged"
+    )
     assert store.manifest["status"] == "completed"
 
 
@@ -669,6 +682,9 @@ def test_speech_dataset_packages_multichannel_pairs_and_flattened_labels(tmp_pat
     packaged_target, _ = sf.read(dataset / pair["target_recording"], always_2d=True)
     assert manifest["supervised_pair_count"] == 1
     assert pair["dataset_supervision_ready"] == "是"
+    assert pair["mixture_recording"].startswith("audio/target-mixed/")
+    assert pair["target_recording"].startswith("audio/target-only/")
+    assert pair["interferer_recording"].startswith("audio/interferer-only/")
     assert packaged_mixture.shape == packaged_target.shape == (800, 3)
     assert (dataset / "indexes" / "speech_dataset.xlsx").is_file()
 

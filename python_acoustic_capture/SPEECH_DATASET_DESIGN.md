@@ -32,7 +32,7 @@ hs01_w01_b00_int090_h170_d100_supervised
 
 ```yaml
 scene:
-  items: [target_only, mixture]
+  items: [target_only, interferer_only, mixture]
   capture_strategy: paired_sequence
   require_supervised_pair: true
   gap_s: 1.0
@@ -41,10 +41,11 @@ scene:
 程序先加载并定长同一份 target 和 interferer 数字波形，然后在**一次连续声卡流**中播放：
 
 ```text
-静音 | target_only | 静音 | mixture | 静音
+静音 | target_only | 静音 | interferer_only | 静音 | mixture | 静音
 ```
 
-`target_only` 与 `mixture` 的 target 输出通道复用完全相同的 float32 样本。输入和输出流只打开一次，因此两个片段
+`target_only` 与 `mixture` 的 target 输出通道复用完全相同的 float32 样本；`interferer_only` 与
+`mixture` 的 interferer 输出通道也复用相同样本。输入和输出流只打开一次，因此三个片段
 共享同一个声卡时钟和固定 I/O 延迟。麦克风连续录音再按已知的样本边界切片，得到等长的
 两通道 `target_recording`、`interferer_recording` 和 `mixture_recording`。
 
@@ -124,7 +125,10 @@ acoustic-capture speech-dataset runs datasets\headset_speech_generalization_v1 `
 ```
 
 汇总器为每行生成跨运行唯一的 `dataset_sample_id`，复制所引用的多通道录音，并再次验证
-mixture 与 target-only 的采样率、帧数和通道数。训练只读取统一索引中
+mixture 与 target-only 的采样率、帧数和通道数。数据集中的音频默认分别放入
+`audio/target-mixed/`、`audio/target-only/`、`audio/interferer-only/`，并按 run ID 建子目录。
+监督关系仍以 `supervision_pair_id` 和索引中的三条相对路径为准，不依赖三个目录中的排序。
+训练只读取统一索引中
 `dataset_supervision_ready == 是` 的行，输入为 `mixture_recording`，标签为同一行的
 `target_recording`。数据集划分应按 `wearing_id` 或
 `scene_id` 分组后再分 train/validation/test，避免同一次佩戴的近重复样本泄漏到不同集合。

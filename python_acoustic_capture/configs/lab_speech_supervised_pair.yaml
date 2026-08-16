@@ -15,9 +15,9 @@ audio:
   dtype: float32
 
 scene:
-  # 最小严格监督方案：同一连续流内 target_only -> mixture。
-  # 不录 interferer_only，节省现场时间。
-  items: [target_only, mixture]
+  # 默认严格监督方案：同一连续流内 target_only -> interferer_only -> mixture。
+  # 纯干扰既参与现场一致性检查，也可用于回到服务器后离线混合。
+  items: [target_only, interferer_only, mixture]
   source_mode: folders
   duration_s: 4.0
   target_file: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\target.wav
@@ -42,7 +42,7 @@ scene:
 
 storage:
   root: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\runs
-  session_name: target_mixed_pair
+  session_name: target_interferer_mixed_triplet
   wav_subtype: FLOAT
   save_playback_reference: true
   compute_sha256: true
@@ -51,7 +51,7 @@ metadata:
   capture_profile: standard
   task_type: neural_beamforming_and_speech_enhancement
   project_id: headset_speech_generalization_v1
-  scene_id: target_mixed_pair
+  scene_id: target_interferer_mixed_triplet
   experiment_type: speech_enhancement
   room_id: ''
   artificial_head_id: headA

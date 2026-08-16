@@ -47,7 +47,7 @@ def main() -> int:
         config.audio.backend = "simulated"
         config.audio.sample_rate = SAMPLE_RATE
         config.sweep.end_hz = 3_500
-        config.scene.items = ["target_only", "mixture"]
+        config.scene.items = ["target_only", "interferer_only", "mixture"]
         config.scene.source_mode = "folders"
         config.scene.target_folder = str(targets)
         config.scene.interferer_folder = str(interferers)

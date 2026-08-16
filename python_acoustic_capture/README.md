@@ -74,8 +74,8 @@ GUI 顶部只保留两个入口：
 - `RIR 采集`：默认只显示声卡、输入/输出通道、扫频播放电平、有效 RIR 次数和保存位置。
   常规实验直接使用默认 ESS；扫频频率、时长、淡入淡出、RIR 截取和质量阈值统一放在
   “显示高级设置”中。
-- `音频 / 语音采集`：把普通播录和语音增强合并。默认“配对监督：目标 + MIXED”只在一次连续
-  播录中采 `target_only + mixture`，不额外采 `interferer_only`；也可选择完整监督采集、只采
+- `音频 / 语音采集`：把普通播录和语音增强合并。默认“标准监督：目标 + 干扰 + MIXED”在一次连续
+  播录中采 `target_only + interferer_only + mixture`；纯干扰可带回服务器做离线混合。也可选择含底噪的完整监督采集、只采
   干净目标、只采干扰、普通单文件同步播录、仅录制或仅播放。界面只显示当前方案实际需要的
   文件、声源和通道。
 
@@ -167,19 +167,18 @@ acoustic-capture rir configs/simulated.yaml
 | `interferer_only` | 干扰单独发声的双麦录音 | 干扰声学参考 |
 | `mixture` | 两者同时发声的双麦录音 | 真实混合输入 |
 
-推荐正式采集使用完整四项。若场地时间紧，只做真实微调数据，最少选择
-`target_only + mixture`；如果需要分析或重构真实混合，保留全部四项。
+推荐正式采集至少使用 `target_only + interferer_only + mixture`；若还要记录环境底噪，使用完整四项。
 
 `repetitions` 表示整个所选序列重复几次。各项之间物理位置和输入增益必须保持不变。
-`capture_strategy: paired_sequence` 会把所选片段拼成一次连续全双工声卡流；默认配对监督方案的
-顺序是 `target_only → mixture`，完整方案才是 `target_only → interferer_only → mixture`。中间插入
+`capture_strategy: paired_sequence` 会把所选片段拼成一次连续全双工声卡流；默认监督方案的
+顺序是 `target_only → interferer_only → mixture`。中间插入
 `gap_s` 秒数字静音，然后按同一个采样时间轴切回各双麦片段。
 `countdown_s` 只在整组配对序列开始前执行一次。
 
 其中 target-only 和 mixture 会重复播放完全相同的目标语音样本、起点和长度；两者共享一次
 ASIO 流的硬件延迟，因此 target-only 可以作为 mixture 的样本级对齐监督标签。若配置中包含
-`mixture`，默认必须同时包含 `target_only`，否则配置检查失败。`interferer_only` 是可选的额外
-诊断/一致性采集，不是配对监督训练的前置条件。只采纯目标或纯干扰仍然允许，
+`mixture`，默认必须同时包含 `target_only`，否则配置检查失败。默认同时录制 `interferer_only`，
+用于加性一致性检查和离线混合；只采纯目标或纯干扰仍然允许，
 但标签中的 `supervision_ready` 会是“否”。分别录制的 target/interferer 相加不保证严格等于
 真实 mixture，因此三种实采录音仍应保留。
 
@@ -249,6 +248,9 @@ acoustic-capture speech-dataset runs datasets\headset_speech_generalization_v1 `
 程序会把每个被引用的多通道 WAV 只复制一次，生成 `speech_samples.csv/jsonl`、
 `supervised_pairs.csv/jsonl`、`speech_dataset.xlsx` 和数据集 manifest，并再次检查监督对的采样率、
 帧数和通道数完全一致。只想在原位置建立索引时可加 `--index-only`。
+默认音频目录按训练用途分为 `audio/target-mixed/`、`audio/target-only/` 和
+`audio/interferer-only/`（底噪在 `audio/ambient/`）；每个目录下再按 run ID 隔离，Excel/CSV 中保存
+三条精确相对路径，离线混合时无需从文件名反推配对关系。
 
 汇总器还会生成 `split_leakage_report.json`，自动检查相同目标音频内容或同一物理佩戴条件是否同时
 出现在 train/valid/test；Excel 中的“划分泄漏检查”工作表给测试工程师直接查看。每组监督采集还会
@@ -257,12 +259,24 @@ acoustic-capture speech-dataset runs datasets\headset_speech_generalization_v1 `
 
 ## 6. RIR 重复与平均
 
-默认最少 4 次、最多 10 次。达到最少次数后，最近若干次满足相关性和峰值漂移条件会自动
-停止。每次原始录音和反卷积结果都会保存；削波或相关性不合格的 take 会被拒绝但不会删除。
-正式 RME 配置使用至少 5 次有效 IR；任一麦克风的扫频相对前置底噪低于
+默认取得至少 5 次有效 IR；若聚合仍未收敛则继续，最多 8 次。每加入一个有效 take，工具都会比较
+聚合 RIR 相对上一步的归一化变化，以及“候选 RIR 与 ESS 回卷后”和真实麦克风扫频录音之间的
+leave-one-out 归一化误差。默认连续两次满足 RIR 变化不超过 1%（-40 dB）、重构误差变化不超过
+0.1 dB 才自动停止。每次原始录音和反卷积结果都会保存；削波或相关性不合格的 take 会被拒绝但不会删除。
+任一麦克风的扫频相对前置底噪低于
 `minimum_sweep_snr_db`、发生丢帧/削波、相关性不足或峰值漂移超限时，该 take 不进入均值。
 
 输出包括：
+
+- `average_rir.wav` / `selected_rir.wav`：自动选择的最终训练 RIR；
+- `best_single_rir.wav`：TrajectoRIR 风格的最佳单次结果；
+- `all_accepted_mean_rir.wav`：所有有效 take 对齐后的直接均值；
+- `median_rir.wav`：逐采样中位数，供诊断；
+
+自动选择会用 leave-one-out 真实录音重构误差比较 `best_single`、`aligned_mean` 和
+`consensus_mean`（排除离群 take 的一致性均值）。所有麦克风始终共用同一组 take，保存结果不做
+逐条 peak/RMS 归一化，避免破坏通道间增益和相位。超过 8 次仍未收敛时会保留结果并在指标中显示，
+现场应优先检查环境变化、声卡时钟、佩戴或声源是否移动，而不是无限平均。
 
 - `processed/average_rir.wav`：对齐后的有效 take 均值；
 - `processed/median_rir.wav`：对突发异常更稳健的逐样本中位数；

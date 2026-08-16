@@ -498,6 +498,21 @@ def compile_completed_rir_runs(
             ),
             "accepted_take_count": len(summary.get("accepted_takes", [])),
             "rejected_take_count": len(summary.get("rejected_takes", [])),
+            "rir_selection_method": summary.get("selection_method", "legacy_aligned_mean"),
+            "selected_take_ids": ",".join(
+                map(str, summary.get("selected_take_ids", summary.get("accepted_takes", [])))
+            ),
+            "selected_reconstruction_error_db": summary.get(
+                "selected_reconstruction_error_db", ""
+            ),
+            "best_single_reconstruction_error_db": summary.get(
+                "best_single_reconstruction_error_db", ""
+            ),
+            "all_mean_reconstruction_error_db": summary.get(
+                "all_accepted_mean_reconstruction_error_db", ""
+            ),
+            "rir_converged": (summary.get("convergence") or {}).get("converged", ""),
+            "rir_stop_reason": (summary.get("convergence") or {}).get("stop_reason", ""),
             "sample_rate_hz": sample_rate,
             "rir_samples": len(audio),
             "microphone_channel_count": audio.shape[1],
@@ -532,8 +547,8 @@ def compile_completed_rir_runs(
         "validation_error_count": validation_error_count,
         "split_leakage_blocking_count": len(split_issues),
         "training_ready": bool(rows) and validation_error_count == 0 and not split_issues,
-        "training_unit": "within_experiment_mean_ir_per_microphone",
-        "averaging_scope": "accepted_takes_within_one_run_only",
+        "training_unit": "within_experiment_selected_ir_per_microphone",
+        "averaging_scope": "automatic_selection_within_one_run_only",
         "cross_experiment_averaging": False,
     }
     dataset_root.mkdir(parents=True, exist_ok=True)
@@ -666,6 +681,32 @@ def compile_rir_dataset(path: str | Path) -> Path:
                 "created_at": manifest.get("created_at", ""),
                 "accepted_take_count": len(summary.get("accepted_takes", [])),
                 "rejected_take_count": len(summary.get("rejected_takes", [])),
+                "rir_selection_method": summary.get(
+                    "selection_method", "legacy_aligned_mean"
+                ),
+                "selected_take_ids": ",".join(
+                    map(
+                        str,
+                        summary.get(
+                            "selected_take_ids", summary.get("accepted_takes", [])
+                        ),
+                    )
+                ),
+                "selected_reconstruction_error_db": summary.get(
+                    "selected_reconstruction_error_db", ""
+                ),
+                "best_single_reconstruction_error_db": summary.get(
+                    "best_single_reconstruction_error_db", ""
+                ),
+                "all_mean_reconstruction_error_db": summary.get(
+                    "all_accepted_mean_reconstruction_error_db", ""
+                ),
+                "rir_converged": (summary.get("convergence") or {}).get(
+                    "converged", ""
+                ),
+                "rir_stop_reason": (summary.get("convergence") or {}).get(
+                    "stop_reason", ""
+                ),
                 "sample_rate_hz": sample_rate,
                 "rir_samples": len(audio),
                 "microphone_channel_count": audio.shape[1],
@@ -720,8 +761,8 @@ def compile_rir_dataset(path: str | Path) -> Path:
             and validation_error_count == 0
             and not split_issues
         ),
-        "training_unit": "mean_ir_per_microphone",
-        "averaging_scope": "accepted_takes_within_one_experiment_only",
+        "training_unit": "selected_ir_per_microphone",
+        "averaging_scope": "automatic_selection_within_one_experiment_only",
         "cross_experiment_averaging": False,
     }
     (dataset_root / "dataset_manifest.json").write_text(

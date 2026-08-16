@@ -1,0 +1,26 @@
+{
+  "sample_index": 10,
+  "repetition": 1,
+  "sample_rate_hz": 16000,
+  "stream_sample_count": 16960,
+  "gap_samples": 400,
+  "gap_s": 0.025,
+  "alignment_method": "single_continuous_full_duplex_stream",
+  "segments": {
+    "target_only": {
+      "start_sample": 400,
+      "end_sample": 5520,
+      "sample_count": 5120
+    },
+    "interferer_only": {
+      "start_sample": 5920,
+      "end_sample": 11040,
+      "sample_count": 5120
+    },
+    "mixture": {
+      "start_sample": 11440,
+      "end_sample": 16560,
+      "sample_count": 5120
+    }
+  }
+}
