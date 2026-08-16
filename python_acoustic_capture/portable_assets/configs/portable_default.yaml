@@ -32,6 +32,8 @@ sweep:
   pre_peak_s: 0.01
 
 repeats:
+  strategy: adaptive_select
+  fixed_count: 5
   minimum: 5
   maximum: 8
   correlation_threshold: 0.90

@@ -54,6 +54,8 @@ class SweepConfig:
 
 @dataclass
 class RepeatConfig:
+    strategy: str = "adaptive_select"  # adaptive_select | fixed_count
+    fixed_count: int = 5
     minimum: int = 5
     maximum: int = 8
     correlation_threshold: float = 0.98
@@ -152,6 +154,12 @@ class ExperimentConfig:
             )
         if not 1 <= r.minimum <= r.maximum:
             raise ValueError("repeats must satisfy 1 <= minimum <= maximum")
+        if r.strategy not in {"adaptive_select", "fixed_count"}:
+            raise ValueError(
+                "repeats.strategy must be adaptive_select or fixed_count"
+            )
+        if not 1 <= r.fixed_count <= 100:
+            raise ValueError("repeats.fixed_count must be between 1 and 100")
         if not 1 <= r.required_stable_takes <= r.maximum:
             raise ValueError(
                 "repeats.required_stable_takes must be between 1 and maximum"

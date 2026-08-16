@@ -483,12 +483,34 @@ def _finalize_average(
 ) -> dict:
     summary: dict = {
         "output_channel": output_channel,
+        "capture_strategy": repeat_config.strategy,
+        "requested_fixed_attempts": (
+            repeat_config.fixed_count
+            if repeat_config.strategy == "fixed_count"
+            else None
+        ),
         "attempted_takes": len(all_metrics),
         "accepted_takes": [take.index for take in accepted],
         "rejected_takes": [item["take"] for item in all_metrics if not item["accepted"]],
         "sample_rate": sample_rate,
         "deconvolution": "regularized_kirkeby_matlab_impzest_compatible",
         "alignment": "common_shift_from_microphone_1_preserves_inter_microphone_delay",
+        "offline_reselection": {
+            "available": True,
+            "selection_deferred": repeat_config.strategy == "fixed_count",
+            "takes": [
+                {
+                    "take": item["take"],
+                    "accepted_by_qc": item["accepted"],
+                    "rejection_reasons": item.get("rejection_reasons", []),
+                    "raw_recording": f"raw/take_{item['take']:03d}.wav",
+                    "full_ir": f"processed/take_{item['take']:03d}_full_ir.wav",
+                    "aligned_rir": f"processed/take_{item['take']:03d}_rir.wav",
+                    "metrics": f"metrics/take_{item['take']:03d}.json",
+                }
+                for item in all_metrics
+            ],
+        },
     }
     last_aggregation = next(
         (
@@ -505,6 +527,8 @@ def _finalize_average(
     )
     if status == "cancelled":
         stop_reason = "cancelled_by_operator"
+    elif repeat_config.strategy == "fixed_count":
+        stop_reason = "fixed_attempt_count_completed"
     elif converged:
         stop_reason = "aggregate_and_reconstruction_error_converged"
     elif len(all_metrics) >= repeat_config.maximum:
@@ -570,7 +594,13 @@ def _finalize_average(
                 "selection_candidates": aggregation["candidate_methods"],
                 "selection_note": (
                     "All microphones share the same take selection. No per-take "
-                    "peak/RMS normalization is applied to the saved training RIR."
+                    "peak/RMS normalization is applied to the saved training RIR. "
+                    + (
+                        "Fixed-count mode keeps this automatic result as a reference; "
+                        "all raw takes remain available for later offline reselection."
+                        if repeat_config.strategy == "fixed_count"
+                        else ""
+                    )
                 ),
             }
         )
@@ -618,13 +648,15 @@ def capture_rir(
     previous_selected_rir: np.ndarray | None = None
     previous_reconstruction_error_db: float | None = None
     cancelled = False
+    fixed_count_mode = repeat_cfg.strategy == "fixed_count"
+    attempt_limit = repeat_cfg.fixed_count if fixed_count_mode else repeat_cfg.maximum
 
     try:
-        for take_index in range(1, repeat_cfg.maximum + 1):
+        for take_index in range(1, attempt_limit + 1):
             if stop_requested is not None and stop_requested():
                 cancelled = True
                 break
-            log(f"脉冲响应采集 {take_index}/{repeat_cfg.maximum}：正在播放扫频信号")
+            log(f"脉冲响应采集 {take_index}/{attempt_limit}：正在播放扫频信号")
             capture = backend.play_record(output)
             if stop_requested is not None and stop_requested():
                 cancelled = True
@@ -783,7 +815,7 @@ def capture_rir(
 
             enough = len(accepted) >= repeat_cfg.minimum
             stable = stable_count >= repeat_cfg.required_stable_takes
-            if enough and stable:
+            if not fixed_count_mode and enough and stable:
                 log("已达到自适应重复停止条件")
                 break
             if repeat_cfg.pause_s:
@@ -806,9 +838,10 @@ def capture_rir(
             )
             log(f"采集已停止；已完成的数据保存在：{store.root}")
             return store
-        if len(accepted) < repeat_cfg.minimum:
+        required_accepted = 1 if fixed_count_mode else repeat_cfg.minimum
+        if len(accepted) < required_accepted:
             raise RuntimeError(
-                f"只有 {len(accepted)} 次有效脉冲响应，最少需要 {repeat_cfg.minimum} 次"
+                f"只有 {len(accepted)} 次有效脉冲响应，最少需要 {required_accepted} 次"
             )
         _finalize_average(
             store,

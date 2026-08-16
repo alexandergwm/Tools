@@ -102,6 +102,53 @@ def test_rir_stop_keeps_completed_takes_as_a_partial_average(tmp_path: Path):
     assert store.path("processed/average_rir.wav").is_file()
 
 
+def test_rir_fixed_count_records_exact_attempts_and_defers_selection(tmp_path: Path):
+    class FirstTakeXrunBackend(SimulatedBackend):
+        def __init__(self, config):
+            super().__init__(config)
+            self.take = 0
+
+        def play_record(self, output: np.ndarray) -> CaptureResult:
+            self.take += 1
+            result = super().play_record(output)
+            result.status["xrun"] = self.take == 1
+            return result
+
+    cfg = ExperimentConfig()
+    cfg.audio.backend = "simulated"
+    cfg.sweep.duration_s = 0.1
+    cfg.sweep.pre_silence_s = 0.02
+    cfg.sweep.post_silence_s = 0.05
+    cfg.sweep.rir_duration_s = 0.05
+    cfg.repeats.strategy = "fixed_count"
+    cfg.repeats.fixed_count = 3
+    # Fixed-count mode records three raw attempts even though the adaptive
+    # minimum is five and convergence would already permit an early stop.
+    cfg.repeats.minimum = 5
+    cfg.repeats.maximum = 8
+    cfg.repeats.required_stable_takes = 1
+    cfg.repeats.pause_s = 0
+    cfg.storage.root = str(tmp_path)
+    cfg.storage.compute_sha256 = False
+
+    store = capture_rir(
+        cfg, FirstTakeXrunBackend(cfg.audio), log=lambda _: None
+    )
+    summary = store.manifest["summary"]
+
+    assert summary["capture_strategy"] == "fixed_count"
+    assert summary["requested_fixed_attempts"] == 3
+    assert summary["attempted_takes"] == 3
+    assert summary["accepted_takes"] == [2, 3]
+    assert summary["rejected_takes"] == [1]
+    assert summary["convergence"]["stop_reason"] == "fixed_attempt_count_completed"
+    assert summary["offline_reselection"]["selection_deferred"] is True
+    assert len(summary["offline_reselection"]["takes"]) == 3
+    assert all(store.path(f"raw/take_{take:03d}.wav").is_file() for take in (1, 2, 3))
+    assert store.path("processed/selected_rir.wav").is_file()
+    assert store.manifest["status"] == "completed"
+
+
 def test_rir_supports_more_than_two_microphones(tmp_path: Path):
     cfg = ExperimentConfig()
     cfg.audio.backend = "simulated"

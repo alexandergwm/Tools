@@ -259,6 +259,22 @@ acoustic-capture speech-dataset runs datasets\headset_speech_generalization_v1 `
 
 ## 6. RIR 重复与平均
 
+GUI 的“RIR 重复采集方式”有两种选择：
+
+- `自动选优（TrajectoRIR 思路，推荐）`：默认方式。按下述质量判定和重构误差自动继续或停止，并从
+  `best_single`、`aligned_mean`、`consensus_mean` 中选出参考结果；
+- `固定次数（保留原始 take，之后再选）`：严格完成 `fixed_count` 次播放和录制，不因已经收敛而提前停止。
+  所有原始录音、完整反卷积 IR、对齐裁剪 IR 和逐次质检均保留。系统仍生成一个自动参考结果，但
+  `metrics/summary.json` 会标记 `selection_deferred: true`，方便之后从原始 take 离线重选。
+
+对应 YAML：
+
+```yaml
+repeats:
+  strategy: adaptive_select  # 或 fixed_count
+  fixed_count: 5             # 只在 fixed_count 时生效
+```
+
 默认取得至少 5 次有效 IR；若聚合仍未收敛则继续，最多 8 次。每加入一个有效 take，工具都会比较
 聚合 RIR 相对上一步的归一化变化，以及“候选 RIR 与 ESS 回卷后”和真实麦克风扫频录音之间的
 leave-one-out 归一化误差。默认连续两次满足 RIR 变化不超过 1%（-40 dB）、重构误差变化不超过
@@ -278,10 +294,11 @@ leave-one-out 归一化误差。默认连续两次满足 RIR 变化不超过 1%�
 逐条 peak/RMS 归一化，避免破坏通道间增益和相位。超过 8 次仍未收敛时会保留结果并在指标中显示，
 现场应优先检查环境变化、声卡时钟、佩戴或声源是否移动，而不是无限平均。
 
-- `processed/average_rir.wav`：对齐后的有效 take 均值；
+- `processed/average_rir.wav`：与 `selected_rir.wav` 相同的自动选优结果；
+- `processed/all_accepted_mean_rir.wav`：所有有效 take 对齐后的直接均值；
 - `processed/median_rir.wav`：对突发异常更稳健的逐样本中位数；
 - `metrics/take_NNN.json`：削波、峰值、漂移、相关性和后端状态；
-- `metrics/summary.json`：接受和拒绝的 take 编号。
+- `metrics/summary.json`：接受/拒绝的 take 编号、选择方法，以及每个原始 take 的离线重选路径。
 
 去卷积使用与 MATLAB `impzest` 同类的频率相关 Kirkeby 正则化逆滤波，降低扫频带外噪声被
 反向放大的风险。第 1 个麦克风的直达峰提供每次 take 的公共裁剪和对齐基准；所有麦克风只做

@@ -17,6 +17,11 @@ Acoustic Capture Portable
 
 Manual naming remains available when no checklist row is selected.
 
+RIR capture defaults to automatic TrajectoRIR-inspired selection. Choose the
+fixed-count option in the RIR panel when you need an exact number of raw takes
+for later offline reselection; fixed-count capture never stops early on
+convergence, and the automatic RIR is kept only as a reference result.
+
 Large speech batches are checkpointed after every completed source pair. If a
 run is stopped or fails, enter the same experiment name next time and accept
 the resume prompt. Edited labels.xlsx files can be imported from the File menu;

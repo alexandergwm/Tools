@@ -130,6 +130,18 @@ def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
         assert "RIR" in str(app.start_button.cget("text"))
         assert app.mode_var.get() == "rir"
         assert not app.advanced_var.get()
+        assert app.variables["repeats.strategy"].get().startswith("自动选优")
+        assert app.field_rows["repeats.strategy"][1].winfo_manager() == "grid"
+        assert app.field_rows["repeats.fixed_count"][1].winfo_manager() == ""
+        app.variables["repeats.strategy"].set(
+            gui_module.RIR_STRATEGY_TO_LABEL["fixed_count"]
+        )
+        app._set_mode()
+        assert app.field_rows["repeats.fixed_count"][1].winfo_manager() == "grid"
+        app.variables["repeats.strategy"].set(
+            gui_module.RIR_STRATEGY_TO_LABEL["adaptive_select"]
+        )
+        app._set_mode()
         assert app.field_rows["sweep.start_hz"][1].winfo_manager() == ""
         assert app.field_rows["sweep.level_dbfs"][1].winfo_manager() == "grid"
         assert app.metadata_summary_panel.winfo_manager() == "grid"

@@ -54,7 +54,9 @@ FIELDS = [
     ("sweep.level_dbfs", "扫频播放电平（dBFS）", float, "rir"),
     ("sweep.rir_duration_s", "脉冲响应长度（秒）", float, "rir"),
     ("sweep.pre_peak_s", "脉冲峰值前保留时间（秒）", float, "rir"),
-    ("repeats.minimum", "每次实验的有效 RIR 次数", int, "rir"),
+    ("repeats.strategy", "RIR 重复采集方式", str, "rir"),
+    ("repeats.fixed_count", "固定方式的录制次数", int, "rir"),
+    ("repeats.minimum", "自动方式的最少有效次数", int, "rir"),
     ("repeats.maximum", "最多尝试次数", int, "rir"),
     ("repeats.correlation_threshold", "脉冲响应相关性阈值", float, "rir"),
     ("repeats.minimum_sweep_snr_db", "扫频相对底噪最低信噪比（分贝）", float, "rir"),
@@ -98,6 +100,13 @@ SOURCE_MODE_TO_LABEL = {"single": "单个文件", "folders": "文件夹批量"}
 LABEL_TO_SOURCE_MODE = {label: value for value, label in SOURCE_MODE_TO_LABEL.items()}
 PAIRING_MODE_TO_LABEL = {"cycle": "按顺序循环配对", "cartesian": "全部组合配对"}
 LABEL_TO_PAIRING_MODE = {label: value for value, label in PAIRING_MODE_TO_LABEL.items()}
+RIR_STRATEGY_TO_LABEL = {
+    "adaptive_select": "自动选优（TrajectoRIR 思路，推荐）",
+    "fixed_count": "固定次数（保留原始 take，之后再选）",
+}
+LABEL_TO_RIR_STRATEGY = {
+    label: value for value, label in RIR_STRATEGY_TO_LABEL.items()
+}
 FILE_PATH_FIELDS = {
     "general.source_file",
     "scene.target_file",
@@ -117,7 +126,7 @@ SECTION_STARTS = {
     "general.action": ("基础播录设置", "basic"),
     "audio.target_output_channel": ("声源输出路由", "rir_speech"),
     "sweep.start_hz": ("ESS 扫频信号设置", "rir"),
-    "repeats.minimum": ("RIR 重复与质量判定", "rir"),
+    "repeats.strategy": ("RIR 重复与质量判定", "rir"),
     "scene.source_mode": ("语音增强素材与采集序列", "speech"),
     "storage.root": ("保存位置与实验标识", "common"),
 }
@@ -190,6 +199,7 @@ ADVANCED_FIELDS = {
     "sweep.fade_out_s",
     "sweep.rir_duration_s",
     "sweep.pre_peak_s",
+    "repeats.minimum",
     "repeats.maximum",
     "repeats.correlation_threshold",
     "repeats.minimum_sweep_snr_db",
@@ -463,6 +473,14 @@ class CaptureGUI(tk.Tk):
                     values=list(PAIRING_MODE_TO_LABEL.values()),
                     state="readonly",
                 )
+            elif name == "repeats.strategy":
+                input_widget = ttk.Combobox(
+                    body,
+                    textvariable=self.variables[name],
+                    values=list(RIR_STRATEGY_TO_LABEL.values()),
+                    state="readonly",
+                )
+                input_widget.bind("<<ComboboxSelected>>", lambda _: self._set_mode())
             elif name in {"audio.input_device", "audio.output_device"}:
                 input_widget = ttk.Combobox(body, textvariable=self.variables[name])
                 self.device_boxes[name] = input_widget
@@ -595,6 +613,8 @@ class CaptureGUI(tk.Tk):
                 shown = SOURCE_MODE_TO_LABEL.get(value, _display(value))
             elif name == "scene.pairing_mode":
                 shown = PAIRING_MODE_TO_LABEL.get(value, _display(value))
+            elif name == "repeats.strategy":
+                shown = RIR_STRATEGY_TO_LABEL.get(value, _display(value))
             else:
                 shown = _display(value)
             self.variables[name].set(shown)
@@ -625,6 +645,8 @@ class CaptureGUI(tk.Tk):
                 value = LABEL_TO_SOURCE_MODE.get(raw, raw)
             elif name == "scene.pairing_mode":
                 value = LABEL_TO_PAIRING_MODE.get(raw, raw)
+            elif name == "repeats.strategy":
+                value = LABEL_TO_RIR_STRATEGY.get(raw, raw)
             else:
                 value = converter(raw)
             # Numeric strings are allowed as sounddevice indices.
@@ -1368,6 +1390,12 @@ class CaptureGUI(tk.Tk):
             self.variables.get("scene.source_mode", tk.StringVar(value="单个文件")).get(),
             "single",
         )
+        rir_strategy = LABEL_TO_RIR_STRATEGY.get(
+            self.variables.get(
+                "repeats.strategy", tk.StringVar(value="adaptive_select")
+            ).get(),
+            "adaptive_select",
+        )
 
         for name, _, _, group in FIELDS:
             visible = group in visible_groups
@@ -1375,6 +1403,8 @@ class CaptureGUI(tk.Tk):
                 visible = False
             if name == "general.action":
                 visible = False
+            if name == "repeats.fixed_count":
+                visible = visible and rir_strategy == "fixed_count"
             if name == "audio.input_device" or name == "audio.input_channels":
                 visible = visible and recording_needed
             elif name == "audio.output_device":
