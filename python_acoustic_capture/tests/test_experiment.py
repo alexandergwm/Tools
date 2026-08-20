@@ -42,6 +42,7 @@ def _write_plan(tmp_path: Path) -> Path:
     base.sweep.pre_silence_s = 0.02
     base.sweep.post_silence_s = 0.03
     base.sweep.rir_duration_s = 0.04
+    base.repeats.fixed_count = 1
     base.repeats.minimum = 1
     base.repeats.maximum = 1
     base.repeats.required_stable_takes = 1
@@ -185,6 +186,7 @@ def test_compile_manual_rir_runs_keeps_runs_independent_and_all_microphones(tmp_
     cfg.sweep.pre_silence_s = 0.02
     cfg.sweep.post_silence_s = 0.03
     cfg.sweep.rir_duration_s = 0.04
+    cfg.repeats.fixed_count = 1
     cfg.repeats.minimum = 1
     cfg.repeats.maximum = 1
     cfg.repeats.required_stable_takes = 1

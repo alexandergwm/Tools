@@ -17,10 +17,12 @@ Acoustic Capture Portable
 
 Manual naming remains available when no checklist row is selected.
 
-RIR capture defaults to automatic TrajectoRIR-inspired selection. Choose the
-fixed-count option in the RIR panel when you need an exact number of raw takes
-for later offline reselection; fixed-count capture never stops early on
-convergence, and the automatic RIR is kept only as a reference result.
+RIR capture defaults to an exact take count. Every take is deconvolved, then
+reconvolved with the original ESS and compared with the corresponding real
+microphone sweep using MSE, NMSE, and correlation. The final RIR is the aligned
+arithmetic mean of all takes accepted by recording QC. A second mode keeps the
+same raw files but marks the generated mean as a reference for later offline
+reselection.
 
 Large speech batches are checkpointed after every completed source pair. If a
 run is stopped or fails, enter the same experiment name next time and accept

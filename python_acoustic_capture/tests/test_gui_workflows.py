@@ -60,6 +60,7 @@ def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
     config.sweep.pre_silence_s = 0.02
     config.sweep.post_silence_s = 0.05
     config.sweep.rir_duration_s = 0.05
+    config.repeats.fixed_count = 2
     config.repeats.minimum = 2
     config.repeats.maximum = 2
     config.repeats.required_stable_takes = 1
@@ -130,16 +131,16 @@ def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
         assert "RIR" in str(app.start_button.cget("text"))
         assert app.mode_var.get() == "rir"
         assert not app.advanced_var.get()
-        assert app.variables["repeats.strategy"].get().startswith("自动选优")
+        assert app.variables["repeats.strategy"].get().startswith("固定次数 + 重构质检")
         assert app.field_rows["repeats.strategy"][1].winfo_manager() == "grid"
-        assert app.field_rows["repeats.fixed_count"][1].winfo_manager() == ""
+        assert app.field_rows["repeats.fixed_count"][1].winfo_manager() == "grid"
         app.variables["repeats.strategy"].set(
             gui_module.RIR_STRATEGY_TO_LABEL["fixed_count"]
         )
         app._set_mode()
         assert app.field_rows["repeats.fixed_count"][1].winfo_manager() == "grid"
         app.variables["repeats.strategy"].set(
-            gui_module.RIR_STRATEGY_TO_LABEL["adaptive_select"]
+            gui_module.RIR_STRATEGY_TO_LABEL["reconstruct_average"]
         )
         app._set_mode()
         assert app.field_rows["sweep.start_hz"][1].winfo_manager() == ""

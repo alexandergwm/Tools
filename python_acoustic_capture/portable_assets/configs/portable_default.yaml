@@ -32,16 +32,11 @@ sweep:
   pre_peak_s: 0.01
 
 repeats:
-  strategy: adaptive_select
+  strategy: reconstruct_average
   fixed_count: 5
-  minimum: 5
-  maximum: 8
   correlation_threshold: 0.90
   peak_drift_samples: 2
   minimum_sweep_snr_db: 6.0
-  required_stable_takes: 2
-  aggregate_change_threshold_db: -40.0
-  reconstruction_change_threshold_db: 0.1
   reject_clipped: true
   clip_threshold: 0.999
   pause_s: 1.0

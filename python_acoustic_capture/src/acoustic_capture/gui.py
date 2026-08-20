@@ -55,14 +55,9 @@ FIELDS = [
     ("sweep.rir_duration_s", "脉冲响应长度（秒）", float, "rir"),
     ("sweep.pre_peak_s", "脉冲峰值前保留时间（秒）", float, "rir"),
     ("repeats.strategy", "RIR 重复采集方式", str, "rir"),
-    ("repeats.fixed_count", "固定方式的录制次数", int, "rir"),
-    ("repeats.minimum", "自动方式的最少有效次数", int, "rir"),
-    ("repeats.maximum", "最多尝试次数", int, "rir"),
+    ("repeats.fixed_count", "每次实验的录制次数", int, "rir"),
     ("repeats.correlation_threshold", "脉冲响应相关性阈值", float, "rir"),
     ("repeats.minimum_sweep_snr_db", "扫频相对底噪最低信噪比（分贝）", float, "rir"),
-    ("repeats.required_stable_takes", "连续收敛次数", int, "rir"),
-    ("repeats.aggregate_change_threshold_db", "聚合 RIR 变化阈值（分贝）", float, "rir"),
-    ("repeats.reconstruction_change_threshold_db", "重构误差变化阈值（分贝）", float, "rir"),
     ("scene.source_mode", "素材选择方式", str, "speech"),
     ("scene.duration_s", "每条片段时长（秒，推荐 4）", lambda x: None if not x else float(x), "speech"),
     ("scene.target_file", "干净目标音频文件", str, "speech"),
@@ -101,8 +96,8 @@ LABEL_TO_SOURCE_MODE = {label: value for value, label in SOURCE_MODE_TO_LABEL.it
 PAIRING_MODE_TO_LABEL = {"cycle": "按顺序循环配对", "cartesian": "全部组合配对"}
 LABEL_TO_PAIRING_MODE = {label: value for value, label in PAIRING_MODE_TO_LABEL.items()}
 RIR_STRATEGY_TO_LABEL = {
-    "adaptive_select": "自动选优（TrajectoRIR 思路，推荐）",
-    "fixed_count": "固定次数（保留原始 take，之后再选）",
+    "reconstruct_average": "固定次数 + 重构质检 + 全部有效平均（推荐）",
+    "fixed_count": "固定次数 + 保留原始 take，之后再选",
 }
 LABEL_TO_RIR_STRATEGY = {
     label: value for value, label in RIR_STRATEGY_TO_LABEL.items()
@@ -199,13 +194,8 @@ ADVANCED_FIELDS = {
     "sweep.fade_out_s",
     "sweep.rir_duration_s",
     "sweep.pre_peak_s",
-    "repeats.minimum",
-    "repeats.maximum",
     "repeats.correlation_threshold",
     "repeats.minimum_sweep_snr_db",
-    "repeats.required_stable_takes",
-    "repeats.aggregate_change_threshold_db",
-    "repeats.reconstruction_change_threshold_db",
     "scene.pairing_mode",
     "scene.file_extensions",
     "scene.label_prefix",
@@ -614,6 +604,8 @@ class CaptureGUI(tk.Tk):
             elif name == "scene.pairing_mode":
                 shown = PAIRING_MODE_TO_LABEL.get(value, _display(value))
             elif name == "repeats.strategy":
+                if value == "adaptive_select":
+                    value = "reconstruct_average"
                 shown = RIR_STRATEGY_TO_LABEL.get(value, _display(value))
             else:
                 shown = _display(value)
@@ -1390,21 +1382,12 @@ class CaptureGUI(tk.Tk):
             self.variables.get("scene.source_mode", tk.StringVar(value="单个文件")).get(),
             "single",
         )
-        rir_strategy = LABEL_TO_RIR_STRATEGY.get(
-            self.variables.get(
-                "repeats.strategy", tk.StringVar(value="adaptive_select")
-            ).get(),
-            "adaptive_select",
-        )
-
         for name, _, _, group in FIELDS:
             visible = group in visible_groups
             if name in ADVANCED_FIELDS and not advanced:
                 visible = False
             if name == "general.action":
                 visible = False
-            if name == "repeats.fixed_count":
-                visible = visible and rir_strategy == "fixed_count"
             if name == "audio.input_device" or name == "audio.input_channels":
                 visible = visible and recording_needed
             elif name == "audio.output_device":

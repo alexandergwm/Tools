@@ -54,16 +54,11 @@ class SweepConfig:
 
 @dataclass
 class RepeatConfig:
-    strategy: str = "adaptive_select"  # adaptive_select | fixed_count
+    strategy: str = "reconstruct_average"  # reconstruct_average | fixed_count
     fixed_count: int = 5
-    minimum: int = 5
-    maximum: int = 8
     correlation_threshold: float = 0.98
     peak_drift_samples: int = 2
     minimum_sweep_snr_db: float = 6.0
-    required_stable_takes: int = 2
-    aggregate_change_threshold_db: float = -40.0
-    reconstruction_change_threshold_db: float = 0.1
     reject_clipped: bool = True
     clip_threshold: float = 0.999
     pause_s: float = 0.5
@@ -152,28 +147,20 @@ class ExperimentConfig:
                 "the RIR tail after pre_peak_s cannot exceed sweep.post_silence_s; "
                 "otherwise the saved RIR tail was never recorded"
             )
-        if not 1 <= r.minimum <= r.maximum:
-            raise ValueError("repeats must satisfy 1 <= minimum <= maximum")
-        if r.strategy not in {"adaptive_select", "fixed_count"}:
+        if r.strategy not in {"reconstruct_average", "fixed_count"}:
             raise ValueError(
-                "repeats.strategy must be adaptive_select or fixed_count"
+                "repeats.strategy must be reconstruct_average or fixed_count"
             )
         if not 1 <= r.fixed_count <= 100:
             raise ValueError("repeats.fixed_count must be between 1 and 100")
-        if not 1 <= r.required_stable_takes <= r.maximum:
-            raise ValueError(
-                "repeats.required_stable_takes must be between 1 and maximum"
-            )
+        if not 0.0 <= r.correlation_threshold <= 1.0:
+            raise ValueError("repeats.correlation_threshold must be between 0 and 1")
+        if r.peak_drift_samples < 0:
+            raise ValueError("repeats.peak_drift_samples must be non-negative")
         if r.minimum_sweep_snr_db < 0:
             raise ValueError("repeats.minimum_sweep_snr_db must be non-negative")
-        if not -120.0 <= r.aggregate_change_threshold_db < 0.0:
-            raise ValueError(
-                "repeats.aggregate_change_threshold_db must be in [-120, 0) dB"
-            )
-        if r.reconstruction_change_threshold_db < 0.0:
-            raise ValueError(
-                "repeats.reconstruction_change_threshold_db must be non-negative"
-            )
+        if r.pause_s < 0:
+            raise ValueError("repeats.pause_s must be non-negative")
         if not -100 <= s.level_dbfs <= 0:
             raise ValueError("sweep.level_dbfs must be between -100 and 0")
         allowed = {"ambient", "target_only", "interferer_only", "mixture"}
@@ -220,6 +207,15 @@ def load_config(path: str | Path) -> ExperimentConfig:
     with path.open("r", encoding="utf-8") as handle:
         raw = yaml.safe_load(handle) or {}
     sweep_values = dict(raw.get("sweep") or {})
+    repeat_values = dict(raw.get("repeats") or {})
+    for legacy_field in (
+        "minimum",
+        "maximum",
+        "required_stable_takes",
+        "aggregate_change_threshold_db",
+        "reconstruction_change_threshold_db",
+    ):
+        repeat_values.pop(legacy_field, None)
     legacy_fade = sweep_values.pop("fade_s", None)
     if legacy_fade is not None:
         # Older files used one symmetric fade.  Preserve their intent while
@@ -230,11 +226,16 @@ def load_config(path: str | Path) -> ExperimentConfig:
         audio=_make(AudioConfig, raw.get("audio")),
         general=_make(GeneralIOConfig, raw.get("general")),
         sweep=_make(SweepConfig, sweep_values),
-        repeats=_make(RepeatConfig, raw.get("repeats")),
+        repeats=_make(RepeatConfig, repeat_values),
         scene=_make(SceneConfig, raw.get("scene")),
         storage=_make(StorageConfig, raw.get("storage")),
         metadata=raw.get("metadata", {}),
     )
+    # Version 0.2.7 used an adaptive TrajectoRIR-inspired strategy.  Preserve
+    # old configuration files while migrating them to the fixed-count,
+    # reconvolution-QC-and-mean workflow.
+    if cfg.repeats.strategy == "adaptive_select":
+        cfg.repeats.strategy = "reconstruct_average"
     # Relative paths are interpreted relative to the YAML file, not the shell.
     for section, attr in (
         (cfg.general, "source_file"),

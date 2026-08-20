@@ -7,6 +7,7 @@ from acoustic_capture.rir import (
     estimate_impulse_response,
     normalized_reconstruction_error_db,
     normalized_rir_change_db,
+    reconstruction_metrics,
     select_rir_ensemble,
 )
 from acoustic_capture.signals import exponential_sweep, route_outputs
@@ -100,6 +101,24 @@ def test_reconstruction_error_prefers_the_rir_that_generated_real_recording():
     wrong_error = normalized_reconstruction_error_db(wrong_rir, excitation, [measured])
 
     assert true_error < wrong_error - 20.0
+
+
+def test_reconstruction_metrics_report_mse_nmse_and_correlation_per_channel():
+    rng = np.random.default_rng(73)
+    excitation = rng.normal(0, 0.1, 1024).astype(np.float32)
+    rir = np.zeros((96, 2), dtype=np.float32)
+    rir[12, 0], rir[19, 1] = 0.8, 0.65
+    measured = np.column_stack(
+        [np.convolve(excitation, rir[:, channel]) for channel in range(2)]
+    ).astype(np.float32)
+
+    metrics, reconstructed = reconstruction_metrics(rir, excitation, measured)
+
+    assert reconstructed.shape == measured.shape
+    assert metrics["mean_mse"] < 1e-14
+    assert metrics["worst_nmse_db"] < -100
+    assert metrics["minimum_correlation"] > 0.999999
+    assert [item["microphone_channel"] for item in metrics["per_channel"]] == [1, 2]
 
 
 def test_rir_selection_keeps_one_common_consensus_for_all_microphones():

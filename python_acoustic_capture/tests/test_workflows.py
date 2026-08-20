@@ -8,7 +8,7 @@ import soundfile as sf
 
 from acoustic_capture.audio import CaptureResult, SimulatedBackend
 from acoustic_capture.check import capture_input_check, capture_silent_duplex_check
-from acoustic_capture.config import ExperimentConfig
+from acoustic_capture.config import ExperimentConfig, load_config
 from acoustic_capture.general import capture_general_io
 from acoustic_capture.rir import capture_rir
 from acoustic_capture.scene import (
@@ -31,6 +31,7 @@ def test_rir_end_to_end(tmp_path: Path):
     cfg.sweep.pre_silence_s = 0.05
     cfg.sweep.post_silence_s = 0.1
     cfg.sweep.rir_duration_s = 0.1
+    cfg.repeats.fixed_count = 5
     cfg.repeats.minimum = 5
     cfg.repeats.maximum = 10
     cfg.repeats.required_stable_takes = 1
@@ -48,25 +49,62 @@ def test_rir_end_to_end(tmp_path: Path):
     assert store.path("processed/average_rir_mic_01.wav").is_file()
     assert store.path("processed/average_rir_mic_02.wav").is_file()
     assert store.path("processed/selected_rir.wav").is_file()
-    assert store.path("processed/best_single_rir.wav").is_file()
     assert store.path("processed/all_accepted_mean_rir.wav").is_file()
+    assert store.path("processed/mean_recon.wav").is_file()
+    assert store.path("processed/recon_001.wav").is_file()
     assert store.manifest["summary"]["mean_rir_per_microphone"] == [
         "processed/average_rir_mic_01.wav",
         "processed/average_rir_mic_02.wav",
     ]
     assert store.manifest["summary"]["attempted_takes"] == 5
     assert store.manifest["summary"]["accepted_takes"] == [1, 2, 3, 4, 5]
-    assert store.manifest["summary"]["selection_method"] in {
-        "best_single",
-        "aligned_mean",
-        "consensus_mean",
-    }
-    assert set(store.manifest["summary"]["selected_take_ids"]).issubset({1, 2, 3, 4, 5})
-    assert store.manifest["summary"]["convergence"]["converged"] is True
+    assert store.manifest["summary"]["selection_method"] == (
+        "all_accepted_aligned_mean"
+    )
+    assert store.manifest["summary"]["selected_take_ids"] == [1, 2, 3, 4, 5]
+    accepted_rirs = np.stack(
+        [
+            sf.read(
+                store.path(f"processed/take_{take:03d}_rir.wav"),
+                always_2d=True,
+                dtype="float32",
+            )[0]
+            for take in range(1, 6)
+        ]
+    )
+    assert np.allclose(average, np.mean(accepted_rirs, axis=0), atol=1e-7)
+    assert store.manifest["summary"]["convergence"]["converged"] is None
     assert store.manifest["summary"]["convergence"]["stop_reason"] == (
-        "aggregate_and_reconstruction_error_converged"
+        "fixed_attempt_count_completed"
+    )
+    reconstruction = store.manifest["summary"]["average_rir_reconstruction"]
+    assert len(reconstruction["per_take"]) == 5
+    assert len(reconstruction["per_channel_summary"]) == 2
+    assert all(
+        item["self_reconstruction"]["mean_mse"] >= 0
+        for item in [
+            json.loads(
+                store.path(f"metrics/take_{take:03d}.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            for take in range(1, 6)
+        ]
     )
     assert store.manifest["status"] == "completed"
+
+
+def test_legacy_adaptive_rir_config_migrates_to_reconstruct_average(tmp_path: Path):
+    path = tmp_path / "legacy.yaml"
+    path.write_text(
+        "repeats:\n  strategy: adaptive_select\n  fixed_count: 4\n",
+        encoding="utf-8",
+    )
+
+    config = load_config(path)
+
+    assert config.repeats.strategy == "reconstruct_average"
+    assert config.repeats.fixed_count == 4
 
 
 def test_rir_stop_keeps_completed_takes_as_a_partial_average(tmp_path: Path):
@@ -76,6 +114,7 @@ def test_rir_stop_keeps_completed_takes_as_a_partial_average(tmp_path: Path):
     cfg.sweep.pre_silence_s = 0.02
     cfg.sweep.post_silence_s = 0.05
     cfg.sweep.rir_duration_s = 0.05
+    cfg.repeats.fixed_count = 4
     cfg.repeats.minimum = 2
     cfg.repeats.maximum = 4
     cfg.repeats.required_stable_takes = 2
@@ -122,8 +161,8 @@ def test_rir_fixed_count_records_exact_attempts_and_defers_selection(tmp_path: P
     cfg.sweep.rir_duration_s = 0.05
     cfg.repeats.strategy = "fixed_count"
     cfg.repeats.fixed_count = 3
-    # Fixed-count mode records three raw attempts even though the adaptive
-    # minimum is five and convergence would already permit an early stop.
+    # Raw-selection mode still records the exact requested number and keeps a
+    # reference mean without choosing a best-single take.
     cfg.repeats.minimum = 5
     cfg.repeats.maximum = 8
     cfg.repeats.required_stable_takes = 1
@@ -157,6 +196,7 @@ def test_rir_supports_more_than_two_microphones(tmp_path: Path):
     cfg.sweep.pre_silence_s = 0.05
     cfg.sweep.post_silence_s = 0.1
     cfg.sweep.rir_duration_s = 0.08
+    cfg.repeats.fixed_count = 2
     cfg.repeats.minimum = 2
     cfg.repeats.maximum = 2
     cfg.repeats.required_stable_takes = 1
@@ -188,6 +228,7 @@ def test_rir_rejects_take_with_audio_xrun(tmp_path: Path):
     cfg.sweep.pre_silence_s = 0.05
     cfg.sweep.post_silence_s = 0.1
     cfg.sweep.rir_duration_s = 0.08
+    cfg.repeats.fixed_count = 3
     cfg.repeats.minimum = 2
     cfg.repeats.maximum = 3
     cfg.repeats.required_stable_takes = 1
@@ -214,6 +255,7 @@ def test_rir_rejects_silent_microphones_instead_of_averaging_zero_ir(tmp_path: P
     cfg.sweep.pre_silence_s = 0.02
     cfg.sweep.post_silence_s = 0.03
     cfg.sweep.rir_duration_s = 0.03
+    cfg.repeats.fixed_count = 1
     cfg.repeats.minimum = 1
     cfg.repeats.maximum = 1
     cfg.repeats.pause_s = 0

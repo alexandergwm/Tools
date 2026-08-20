@@ -104,9 +104,9 @@ WAV 保存和结果图会自动跟随通道数扩展。
 RIR 数据集索引会同时保存 WAV 列号、实际声卡输入通道和麦克风编号；例如选择 `1,3,5` 时，
 不会被误标成连续的 `1,2,3`。
 
-点击“开始新的 RIR 实验（自动多次采集）”后，GUI 会先强制输入本次实验名称，再开始扫频。
-一次点击会按照 `repeats.minimum/maximum` 自动采集多次 IR、质检，并只对本实验中的有效 IR
-求均值。改变角度、高度、重新佩戴或移动麦杆后，再点击同一个开始按钮并输入新的自由名称；
+点击“开始新的 RIR 实验”后，GUI 会先强制输入本次实验名称，再开始扫频。
+一次点击会严格按照 `repeats.fixed_count` 采集多次 IR、做录音与回卷重构质检，并只对本实验中的
+有效 IR 求对齐算术均值。改变角度、高度、重新佩戴或移动麦杆后，再点击同一个开始按钮并输入新的自由名称；
 不会与上一次实验求平均。语音增强实验同样在点击开始时命名。名称会同时写入运行目录、
 `experiment_id`、`scene_id` 和清单元数据。
 自动展开的 RIR 实验名包含人工头、耳机型号/个体、佩戴、麦杆、声源、角度、高度和距离。
@@ -261,40 +261,36 @@ acoustic-capture speech-dataset runs datasets\headset_speech_generalization_v1 `
 
 GUI 的“RIR 重复采集方式”有两种选择：
 
-- `自动选优（TrajectoRIR 思路，推荐）`：默认方式。按下述质量判定和重构误差自动继续或停止，并从
-  `best_single`、`aligned_mean`、`consensus_mean` 中选出参考结果；
-- `固定次数（保留原始 take，之后再选）`：严格完成 `fixed_count` 次播放和录制，不因已经收敛而提前停止。
-  所有原始录音、完整反卷积 IR、对齐裁剪 IR 和逐次质检均保留。系统仍生成一个自动参考结果，但
-  `metrics/summary.json` 会标记 `selection_deferred: true`，方便之后从原始 take 离线重选。
+- `固定次数 + 重构质检 + 全部有效平均（推荐）`：严格完成设定次数。每个 take 反卷积得到 RIR 后，
+  再用原始 ESS 与该 RIR 卷积，和对应的真实麦克风扫频录音比较 MSE、RMSE、NMSE、相关系数及
+  仅供诊断的尺度无关 NMSE。通过录音基础质检的 take 全部参与对齐算术平均；
+- `固定次数 + 保留原始 take，之后再选`：采集和指标相同，但把生成的均值标记为参考结果，
+  `metrics/summary.json` 中为 `selection_deferred: true`，方便之后从原始 take 离线重选。
 
 对应 YAML：
 
 ```yaml
 repeats:
-  strategy: adaptive_select  # 或 fixed_count
-  fixed_count: 5             # 只在 fixed_count 时生效
+  strategy: reconstruct_average  # 或 fixed_count（延后选择）
+  fixed_count: 5
 ```
 
-默认取得至少 5 次有效 IR；若聚合仍未收敛则继续，最多 8 次。每加入一个有效 take，工具都会比较
-聚合 RIR 相对上一步的归一化变化，以及“候选 RIR 与 ESS 回卷后”和真实麦克风扫频录音之间的
-leave-one-out 归一化误差。默认连续两次满足 RIR 变化不超过 1%（-40 dB）、重构误差变化不超过
-0.1 dB 才自动停止。每次原始录音和反卷积结果都会保存；削波或相关性不合格的 take 会被拒绝但不会删除。
-任一麦克风的扫频相对前置底噪低于
+默认严格录制 5 次，不使用收敛提前停止。每次原始录音、完整反卷积 IR、对齐裁剪 IR、ESS 回卷重构信号
+和指标都会保存；削波或相关性不合格的 take 会被拒绝但不会删除。任一麦克风的扫频相对前置底噪低于
 `minimum_sweep_snr_db`、发生丢帧/削波、相关性不足或峰值漂移超限时，该 take 不进入均值。
 
 输出包括：
 
-- `average_rir.wav` / `selected_rir.wav`：自动选择的最终训练 RIR；
-- `best_single_rir.wav`：TrajectoRIR 风格的最佳单次结果；
-- `all_accepted_mean_rir.wav`：所有有效 take 对齐后的直接均值；
+- `average_rir.wav` / `selected_rir.wav` / `all_accepted_mean_rir.wav`：全部有效 take 对齐后的算术均值；
 - `median_rir.wav`：逐采样中位数，供诊断；
+- `recon_NNN.wav`：原始 ESS 与该次 RIR 卷积得到的重构扫频响应；
+- `mean_recon.wav`：最终平均 RIR 与原始 ESS 卷积得到的重构响应。
 
-自动选择会用 leave-one-out 真实录音重构误差比较 `best_single`、`aligned_mean` 和
-`consensus_mean`（排除离群 take 的一致性均值）。所有麦克风始终共用同一组 take，保存结果不做
-逐条 peak/RMS 归一化，避免破坏通道间增益和相位。超过 8 次仍未收敛时会保留结果并在指标中显示，
-现场应优先检查环境变化、声卡时钟、佩戴或声源是否移动，而不是无限平均。
+所有麦克风始终共用同一组 accepted take。平均前不对每条 RIR 做 peak/RMS 归一化，避免破坏
+通道间增益和相位。绝对 MSE 不拟合增益；同时提供拟合单个标量后的尺度无关 NMSE，便于区分
+整体增益偏差和时频形状错误。最终平均 RIR 还会分别回卷并和每个 accepted take 的真实录音比较。
 
-- `processed/average_rir.wav`：与 `selected_rir.wav` 相同的自动选优结果；
+- `processed/average_rir.wav`：全部有效 take 的对齐算术均值；
 - `processed/all_accepted_mean_rir.wav`：所有有效 take 对齐后的直接均值；
 - `processed/median_rir.wav`：对突发异常更稳健的逐样本中位数；
 - `metrics/take_NNN.json`：削波、峰值、漂移、相关性和后端状态；

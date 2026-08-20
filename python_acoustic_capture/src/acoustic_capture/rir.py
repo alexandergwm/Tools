@@ -258,6 +258,93 @@ def normalized_reconstruction_error_db(
     return _reconstruction_error_from_predictions_db(predictions, measured_responses)
 
 
+def reconstruct_recording(rir: np.ndarray, excitation: np.ndarray) -> np.ndarray:
+    """Convolve the original ESS with every RIR channel."""
+    rir = np.asarray(rir, dtype=np.float64)
+    excitation = np.asarray(excitation, dtype=np.float64).reshape(-1)
+    if rir.ndim == 1:
+        rir = rir[:, None]
+    return np.column_stack(
+        [
+            fftconvolve(excitation, rir[:, channel], mode="full")
+            for channel in range(rir.shape[1])
+        ]
+    ).astype(np.float32)
+
+
+def reconstruction_metrics(
+    rir: np.ndarray,
+    excitation: np.ndarray,
+    measured_response: np.ndarray,
+) -> tuple[dict, np.ndarray]:
+    """Compare ``ESS * RIR`` with the corresponding real microphone sweep.
+
+    Absolute MSE/NMSE are reported without gain fitting.  A second
+    scale-invariant NMSE fits one scalar gain per microphone and is included as
+    a diagnostic for transfer-function shape.  The RIR itself is never
+    normalized before averaging.
+    """
+    reconstructed = reconstruct_recording(rir, excitation)
+    measured = np.asarray(measured_response, dtype=np.float64)
+    if measured.ndim == 1:
+        measured = measured[:, None]
+    if measured.shape[1] != reconstructed.shape[1]:
+        raise ValueError("RIR and measured response channel counts differ")
+    count = min(len(measured), len(reconstructed))
+    if count < 1:
+        raise ValueError("reconstruction comparison window is empty")
+
+    per_channel = []
+    for channel in range(reconstructed.shape[1]):
+        actual = measured[:count, channel]
+        predicted = reconstructed[:count, channel].astype(np.float64)
+        residual = actual - predicted
+        mse = float(np.mean(residual * residual))
+        signal_mean_square = float(np.mean(actual * actual))
+        nmse = mse / max(signal_mean_square, 1e-24)
+        denominator = float(np.dot(predicted, predicted))
+        fitted_gain = (
+            float(np.dot(actual, predicted) / denominator)
+            if denominator > 1e-24
+            else 0.0
+        )
+        fitted_residual = actual - fitted_gain * predicted
+        fitted_mse = float(np.mean(fitted_residual * fitted_residual))
+        fitted_nmse = fitted_mse / max(signal_mean_square, 1e-24)
+        per_channel.append(
+            {
+                "microphone_channel": channel + 1,
+                "samples_compared": count,
+                "mse": mse,
+                "rmse": float(np.sqrt(mse)),
+                "nmse": nmse,
+                "nmse_db": float(10.0 * np.log10(max(nmse, 1e-24))),
+                "correlation": normalized_correlation(actual, predicted),
+                "fitted_gain": fitted_gain,
+                "scale_invariant_mse": fitted_mse,
+                "scale_invariant_nmse_db": float(
+                    10.0 * np.log10(max(fitted_nmse, 1e-24))
+                ),
+            }
+        )
+    return (
+        {
+            "comparison": "recorded_sweep_vs_original_ess_convolved_with_rir",
+            "gain_fitted_for_absolute_mse": False,
+            "per_channel": per_channel,
+            "mean_mse": float(np.mean([item["mse"] for item in per_channel])),
+            "worst_nmse_db": max(item["nmse_db"] for item in per_channel),
+            "minimum_correlation": min(
+                item["correlation"] for item in per_channel
+            ),
+            "worst_scale_invariant_nmse_db": max(
+                item["scale_invariant_nmse_db"] for item in per_channel
+            ),
+        },
+        reconstructed,
+    )
+
+
 def _reconstruction_error_from_predictions_db(
     predictions: list[np.ndarray], measured_responses: list[np.ndarray]
 ) -> float:
@@ -484,11 +571,7 @@ def _finalize_average(
     summary: dict = {
         "output_channel": output_channel,
         "capture_strategy": repeat_config.strategy,
-        "requested_fixed_attempts": (
-            repeat_config.fixed_count
-            if repeat_config.strategy == "fixed_count"
-            else None
-        ),
+        "requested_fixed_attempts": repeat_config.fixed_count,
         "attempted_takes": len(all_metrics),
         "accepted_takes": [take.index for take in accepted],
         "rejected_takes": [item["take"] for item in all_metrics if not item["accepted"]],
@@ -506,64 +589,86 @@ def _finalize_average(
                     "raw_recording": f"raw/take_{item['take']:03d}.wav",
                     "full_ir": f"processed/take_{item['take']:03d}_full_ir.wav",
                     "aligned_rir": f"processed/take_{item['take']:03d}_rir.wav",
+                    "reconstructed_sweep": (
+                        f"processed/recon_{item['take']:03d}.wav"
+                        if item.get("self_reconstruction") is not None
+                        else None
+                    ),
                     "metrics": f"metrics/take_{item['take']:03d}.json",
                 }
                 for item in all_metrics
             ],
         },
     }
-    last_aggregation = next(
-        (
-            item.get("aggregation")
-            for item in reversed(all_metrics)
-            if item.get("accepted") and item.get("aggregation")
-        ),
-        None,
-    )
-    converged = bool(
-        last_aggregation
-        and last_aggregation.get("consecutive_converged_updates", 0)
-        >= repeat_config.required_stable_takes
-    )
     if status == "cancelled":
         stop_reason = "cancelled_by_operator"
-    elif repeat_config.strategy == "fixed_count":
-        stop_reason = "fixed_attempt_count_completed"
-    elif converged:
-        stop_reason = "aggregate_and_reconstruction_error_converged"
-    elif len(all_metrics) >= repeat_config.maximum:
-        stop_reason = "maximum_attempts_reached_without_convergence"
     else:
-        stop_reason = "completed"
-    summary["convergence"] = {
-        "converged": converged,
+        stop_reason = "fixed_attempt_count_completed"
+    summary["completion"] = {
         "stop_reason": stop_reason,
-        "required_consecutive_updates": repeat_config.required_stable_takes,
-        "aggregate_change_threshold_db": repeat_config.aggregate_change_threshold_db,
-        "reconstruction_change_threshold_db": (
-            repeat_config.reconstruction_change_threshold_db
-        ),
-        "last_update": last_aggregation,
+        "requested_attempts": repeat_config.fixed_count,
+        "completed_attempts": len(all_metrics),
+    }
+    # Retained as a compatibility field for existing dataset spreadsheets.
+    # This workflow no longer uses convergence or adaptive stopping.
+    summary["convergence"] = {
+        "converged": None,
+        "stop_reason": stop_reason,
+        "disabled": True,
     }
     if accepted:
-        aggregation = select_rir_ensemble(
-            accepted,
-            excitation,
-            correlation_threshold=repeat_config.correlation_threshold,
-        )
         stack = np.stack([take.rir for take in accepted])
-        average = aggregation["selected_rir"]
-        all_accepted_mean = aggregation["all_accepted_mean_rir"]
+        average = np.mean(stack, axis=0).astype(np.float32)
         median = np.median(stack, axis=0).astype(np.float32)
         store.write_audio("processed/average_rir.wav", average, sample_rate)
         store.write_audio("processed/selected_rir.wav", average, sample_rate)
         store.write_audio(
-            "processed/all_accepted_mean_rir.wav", all_accepted_mean, sample_rate
-        )
-        store.write_audio(
-            "processed/best_single_rir.wav", aggregation["best_single_rir"], sample_rate
+            "processed/all_accepted_mean_rir.wav", average, sample_rate
         )
         store.write_audio("processed/median_rir.wav", median, sample_rate)
+        average_reconstruction_per_take = []
+        reconstructed_average = None
+        for take in accepted:
+            reconstruction, reconstructed = reconstruction_metrics(
+                average, excitation, take.validation_response
+            )
+            average_reconstruction_per_take.append(
+                {"take": take.index, **reconstruction}
+            )
+            if reconstructed_average is None:
+                reconstructed_average = reconstructed
+        if reconstructed_average is not None:
+            store.write_audio(
+                "processed/mean_recon.wav",
+                reconstructed_average,
+                sample_rate,
+            )
+        channel_reconstruction = []
+        for channel in range(average.shape[1]):
+            values = [
+                item["per_channel"][channel]
+                for item in average_reconstruction_per_take
+            ]
+            channel_reconstruction.append(
+                {
+                    "microphone_channel": channel + 1,
+                    "median_mse": float(np.median([item["mse"] for item in values])),
+                    "median_nmse_db": float(
+                        np.median([item["nmse_db"] for item in values])
+                    ),
+                    "minimum_correlation": min(
+                        item["correlation"] for item in values
+                    ),
+                    "worst_scale_invariant_nmse_db": max(
+                        item["scale_invariant_nmse_db"] for item in values
+                    ),
+                }
+            )
+        scale_invariant_error_db = normalized_reconstruction_error_db(
+            average,
+            excitation,
+            [take.validation_response for take in accepted],
+        )
         mean_rir_files = []
         for channel in range(average.shape[1]):
             relative = f"processed/average_rir_mic_{channel + 1:02d}.wav"
@@ -575,32 +680,31 @@ def _finalize_average(
                 "mean_rir_2ch": "processed/average_rir.wav",
                 "mean_rir_per_microphone": mean_rir_files,
                 "partial_average": status == "cancelled",
-                "selection_method": aggregation["selection_method"],
-                "selected_take_ids": aggregation["selected_take_indices"],
-                "selected_reconstruction_error_db": aggregation[
-                    "selected_reconstruction_error_db"
-                ],
-                "best_single_take": aggregation["best_single_take"],
-                "best_single_reconstruction_error_db": aggregation[
-                    "best_single_reconstruction_error_db"
-                ],
-                "all_accepted_mean_reconstruction_error_db": aggregation[
-                    "all_accepted_mean_reconstruction_error_db"
-                ],
-                "consensus_take_ids": aggregation["consensus_take_indices"],
-                "consensus_mean_reconstruction_error_db": aggregation[
-                    "consensus_mean_reconstruction_error_db"
-                ],
-                "selection_candidates": aggregation["candidate_methods"],
+                "selection_method": "all_accepted_aligned_mean",
+                "selected_take_ids": [take.index for take in accepted],
+                "selected_reconstruction_error_db": scale_invariant_error_db,
+                "all_accepted_mean_reconstruction_error_db": (
+                    scale_invariant_error_db
+                ),
+                "average_rir_reconstruction": {
+                    "comparison": (
+                        "each_recorded_sweep_vs_original_ess_convolved_with_"
+                        "all_accepted_aligned_mean_rir"
+                    ),
+                    "per_take": average_reconstruction_per_take,
+                    "per_channel_summary": channel_reconstruction,
+                    "worst_median_nmse_db": max(
+                        item["median_nmse_db"] for item in channel_reconstruction
+                    ),
+                    "minimum_correlation": min(
+                        item["minimum_correlation"]
+                        for item in channel_reconstruction
+                    ),
+                },
                 "selection_note": (
-                    "All microphones share the same take selection. No per-take "
-                    "peak/RMS normalization is applied to the saved training RIR. "
-                    + (
-                        "Fixed-count mode keeps this automatic result as a reference; "
-                        "all raw takes remain available for later offline reselection."
-                        if repeat_config.strategy == "fixed_count"
-                        else ""
-                    )
+                    "The final RIR is the aligned arithmetic mean of every take "
+                    "accepted by recording QC. No best-single or consensus selection "
+                    "and no per-take peak/RMS normalization are applied."
                 ),
             }
         )
@@ -644,12 +748,8 @@ def capture_rir(
     )
     accepted: list[RIRTake] = []
     all_metrics: list[dict] = []
-    stable_count = 0
-    previous_selected_rir: np.ndarray | None = None
-    previous_reconstruction_error_db: float | None = None
     cancelled = False
-    fixed_count_mode = repeat_cfg.strategy == "fixed_count"
-    attempt_limit = repeat_cfg.fixed_count if fixed_count_mode else repeat_cfg.maximum
+    attempt_limit = repeat_cfg.fixed_count
 
     try:
         for take_index in range(1, attempt_limit + 1):
@@ -708,6 +808,22 @@ def capture_rir(
             if not drift_ok:
                 rejection_reasons.append("公共峰值漂移超限")
             accepted_now = not rejection_reasons
+            validation_response = _validation_response(
+                raw,
+                len(sweep),
+                len(aligned),
+                fs,
+                sweep_cfg.pre_silence_s,
+                sweep_cfg.pre_peak_s,
+                reference_peak,
+                residual_alignment[0],
+            )
+            reconstruction = None
+            reconstructed = None
+            if not array_health["has_nonfinite_samples"]:
+                reconstruction, reconstructed = reconstruction_metrics(
+                    aligned, sweep, validation_response
+                )
             metrics = {
                 "take": take_index,
                 "accepted": accepted_now,
@@ -724,22 +840,19 @@ def capture_rir(
                 "backend_status": capture.status,
                 "audio_xrun": xrun,
                 "rejection_reasons": rejection_reasons,
+                "self_reconstruction": reconstruction,
             }
             store.write_audio(f"raw/take_{take_index:03d}.wav", raw, fs)
             store.write_audio(f"processed/take_{take_index:03d}_full_ir.wav", full_rir, fs)
             store.write_audio(f"processed/take_{take_index:03d}_rir.wav", aligned, fs)
+            if reconstructed is not None:
+                store.write_audio(
+                    f"processed/recon_{take_index:03d}.wav",
+                    reconstructed,
+                    fs,
+                )
             all_metrics.append(metrics)
             if accepted_now:
-                validation_response = _validation_response(
-                    raw,
-                    len(sweep),
-                    len(aligned),
-                    fs,
-                    sweep_cfg.pre_silence_s,
-                    sweep_cfg.pre_peak_s,
-                    reference_peak,
-                    residual_alignment[0],
-                )
                 accepted.append(
                     RIRTake(
                         take_index,
@@ -750,57 +863,19 @@ def capture_rir(
                         validation_response,
                     )
                 )
-                aggregation = select_rir_ensemble(
-                    accepted,
-                    sweep,
-                    correlation_threshold=repeat_cfg.correlation_threshold,
+                reconstruction_log = (
+                    f"，重构 MSE={reconstruction['mean_mse']:.3e}，"
+                    f"最差 NMSE={reconstruction['worst_nmse_db']:.2f} dB，"
+                    f"最低相关={reconstruction['minimum_correlation']:.4f}"
+                    if reconstruction is not None
+                    else ""
                 )
-                aggregate_change_db = None
-                reconstruction_change_db = None
-                converged = False
-                if previous_selected_rir is not None:
-                    aggregate_change_db = normalized_rir_change_db(
-                        aggregation["selected_rir"], previous_selected_rir
-                    )
-                    reconstruction_change_db = abs(
-                        aggregation["selected_reconstruction_error_db"]
-                        - float(previous_reconstruction_error_db)
-                    )
-                    converged = (
-                        aggregate_change_db
-                        <= repeat_cfg.aggregate_change_threshold_db
-                        and reconstruction_change_db
-                        <= repeat_cfg.reconstruction_change_threshold_db
-                    )
-                stable_count = stable_count + 1 if converged else 0
-                metrics["aggregation"] = {
-                    "selection_method": aggregation["selection_method"],
-                    "selected_take_ids": aggregation["selected_take_indices"],
-                    "leave_one_out_reconstruction_error_db": aggregation[
-                        "selected_reconstruction_error_db"
-                    ],
-                    "aggregate_change_db": aggregate_change_db,
-                    "reconstruction_error_change_db": reconstruction_change_db,
-                    "aggregate_change_threshold_db": (
-                        repeat_cfg.aggregate_change_threshold_db
-                    ),
-                    "reconstruction_change_threshold_db": (
-                        repeat_cfg.reconstruction_change_threshold_db
-                    ),
-                    "converged": converged,
-                    "consecutive_converged_updates": stable_count,
-                }
-                previous_selected_rir = aggregation["selected_rir"].copy()
-                previous_reconstruction_error_db = aggregation[
-                    "selected_reconstruction_error_db"
-                ]
                 log(
                     f"  已接受；扫频信噪比={min(sweep_snr):.1f} dB，"
                     f"相关性={min(correlations):.4f}，公共峰值漂移={drift}，"
-                    f"双麦峰值偏移={microphone_offsets}"
+                    f"双麦峰值偏移={microphone_offsets}{reconstruction_log}"
                 )
             else:
-                stable_count = 0
                 log(
                     f"  已拒绝：{', '.join(rejection_reasons)}；"
                     f"扫频信噪比={min(sweep_snr):.1f} dB，"
@@ -813,11 +888,6 @@ def capture_rir(
             if progress is not None:
                 progress(store.root, take_index)
 
-            enough = len(accepted) >= repeat_cfg.minimum
-            stable = stable_count >= repeat_cfg.required_stable_takes
-            if not fixed_count_mode and enough and stable:
-                log("已达到自适应重复停止条件")
-                break
             if repeat_cfg.pause_s:
                 if stop_requested is None:
                     time.sleep(repeat_cfg.pause_s)
@@ -838,7 +908,7 @@ def capture_rir(
             )
             log(f"采集已停止；已完成的数据保存在：{store.root}")
             return store
-        required_accepted = 1 if fixed_count_mode else repeat_cfg.minimum
+        required_accepted = 1
         if len(accepted) < required_accepted:
             raise RuntimeError(
                 f"只有 {len(accepted)} 次有效脉冲响应，最少需要 {required_accepted} 次"

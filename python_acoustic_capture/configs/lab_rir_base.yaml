@@ -27,18 +27,13 @@ sweep:
   pre_peak_s: 0.01
 
 repeats:
-  # 默认按重构误差自动选优；也可改为 fixed_count，严格录够 fixed_count 次后离线重选。
-  strategy: adaptive_select
+  # 默认严格录制 fixed_count 次，逐次做 ESS 回卷重构质检，并平均全部有效 take。
+  # 改为 fixed_count 时仍生成参考均值，但标记为之后从原始 take 离线重选。
+  strategy: reconstruct_average
   fixed_count: 5
-  # 同一实验内至少获得 5 个有效 take；重新佩戴/改变角度/改变高度都必须进入下一实验。
-  minimum: 5
-  maximum: 8
   correlation_threshold: 0.90
   peak_drift_samples: 2
   minimum_sweep_snr_db: 6.0
-  required_stable_takes: 2
-  aggregate_change_threshold_db: -40.0
-  reconstruction_change_threshold_db: 0.1
   reject_clipped: true
   clip_threshold: 0.999
   pause_s: 1

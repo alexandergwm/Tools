@@ -511,6 +511,12 @@ def compile_completed_rir_runs(
             "all_mean_reconstruction_error_db": summary.get(
                 "all_accepted_mean_reconstruction_error_db", ""
             ),
+            "average_reconstruction_worst_median_nmse_db": (
+                summary.get("average_rir_reconstruction") or {}
+            ).get("worst_median_nmse_db", ""),
+            "average_reconstruction_minimum_correlation": (
+                summary.get("average_rir_reconstruction") or {}
+            ).get("minimum_correlation", ""),
             "rir_converged": (summary.get("convergence") or {}).get("converged", ""),
             "rir_stop_reason": (summary.get("convergence") or {}).get("stop_reason", ""),
             "sample_rate_hz": sample_rate,
@@ -701,6 +707,12 @@ def compile_rir_dataset(path: str | Path) -> Path:
                 "all_mean_reconstruction_error_db": summary.get(
                     "all_accepted_mean_reconstruction_error_db", ""
                 ),
+                "average_reconstruction_worst_median_nmse_db": (
+                    summary.get("average_rir_reconstruction") or {}
+                ).get("worst_median_nmse_db", ""),
+                "average_reconstruction_minimum_correlation": (
+                    summary.get("average_rir_reconstruction") or {}
+                ).get("minimum_correlation", ""),
                 "rir_converged": (summary.get("convergence") or {}).get(
                     "converged", ""
                 ),

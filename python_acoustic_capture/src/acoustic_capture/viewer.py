@@ -676,17 +676,41 @@ class ResultsViewer(ttk.Frame):
                 result = manifest.get("summary") or {}
                 method = result.get("selection_method")
                 if method:
-                    method_label = {
-                        "best_single": "最佳单次",
-                        "aligned_mean": "全部对齐均值",
-                        "consensus_mean": "去离群一致性均值",
-                    }.get(method, method)
-                    selected = ",".join(map(str, result.get("selected_take_ids", [])))
-                    converged = (result.get("convergence") or {}).get("converged")
-                    summaries.append(
-                        f"RIR 选优：{method_label}（take {selected or '-'}；"
-                        f"{'已收敛' if converged else '未达到收敛阈值'}）"
-                    )
+                    if method == "all_accepted_aligned_mean":
+                        selected = ",".join(
+                            map(str, result.get("selected_take_ids", []))
+                        )
+                        reconstruction = result.get("average_rir_reconstruction") or {}
+                        nmse = reconstruction.get("worst_median_nmse_db")
+                        correlation = reconstruction.get("minimum_correlation")
+                        metric_text = ""
+                        if isinstance(nmse, (int, float)) and isinstance(
+                            correlation, (int, float)
+                        ):
+                            metric_text = (
+                                f"；最差通道中位 NMSE={nmse:.2f} dB，"
+                                f"最低相关={correlation:.4f}"
+                            )
+                        summaries.append(
+                            f"RIR 聚合：全部有效 take 对齐平均"
+                            f"（take {selected or '-'}{metric_text}）"
+                        )
+                    else:
+                        method_label = {
+                            "best_single": "最佳单次",
+                            "aligned_mean": "全部对齐均值",
+                            "consensus_mean": "去离群一致性均值",
+                        }.get(method, method)
+                        selected = ",".join(
+                            map(str, result.get("selected_take_ids", []))
+                        )
+                        converged = (result.get("convergence") or {}).get(
+                            "converged"
+                        )
+                        summaries.append(
+                            f"旧版 RIR 选优：{method_label}（take {selected or '-'}；"
+                            f"{'已收敛' if converged else '未达到收敛阈值'}）"
+                        )
             except (OSError, TypeError, ValueError, json.JSONDecodeError):
                 pass
         self.summary_var.set("  |  ".join(summaries) if summaries else "没有找到音频结果文件")
