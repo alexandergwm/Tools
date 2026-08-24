@@ -606,6 +606,31 @@ class ResultsViewer(ttk.Frame):
         self.run_label.configure(text=str(root))
         self.refresh_plots()
 
+    def load_recording_file(self, path: str | Path) -> None:
+        """Display one standalone microphone recording without a run folder."""
+        recording = Path(path).expanduser().resolve()
+        if not recording.is_file():
+            messagebox.showerror("录音文件无效", f"找不到录音文件：\n{recording}")
+            return
+        self.run_dir = None
+        self.preview_spec = None
+        self._live_lines.clear()
+        self._live_segments = {}
+        self._live_source_lines.clear()
+        self._live_timeline_line = None
+        self.files = {"playback": [], "recording": [recording], "rir": []}
+        self.path_by_label.clear()
+        label = recording.name
+        self.path_by_label[f"recording:{label}"] = recording
+        self._playback_box.configure(values=[])
+        self._recording_box.configure(values=[label])
+        self._rir_box.configure(values=[])
+        self.playback_var.set("")
+        self.recording_var.set(label)
+        self.rir_var.set("")
+        self.run_label.configure(text=f"快速录音：{recording}")
+        self.refresh_plots()
+
     def _selected_path(self, category: str) -> Path | None:
         variable = {
             "playback": self.playback_var,

@@ -5,6 +5,8 @@ import time
 import tkinter as tk
 from pathlib import Path
 
+import soundfile as sf
+
 from acoustic_capture.config import load_config, save_config
 from acoustic_capture.checklist import create_checklist
 import acoustic_capture.gui as gui_module
@@ -72,6 +74,7 @@ def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
     config.scene.repetitions = 1
     config_path = tmp_path / "gui_test.yaml"
     save_config(config, config_path)
+    quick_recording = tmp_path / "quick_recording.wav"
     checklist = create_checklist(
         tmp_path / "checklist.xlsx",
         [
@@ -100,6 +103,11 @@ def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(gui_module, "host_api_choices", lambda: ["MME", "ASIO"])
     monkeypatch.setattr(
         gui_module.filedialog, "askopenfilename", lambda **_kwargs: str(checklist)
+    )
+    monkeypatch.setattr(
+        gui_module.filedialog,
+        "asksaveasfilename",
+        lambda **_kwargs: str(quick_recording),
     )
     monkeypatch.setattr(gui_module, "list_devices", lambda: "30 | ASIO | 2 | 2 | Test device")
     monkeypatch.setattr(
@@ -228,6 +236,31 @@ def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
         app._active_backend = None
         app._stop_event.clear()
         app._set_busy(False)
+
+        # Standalone recording needs only an output path and input settings.
+        # Even unrelated invalid ESS text must not block this workflow.
+        original_sweep_end = app.variables["sweep.end_hz"].get()
+        app.variables["sweep.end_hz"].set("999999")
+        assert "快速录音" in str(app.quick_record_button.cget("text"))
+        app.quick_record_button.invoke()
+        assert app._busy
+        assert str(app.stop_button.cget("state")) == "normal"
+        time.sleep(0.05)
+        app.stop_button.invoke()
+        deadline = time.monotonic() + 5.0
+        while app._busy and time.monotonic() < deadline:
+            app.update()
+            time.sleep(0.01)
+        assert not app._busy
+        assert quick_recording.is_file()
+        quick_data, quick_rate = sf.read(
+            quick_recording, always_2d=True, dtype="float32"
+        )
+        assert quick_rate == config.audio.sample_rate
+        assert quick_data.shape[0] > 0
+        assert quick_data.shape[1] == len(config.audio.input_channels)
+        assert app.viewer._selected_path("recording") == quick_recording.resolve()
+        app.variables["sweep.end_hz"].set(original_sweep_end)
         loaded_runs: list[Path] = []
         original_load_run = app.viewer.load_run
 
@@ -309,5 +342,6 @@ def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
         ))
         assert not [title for title, _ in dialogs if "失败" in title or "无效" in title]
         assert sum(title == "测试完成" for title, _ in dialogs) == 3
+        assert sum(title == "录音已保存" for title, _ in dialogs) == 1
     finally:
         app.destroy()

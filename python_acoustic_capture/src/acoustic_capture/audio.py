@@ -9,12 +9,15 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import os
+from pathlib import Path
+import queue
 import sys
 import threading
 import time
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
+import soundfile as sf
 from scipy.signal import fftconvolve
 
 from .config import AudioConfig
@@ -44,6 +47,21 @@ class AudioBackend(ABC):
 
     def stop(self) -> None:
         """Request that an active audio operation stop as soon as possible."""
+
+    def record_to_file(
+        self,
+        path: str | Path,
+        *,
+        stop_requested: Callable[[], bool],
+        subtype: str = "FLOAT",
+    ) -> dict[str, Any]:
+        """Continuously record selected inputs to ``path`` until stopped.
+
+        Implementations must stream to disk instead of accumulating an
+        unbounded recording in memory.  This is the backend primitive used by
+        the GUI's deliberately minimal "quick recording" workflow.
+        """
+        raise NotImplementedError
 
     def set_progress_callback(self, callback) -> None:
         """Receive lightweight playback progress dictionaries when supported.
@@ -498,6 +516,121 @@ class SoundDeviceBackend(AudioBackend):
         if stream is not None:
             self._abort_stream_async(stream)
 
+    def record_to_file(
+        self,
+        path: str | Path,
+        *,
+        stop_requested: Callable[[], bool],
+        subtype: str = "FLOAT",
+    ) -> dict[str, Any]:
+        """Record indefinitely with a bounded RAM queue and a disk writer.
+
+        PortAudio's callback only copies blocks into a queue.  The calling
+        worker writes those blocks to the WAV file, so a slow disk cannot make
+        the real-time callback perform filesystem I/O.
+        """
+        sd = self._module()
+        self.check_settings(input_required=True, output_channels=None)
+        output_path = Path(path).expanduser().resolve()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        input_count = max(self.config.input_channels)
+        selected = np.asarray(self.config.input_channels, dtype=np.int64) - 1
+        block_queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=128)
+        callback_status = self._new_callback_status()
+        callback_errors: list[str] = []
+        captured_frames = 0
+        written_frames = 0
+
+        def callback(indata, callback_frames, _time, status):
+            nonlocal captured_frames
+            self._merge_callback_status(callback_status, status)
+            try:
+                block_queue.put_nowait(
+                    np.asarray(indata[:, selected], dtype=np.float32).copy()
+                )
+            except queue.Full:
+                callback_status["xrun"] = True
+                callback_status["writer_overflow"] = True
+                callback_errors.append(
+                    "录音写盘队列已满；磁盘持续写入速度不足，录音已停止"
+                )
+                raise sd.CallbackAbort()
+            captured_frames += callback_frames
+            self._emit_progress("recording_to_file", captured_frames, 0)
+            if self._abort_requested.is_set() or stop_requested():
+                raise sd.CallbackStop()
+
+        input_device, _ = self._devices()
+        input_device = self._device_argument(input_device)
+        stream = sd.InputStream(
+            samplerate=self.config.sample_rate,
+            blocksize=self.config.block_size,
+            device=input_device,
+            channels=input_count,
+            dtype=self.config.dtype,
+            latency=self.config.latency,
+            callback=callback,
+        )
+        self._abort_requested.clear()
+        self._set_active_stream(stream)
+        self._emit_progress("opening_audio_stream", 0, 0, force=True)
+        try:
+            with sf.SoundFile(
+                output_path,
+                mode="w",
+                samplerate=self.config.sample_rate,
+                channels=len(selected),
+                subtype=subtype,
+                format="WAV",
+            ) as audio_file:
+                stream.start()
+                self._emit_progress("recording_to_file", 0, 0, force=True)
+                while bool(getattr(stream, "active", False)) or not block_queue.empty():
+                    if stop_requested() and not self._abort_requested.is_set():
+                        self._abort_requested.set()
+                        try:
+                            stream.abort()
+                        except Exception:
+                            pass
+                    try:
+                        block = block_queue.get(timeout=0.1)
+                    except queue.Empty:
+                        continue
+                    audio_file.write(block)
+                    written_frames += len(block)
+                while not block_queue.empty():
+                    block = block_queue.get_nowait()
+                    audio_file.write(block)
+                    written_frames += len(block)
+        finally:
+            try:
+                if bool(getattr(stream, "active", False)):
+                    stream.abort()
+            except Exception:
+                pass
+            try:
+                stream.close()
+            except Exception:
+                pass
+            self._set_active_stream(None)
+        if callback_errors:
+            raise RuntimeError(callback_errors[0])
+        self._emit_progress("completed", written_frames, written_frames, force=True)
+        result = self._operation_status(sd, callback_status)
+        result.update(
+            {
+                "path": str(output_path),
+                "frames": int(written_frames),
+                "channels": int(len(selected)),
+                "sample_rate": int(self.config.sample_rate),
+                "duration_s": written_frames / self.config.sample_rate,
+                "stopped_by_user": bool(
+                    self._abort_requested.is_set() or stop_requested()
+                ),
+            }
+        )
+        return result
+
 
 class SimulatedBackend(AudioBackend):
     """A small multi-microphone room simulator for CI and workflow rehearsal."""
@@ -510,6 +643,7 @@ class SimulatedBackend(AudioBackend):
             config.interferer_output_channel: self._paths(0.72),
         }
         self._progress_callback = None
+        self._abort_requested = threading.Event()
 
     def set_progress_callback(self, callback) -> None:
         self._progress_callback = callback
@@ -557,7 +691,49 @@ class SimulatedBackend(AudioBackend):
         return {"backend": "simulated", "frames": len(output)}
 
     def stop(self) -> None:
-        return None
+        self._abort_requested.set()
+
+    def record_to_file(
+        self,
+        path: str | Path,
+        *,
+        stop_requested: Callable[[], bool],
+        subtype: str = "FLOAT",
+    ) -> dict[str, Any]:
+        output_path = Path(path).expanduser().resolve()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        self._abort_requested.clear()
+        frames = 0
+        block_frames = self.config.block_size or 1024
+        with sf.SoundFile(
+            output_path,
+            mode="w",
+            samplerate=self.config.sample_rate,
+            channels=len(self.config.input_channels),
+            subtype=subtype,
+            format="WAV",
+        ) as audio_file:
+            while not self._abort_requested.is_set() and not stop_requested():
+                block = self.rng.normal(
+                    0,
+                    2e-5,
+                    (block_frames, len(self.config.input_channels)),
+                ).astype(np.float32)
+                audio_file.write(block)
+                frames += len(block)
+                self._emit_progress("recording_to_file", frames, 0)
+                time.sleep(block_frames / self.config.sample_rate)
+        self._emit_progress("completed", frames, frames)
+        return {
+            "backend": "simulated",
+            "path": str(output_path),
+            "frames": frames,
+            "channels": len(self.config.input_channels),
+            "sample_rate": self.config.sample_rate,
+            "duration_s": frames / self.config.sample_rate,
+            "stopped_by_user": True,
+            "overflow": False,
+        }
 
 
 def create_backend(config: AudioConfig) -> AudioBackend:

@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+import soundfile as sf
 import sys
 from types import SimpleNamespace
 
@@ -186,6 +187,46 @@ def test_stop_requests_abort_without_calling_global_sounddevice_stop(monkeypatch
         __import__("time").sleep(0.01)
     assert backend._abort_requested.is_set()
     assert calls == ["abort"]
+
+
+def test_sounddevice_standalone_recording_streams_selected_channels(tmp_path, monkeypatch):
+    fake = FakeSoundDevice()
+
+    class InputStream:
+        def __init__(self, *, channels, callback, **kwargs):
+            assert channels == 3
+            self.callback = callback
+            self.active = False
+
+        def start(self):
+            data = np.column_stack(
+                [np.full(32, 0.1), np.full(32, 0.2), np.full(32, 0.3)]
+            ).astype(np.float32)
+            self.callback(data, len(data), None, None)
+            self.active = False
+
+        def abort(self):
+            self.active = False
+
+        def close(self):
+            pass
+
+    fake.InputStream = InputStream
+    monkeypatch.setattr(SoundDeviceBackend, "_module", lambda self: fake)
+    output = tmp_path / "direct.wav"
+    backend = SoundDeviceBackend(
+        AudioConfig(sample_rate=16_000, block_size=32, input_channels=[1, 3])
+    )
+
+    status = backend.record_to_file(output, stop_requested=lambda: False)
+
+    data, sample_rate = sf.read(output, always_2d=True, dtype="float32")
+    assert sample_rate == 16_000
+    assert data.shape == (32, 2)
+    assert np.allclose(data[:, 0], 0.1)
+    assert np.allclose(data[:, 1], 0.3)
+    assert status["frames"] == 32
+    assert status["channels"] == 2
 
 
 def test_device_argument_converts_numeric_gui_prefix_to_portaudio_index():

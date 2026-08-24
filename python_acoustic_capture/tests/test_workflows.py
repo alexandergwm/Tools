@@ -24,6 +24,34 @@ from acoustic_capture.speech_dataset import compile_speech_dataset
 from acoustic_capture.storage import _safe_name
 
 
+def test_simulated_backend_streams_standalone_recording_to_wav(tmp_path: Path):
+    cfg = ExperimentConfig()
+    cfg.audio.backend = "simulated"
+    cfg.audio.sample_rate = 8_000
+    cfg.audio.block_size = 80
+    cfg.audio.input_channels = [1, 2, 4]
+    backend = SimulatedBackend(cfg.audio)
+    progress: list[int] = []
+    backend.set_progress_callback(
+        lambda update: progress.append(int(update.get("frames", 0)))
+    )
+    output = tmp_path / "standalone" / "three_mics.wav"
+
+    status = backend.record_to_file(
+        output,
+        stop_requested=lambda: len(progress) >= 3,
+        subtype="FLOAT",
+    )
+
+    data, sample_rate = sf.read(output, always_2d=True, dtype="float32")
+    assert sample_rate == 8_000
+    assert data.shape == (240, 3)
+    assert status["frames"] == 240
+    assert status["channels"] == 3
+    assert status["duration_s"] == pytest.approx(0.03)
+    assert sf.info(output).subtype == "FLOAT"
+
+
 def test_rir_end_to_end(tmp_path: Path):
     cfg = ExperimentConfig()
     cfg.audio.backend = "simulated"
