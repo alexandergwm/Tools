@@ -9,7 +9,7 @@ import sys
 import traceback
 from pathlib import Path
 
-PORTABLE_CONFIG_VERSION = "0.2.8"
+PORTABLE_CONFIG_VERSION = "0.2.9"
 
 
 def _portable_config_path(root: Path) -> Path:
