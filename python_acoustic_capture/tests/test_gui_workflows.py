@@ -74,7 +74,6 @@ def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
     config.scene.repetitions = 1
     config_path = tmp_path / "gui_test.yaml"
     save_config(config, config_path)
-    quick_recording = tmp_path / "quick_recording.wav"
     checklist = create_checklist(
         tmp_path / "checklist.xlsx",
         [
@@ -104,11 +103,6 @@ def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(
         gui_module.filedialog, "askopenfilename", lambda **_kwargs: str(checklist)
     )
-    monkeypatch.setattr(
-        gui_module.filedialog,
-        "asksaveasfilename",
-        lambda **_kwargs: str(quick_recording),
-    )
     monkeypatch.setattr(gui_module, "list_devices", lambda: "30 | ASIO | 2 | 2 | Test device")
     monkeypatch.setattr(
         gui_module.messagebox,
@@ -125,7 +119,14 @@ def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
         "showerror",
         lambda title, message: dialogs.append((str(title), str(message))),
     )
-    experiment_names = iter(("gui_basic_io", "gui_rir_az090", "gui_speech_scene01"))
+    experiment_names = iter(
+        (
+            "gui_simple_recording",
+            "gui_basic_io",
+            "gui_rir_az090",
+            "gui_speech_scene01",
+        )
+    )
     monkeypatch.setattr(
         gui_module.simpledialog,
         "askstring",
@@ -237,12 +238,16 @@ def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
         app._stop_event.clear()
         app._set_busy(False)
 
-        # Standalone recording needs only an output path and input settings.
-        # Even unrelated invalid ESS text must not block this workflow.
+        # Simple recording is a named main mode and ignores unrelated ESS text.
         original_sweep_end = app.variables["sweep.end_hz"].get()
         app.variables["sweep.end_hz"].set("999999")
-        assert "快速录音" in str(app.quick_record_button.cget("text"))
-        app.quick_record_button.invoke()
+        app.mode_var.set("simple_recording")
+        app._set_mode()
+        assert "简单录制" in str(app.start_button.cget("text"))
+        assert app.field_rows["audio.input_device"][1].winfo_manager() == "grid"
+        assert app.field_rows["audio.output_device"][1].winfo_manager() == ""
+        assert app.field_rows["storage.root"][1].winfo_manager() == "grid"
+        app.start_button.invoke()
         assert app._busy
         assert str(app.stop_button.cget("state")) == "normal"
         time.sleep(0.05)
@@ -252,14 +257,19 @@ def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
             app.update()
             time.sleep(0.01)
         assert not app._busy
-        assert quick_recording.is_file()
-        quick_data, quick_rate = sf.read(
-            quick_recording, always_2d=True, dtype="float32"
+        simple_recordings = list(
+            Path(config.storage.root).glob("*_gui_simple_recording.wav")
         )
-        assert quick_rate == config.audio.sample_rate
-        assert quick_data.shape[0] > 0
-        assert quick_data.shape[1] == len(config.audio.input_channels)
-        assert app.viewer._selected_path("recording") == quick_recording.resolve()
+        assert len(simple_recordings) == 1
+        simple_recording = simple_recordings[0]
+        recorded_data, recorded_rate = sf.read(
+            simple_recording, always_2d=True, dtype="float32"
+        )
+        assert recorded_rate == config.audio.sample_rate
+        assert recorded_data.shape[0] > 0
+        assert recorded_data.shape[1] == len(config.audio.input_channels)
+        assert app.viewer._selected_path("recording") == simple_recording.resolve()
+        assert app.variables["storage.session_name"].get() == "gui_simple_recording"
         app.variables["sweep.end_hz"].set(original_sweep_end)
         loaded_runs: list[Path] = []
         original_load_run = app.viewer.load_run

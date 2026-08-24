@@ -628,7 +628,7 @@ class ResultsViewer(ttk.Frame):
         self.playback_var.set("")
         self.recording_var.set(label)
         self.rir_var.set("")
-        self.run_label.configure(text=f"快速录音：{recording}")
+        self.run_label.configure(text=f"简单录制：{recording}")
         self.refresh_plots()
 
     def _selected_path(self, category: str) -> Path | None:

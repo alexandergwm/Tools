@@ -28,6 +28,7 @@ from .professional import assert_capture_ready, build_preflight_report, format_p
 from .rir import capture_rir
 from .scene import capture_scene_block, discover_source_pairs
 from .signals import exponential_sweep, measurement_signal
+from .storage import _safe_name
 from .viewer import ResultsViewer
 
 
@@ -347,12 +348,6 @@ class CaptureGUI(tk.Tk):
             ("检查配置", self.validate_config),
         ):
             ttk.Button(toolbar, text=text, command=command).pack(side="left", padx=3)
-        self.quick_record_button = ttk.Button(
-            toolbar,
-            text="● 快速录音",
-            command=self.start_quick_recording,
-        )
-        self.quick_record_button.pack(side="left", padx=(12, 3))
         ttk.Button(toolbar, text="测试清单 (.xlsx)", command=self.open_checklist).pack(
             side="left", padx=3
         )
@@ -363,6 +358,7 @@ class CaptureGUI(tk.Tk):
         for value, label in (
             ("rir", "RIR 采集"),
             ("audio", "音频 / 语音采集"),
+            ("simple_recording", "简单录制"),
         ):
             ttk.Radiobutton(
                 mode_bar, text=label, value=value, variable=self.mode_var, command=self._set_mode
@@ -1185,8 +1181,12 @@ class CaptureGUI(tk.Tk):
         self._set_mode()
 
     def start_current_workflow(self):
-        if self.mode_var.get() == "rir":
+        mode = self.mode_var.get()
+        if mode == "rir":
             self.start_named_experiment("rir")
+            return
+        if mode == "simple_recording":
+            self.start_simple_recording()
             return
         preset = AUDIO_PRESETS[self.audio_preset_var.get()]
         if preset["kind"] == "io":
@@ -1318,7 +1318,7 @@ class CaptureGUI(tk.Tk):
         )
         self._worker_thread.start()
 
-    def _quick_recording_audio_config(self):
+    def _simple_recording_audio_config(self):
         """Read only the input settings needed by standalone recording.
 
         This intentionally avoids validating sweep, playback, metadata and
@@ -1352,37 +1352,50 @@ class CaptureGUI(tk.Tk):
             raise ValueError("录制通道不能重复")
         return audio
 
-    def start_quick_recording(self):
-        """Choose one WAV path and immediately start a standalone recording."""
+    def start_simple_recording(self):
+        """Name and start one standalone recording in the selected save root."""
         if self._busy:
             messagebox.showinfo("正在录制", "请先停止当前录制或测试。")
             return
-        initial_root = Path(self.variables["storage.root"].get().strip() or ".").expanduser()
-        if not initial_root.is_dir():
-            initial_root = Path.cwd()
-        path_text = filedialog.asksaveasfilename(
-            title="选择录音保存位置（选择后立即开始录制）",
-            initialdir=str(initial_root.resolve()),
-            initialfile=f"recording_{datetime.now():%Y%m%d_%H%M%S}.wav",
-            defaultextension=".wav",
-            filetypes=[("WAV 音频", "*.wav")],
+        current_name = self.variables["storage.session_name"].get().strip()
+        if current_name == "measurement":
+            current_name = ""
+        recording_name = simpledialog.askstring(
+            "简单录制名称",
+            "请输入本次录音名称：",
+            initialvalue=current_name,
+            parent=self,
         )
-        if not path_text:
+        if recording_name is None:
             return
-        output_path = Path(path_text).expanduser().resolve()
+        recording_name = recording_name.strip()
+        if not recording_name:
+            messagebox.showerror("录音名称无效", "录音名称不能为空。")
+            return
+        safe_name = _safe_name(recording_name)
+        root = Path(
+            self.variables["storage.root"].get().strip() or "runs"
+        ).expanduser().resolve()
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = root / f"{timestamp}_{safe_name}.wav"
+        suffix = 2
+        while output_path.exists():
+            output_path = root / f"{timestamp}_{safe_name}_{suffix:03d}.wav"
+            suffix += 1
         try:
-            audio = self._quick_recording_audio_config()
+            audio = self._simple_recording_audio_config()
         except Exception as exc:
             messagebox.showerror("录音设置无效", str(exc))
             return
+        self.variables["storage.session_name"].set(recording_name)
         self._stop_event.clear()
-        self._busy_kind = "quick_recording"
+        self._busy_kind = "simple_recording"
         self._set_busy(True)
         self.experiment_status.configure(
-            text=f"快速录音中：{output_path.name}  |  点击右侧“停止录制 / 测试”即可保存"
+            text=f"简单录制中：{recording_name}  |  点击右侧“停止录制 / 测试”即可保存"
         )
         self._append(
-            f"快速录音准备中：{output_path}；采样率 {audio.sample_rate} Hz，"
+            f"简单录制“{recording_name}”准备中：{output_path}；采样率 {audio.sample_rate} Hz，"
             f"录制通道 {','.join(map(str, audio.input_channels))}"
         )
 
@@ -1391,23 +1404,23 @@ class CaptureGUI(tk.Tk):
                 backend = create_backend(audio)
                 self._active_backend = backend
                 backend.set_progress_callback(
-                    lambda update: self.events.put(("QUICK_RECORD_PROGRESS", update))
+                    lambda update: self.events.put(("SIMPLE_RECORD_PROGRESS", update))
                 )
                 status = backend.record_to_file(
                     output_path,
                     stop_requested=self._stop_event.is_set,
                     subtype=self.config_data.storage.wav_subtype,
                 )
-                self.events.put(("QUICK_RECORD_DONE", str(output_path), status))
+                self.events.put(("SIMPLE_RECORD_DONE", str(output_path), status))
             except Exception as exc:
-                self.events.put(("QUICK_RECORD_ERROR", str(output_path), str(exc)))
+                self.events.put(("SIMPLE_RECORD_ERROR", str(output_path), str(exc)))
             finally:
                 self._active_backend = None
 
         self._worker_thread = threading.Thread(
             target=worker,
             daemon=True,
-            name="acoustic-quick-recording-worker",
+            name="acoustic-simple-recording-worker",
         )
         self._worker_thread.start()
 
@@ -1423,7 +1436,6 @@ class CaptureGUI(tk.Tk):
         self.start_button.configure(state=state)
         self.scene_scan_button.configure(state=state)
         self.edit_metadata_button.configure(state=state)
-        self.quick_record_button.configure(state=state)
         self.stop_button.configure(state="normal" if busy else "disabled")
 
     def stop_capture(self):
@@ -1433,7 +1445,7 @@ class CaptureGUI(tk.Tk):
         self.stop_button.configure(state="disabled")
         self._append(
             "正在停止录音并写完 WAV 文件，请稍候……"
-            if self._busy_kind == "quick_recording"
+            if self._busy_kind == "simple_recording"
             else "正在停止当前测试，请稍候……"
         )
         backend = self._active_backend
@@ -1464,6 +1476,7 @@ class CaptureGUI(tk.Tk):
         preset = AUDIO_PRESETS[self.audio_preset_var.get()]
         is_scene = mode == "audio" and preset["kind"] == "scene"
         is_basic = mode == "audio" and preset["kind"] == "io"
+        is_simple_recording = mode == "simple_recording"
         visible_groups = {"common"}
         if mode == "rir":
             visible_groups.update({"rir", "rir_speech"})
@@ -1483,7 +1496,7 @@ class CaptureGUI(tk.Tk):
         playback_needed = mode == "rir" or is_scene and (target_needed or interferer_needed) or (
             is_basic and action in {"play", "play_record"}
         )
-        recording_needed = mode == "rir" or is_scene or (
+        recording_needed = mode == "rir" or is_scene or is_simple_recording or (
             is_basic and action in {"record", "play_record"}
         )
         source_mode = LABEL_TO_SOURCE_MODE.get(
@@ -1556,6 +1569,8 @@ class CaptureGUI(tk.Tk):
             self.start_button.configure(text="开始新的 RIR 实验")
         elif is_scene:
             self.start_button.configure(text="开始新的语音增强实验")
+        elif is_simple_recording:
+            self.start_button.configure(text="开始简单录制")
         else:
             self.start_button.configure(text="开始新的音频播录")
         self.start_button.pack(side="left", padx=4)
@@ -1702,18 +1717,18 @@ class CaptureGUI(tk.Tk):
                     update.get("sample_rate", 1),
                     str(update.get("phase", "")),
                 )
-            elif isinstance(event, tuple) and event and event[0] == "QUICK_RECORD_PROGRESS":
+            elif isinstance(event, tuple) and event and event[0] == "SIMPLE_RECORD_PROGRESS":
                 _, update = event
                 frames = int(update.get("frames", 0))
                 sample_rate = max(1, int(update.get("sample_rate", 1)))
                 elapsed = frames / sample_rate
                 self.experiment_status.configure(
                     text=(
-                        f"快速录音中：已录 {elapsed:.1f} 秒  |  "
+                        f"简单录制中：已录 {elapsed:.1f} 秒  |  "
                         "点击“停止录制 / 测试”完成保存"
                     )
                 )
-            elif isinstance(event, tuple) and event and event[0] == "QUICK_RECORD_DONE":
+            elif isinstance(event, tuple) and event and event[0] == "SIMPLE_RECORD_DONE":
                 _, path, status = event
                 self._set_busy(False)
                 self._busy_kind = None
@@ -1721,25 +1736,25 @@ class CaptureGUI(tk.Tk):
                 duration = float(status.get("duration_s", 0.0))
                 channels = int(status.get("channels", 0))
                 self.experiment_status.configure(
-                    text="快速录音已保存。可继续录下一条，或切换到 RIR / 语音增强实验。"
+                    text="简单录制已保存。可继续录下一条，或切换到 RIR / 语音增强实验。"
                 )
                 self._append(
-                    f"快速录音已保存：{path}（{channels} 通道，{duration:.2f} 秒）"
+                    f"简单录制已保存：{path}（{channels} 通道，{duration:.2f} 秒）"
                 )
                 self.viewer.load_recording_file(path)
                 messagebox.showinfo(
                     "录音已保存",
                     f"{channels} 通道，{duration:.2f} 秒\n\n保存到：\n{path}",
                 )
-            elif isinstance(event, tuple) and event and event[0] == "QUICK_RECORD_ERROR":
+            elif isinstance(event, tuple) and event and event[0] == "SIMPLE_RECORD_ERROR":
                 _, path, error = event
                 self._set_busy(False)
                 self._busy_kind = None
                 self._worker_thread = None
-                self.experiment_status.configure(text="快速录音失败；请检查录制设备和通道。")
-                self._append(f"快速录音失败：{error}")
+                self.experiment_status.configure(text="简单录制失败；请检查录制设备和通道。")
+                self._append(f"简单录制失败：{error}")
                 messagebox.showerror(
-                    "快速录音失败",
+                    "简单录制失败",
                     f"{error}\n\n如果文件已经产生，其中可能保留了停止前的音频：\n{path}",
                 )
             elif isinstance(event, tuple) and event and event[0] == "RIR_PROGRESS":

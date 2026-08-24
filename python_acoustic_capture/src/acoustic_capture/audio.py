@@ -59,7 +59,7 @@ class AudioBackend(ABC):
 
         Implementations must stream to disk instead of accumulating an
         unbounded recording in memory.  This is the backend primitive used by
-        the GUI's deliberately minimal "quick recording" workflow.
+        the GUI's deliberately minimal standalone recording workflow.
         """
         raise NotImplementedError
 
