@@ -1,16 +1,21 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 import time
 import tkinter as tk
 from pathlib import Path
 
 import soundfile as sf
+import numpy as np
 
 from acoustic_capture.config import load_config, save_config
 from acoustic_capture.checklist import create_checklist
 import acoustic_capture.gui as gui_module
 from acoustic_capture.gui import CaptureGUI
+from acoustic_capture.config import ExperimentConfig
 
 
 def _descendants(widget):
@@ -250,7 +255,17 @@ def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
         app.start_button.invoke()
         assert app._busy
         assert str(app.stop_button.cget("state")) == "normal"
-        time.sleep(0.05)
+        recording_deadline = time.monotonic() + 2.0
+        while time.monotonic() < recording_deadline:
+            app.update()
+            candidates = list(Path(config.storage.root).glob("*_gui_simple_recording.wav"))
+            if candidates:
+                try:
+                    if sf.info(candidates[0]).frames > 0:
+                        break
+                except RuntimeError:
+                    pass
+            time.sleep(0.01)
         app.stop_button.invoke()
         deadline = time.monotonic() + 5.0
         while app._busy and time.monotonic() < deadline:
@@ -353,5 +368,157 @@ def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
         assert not [title for title, _ in dialogs if "失败" in title or "无效" in title]
         assert sum(title == "测试完成" for title, _ in dialogs) == 3
         assert sum(title == "录音已保存" for title, _ in dialogs) == 1
+    finally:
+        app.destroy()
+
+
+def test_gui_big_experiment_and_acqua_click_paths(tmp_path: Path, monkeypatch):
+    # The bundled Windows test runtime intermittently fails when a second Tk
+    # interpreter is created after another test destroyed the first one.
+    # Exercise this independent click path in a clean process; production uses
+    # one GUI interpreter for the whole application lifetime as well.
+    if os.environ.get("ACOUSTIC_CAPTURE_GUI_CHILD") != "1":
+        environment = os.environ.copy()
+        environment["ACOUSTIC_CAPTURE_GUI_CHILD"] = "1"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                f"{Path(__file__).resolve()}::test_gui_big_experiment_and_acqua_click_paths",
+                "-q",
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        return
+    config = ExperimentConfig()
+    config.audio.backend = "simulated"
+    config.audio.input_channels = [1, 2]
+    config.storage.root = str(tmp_path / "runs")
+    config.storage.compute_sha256 = False
+    config.scene.source_mode = "folders"
+    config.scene.items = ["target_only", "mixture"]
+    config.acqua.segment_duration_s = 0.005
+    config.acqua.gap_s = 0
+    targets = tmp_path / "targets"
+    interferers = tmp_path / "interferers"
+    targets.mkdir()
+    interferers.mkdir()
+    t = np.arange(480, dtype=np.float32) / config.audio.sample_rate
+    sf.write(targets / "target.wav", 0.1 * np.sin(2 * np.pi * 400 * t), config.audio.sample_rate)
+    sf.write(interferers / "noise.wav", 0.1 * np.sin(2 * np.pi * 800 * t), config.audio.sample_rate)
+    config.scene.target_folder = str(targets)
+    config.scene.interferer_folder = str(interferers)
+    config_path = tmp_path / "gui_campaign_acqua.yaml"
+    save_config(config, config_path)
+
+    names = iter(("campaign_gui", "acqua_gui_sequence", "acqua_gui_recording"))
+    monkeypatch.setattr(
+        gui_module.simpledialog, "askstring", lambda *args, **kwargs: next(names)
+    )
+    monkeypatch.setattr(
+        gui_module.filedialog,
+        "askdirectory",
+        lambda **kwargs: str(tmp_path / "acqua_programs"),
+    )
+    dialogs: list[tuple[str, str]] = []
+    for dialog_name in ("showinfo", "showwarning", "showerror"):
+        monkeypatch.setattr(
+            gui_module.messagebox,
+            dialog_name,
+            lambda title, message: dialogs.append((str(title), str(message))),
+        )
+
+    app = CaptureGUI(config_path)
+    app.withdraw()
+    try:
+        app.campaign_button.invoke()
+        assert app._campaign_root is not None
+        campaign_root = app._campaign_root
+        assert Path(app.variables["storage.root"].get()) == campaign_root / "runs"
+        fake_run = campaign_root / "runs" / "rir_gui_001"
+        (fake_run / "processed").mkdir(parents=True)
+        (fake_run / "processed" / "average_rir.wav").write_bytes(b"rir")
+        (fake_run / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "kind": "rir",
+                    "status": "completed",
+                    "metadata": {"experiment_name": "rir_gui_001"},
+                    "summary": {"selected_take_ids": [1]},
+                }
+            ),
+            encoding="utf-8",
+        )
+        app.campaign_button.invoke()
+        deadline = time.monotonic() + 5
+        while app._busy and time.monotonic() < deadline:
+            app.update()
+            time.sleep(0.01)
+        assert not app._busy
+        assert app._campaign_root is None
+        assert campaign_root.with_suffix(".zip").is_file()
+        assert Path(app.variables["storage.root"].get()) == Path(config.storage.root)
+
+        app.mode_var.set("simple_recording")
+        app._set_mode()
+        assert "简单录制" in str(app.start_button.cget("text"))
+        assert app.acqua_tools_button.winfo_manager() == "pack"
+        assert app.field_rows["scene.target_folder"][1].winfo_manager() == ""
+        assert app.field_rows["audio.output_device"][1].winfo_manager() == ""
+        app.acqua_tools_button.invoke()
+        acqua_window = next(
+            child
+            for child in app.winfo_children()
+            if isinstance(child, tk.Toplevel) and child.title() == "ACQUA 长序列工具"
+        )
+        generate_button = next(
+            child
+            for child in _descendants(acqua_window)
+            if isinstance(child, gui_module.ttk.Button)
+            and str(child.cget("text")) == "生成 mixed-target 长音频"
+        )
+        generate_button.invoke()
+        deadline = time.monotonic() + 5
+        while app._busy and time.monotonic() < deadline:
+            app.update()
+            time.sleep(0.01)
+        assert not app._busy
+        program = Path(app.variables["acqua.program_file"].get())
+        assert program.is_file()
+        assert (program.parent / "sequence_mapping.csv").is_file()
+
+        app.acqua_tools_button.invoke()
+        acqua_window = next(
+            child
+            for child in app.winfo_children()
+            if isinstance(child, tk.Toplevel) and child.title() == "ACQUA 长序列工具"
+        )
+        record_button = next(
+            child
+            for child in _descendants(acqua_window)
+            if isinstance(child, gui_module.ttk.Button)
+            and str(child.cget("text")) == "按所选长音频开始只录制"
+        )
+        record_button.invoke()
+        deadline = time.monotonic() + 5
+        while app._busy and time.monotonic() < deadline:
+            app.update()
+            time.sleep(0.01)
+        assert not app._busy
+        recording_manifests = list(
+            Path(config.storage.root).glob("*_acqua_gui_recording_acqua_recording/recording_manifest.json")
+        )
+        assert len(recording_manifests) == 1
+        manifest = json.loads(recording_manifests[0].read_text(encoding="utf-8"))
+        assert manifest["usable_prefix_preserved"] is True
+        assert manifest["status"] == "completed"
+        assert not [title for title, _ in dialogs if "失败" in title or "无效" in title]
     finally:
         app.destroy()

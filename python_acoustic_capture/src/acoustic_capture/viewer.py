@@ -720,6 +720,19 @@ class ResultsViewer(ttk.Frame):
                             f"RIR 聚合：全部有效 take 对齐平均"
                             f"（take {selected or '-'}{metric_text}）"
                         )
+                        delay = result.get("two_channel_delay_acceptance") or {}
+                        if delay.get("applicable"):
+                            gcc = delay.get("gcc_phat_delay_samples")
+                            group = delay.get("low_frequency_group_delay_samples")
+                            if isinstance(gcc, (int, float)) and isinstance(
+                                group, (int, float)
+                            ):
+                                summaries.append(
+                                    "双麦延迟验收："
+                                    f"GCC-PHAT={gcc:.2f} samples，"
+                                    f"低频群延迟={group:.2f} samples，"
+                                    f"{'通过' if delay.get('passed') else '请复核'}"
+                                )
                     else:
                         method_label = {
                             "best_single": "最佳单次",

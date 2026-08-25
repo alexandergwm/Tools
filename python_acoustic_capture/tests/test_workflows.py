@@ -10,9 +10,9 @@ from acoustic_capture.audio import CaptureResult, SimulatedBackend
 from acoustic_capture.check import capture_input_check, capture_silent_duplex_check
 from acoustic_capture.config import ExperimentConfig, load_config
 from acoustic_capture.general import capture_general_io
-from acoustic_capture.rir import capture_rir
+from acoustic_capture.rir import capture_rir, rir_delay_acceptance
 from acoustic_capture.scene import (
-    MAX_CARTESIAN_PAIRS,
+    PAIRING_STRATEGY,
     _safe_label,
     _shared_hardware_clock,
     build_paired_sequence,
@@ -120,6 +120,25 @@ def test_rir_end_to_end(tmp_path: Path):
         ]
     )
     assert store.manifest["status"] == "completed"
+    delay_acceptance = store.manifest["summary"]["two_channel_delay_acceptance"]
+    assert delay_acceptance["applicable"] is True
+    assert "gcc_phat_delay_samples" in delay_acceptance
+    assert "low_frequency_group_delay_samples" in delay_acceptance
+
+
+def test_two_channel_rir_delay_algorithms_agree():
+    fs = 48_000
+    first = np.zeros(4096, dtype=np.float32)
+    first[150] = 1.0
+    first[310] = 0.2
+    second = np.zeros_like(first)
+    second[7:] = first[:-7]
+
+    result = rir_delay_acceptance(np.column_stack((first, second)), fs)
+
+    assert result["passed"] is True
+    assert abs(result["gcc_phat_delay_samples"] - 7) < 0.1
+    assert abs(result["low_frequency_group_delay_samples"] - 7) < 0.25
 
 
 def test_legacy_adaptive_rir_config_migrates_to_reconstruct_average(tmp_path: Path):
@@ -355,6 +374,10 @@ def test_selectable_scene_block(tmp_path: Path):
     assert store.path("labels.xlsx").is_file()
     assert store.path("labels.csv").is_file()
     assert store.path("labels.jsonl").is_file()
+    assert store.path("raw/labels.csv").is_file()
+    assert store.path("raw/labels.jsonl").is_file()
+    assert store.path("raw/supervised_pairs.csv").is_file()
+    assert store.path("raw/supervised_pairs.jsonl").is_file()
 
 
 def test_target_and_mixed_pair_does_not_require_interferer_only(tmp_path: Path):
@@ -641,7 +664,7 @@ def test_folder_scene_batch_cycles_files_and_writes_labels(tmp_path: Path):
     cfg.scene.source_mode = "folders"
     cfg.scene.target_folder = str(target_folder)
     cfg.scene.interferer_folder = str(interferer_folder)
-    cfg.scene.pairing_mode = "cycle"
+    cfg.scene.pairing_seed = 123
     cfg.scene.duration_s = 0.05
     cfg.scene.ambient_duration_s = 0.05
     cfg.scene.items = ["target_only", "interferer_only", "mixture"]
@@ -650,6 +673,7 @@ def test_folder_scene_batch_cycles_files_and_writes_labels(tmp_path: Path):
     cfg.scene.label_prefix = "batch"
     cfg.storage.root = str(tmp_path / "runs")
     cfg.storage.compute_sha256 = False
+    planned_pairs = discover_source_pairs(cfg.scene)
     store = capture_scene_block(cfg, SimulatedBackend(cfg.audio), log=lambda _: None)
 
     with store.path("labels.csv").open(encoding="utf-8-sig", newline="") as handle:
@@ -661,10 +685,10 @@ def test_folder_scene_batch_cycles_files_and_writes_labels(tmp_path: Path):
         "speaker_3.wav",
     ]
     assert [Path(row["interferer_source"]).name for row in labels] == [
-        "noise_1.wav",
-        "noise_2.wav",
-        "noise_1.wav",
+        pair.interferer.name for pair in planned_pairs
     ]
+    assert all(row["pairing_seed"] == "123" for row in labels)
+    assert all(row["pairing_strategy"] == PAIRING_STRATEGY for row in labels)
     assert all(row["automatic_label"].startswith("batch_") for row in labels)
     assert all(row["duration_s"] == "0.05" for row in labels)
     assert store.manifest["summary"]["label_rows"] == 3
@@ -713,19 +737,33 @@ def test_folder_sources_are_hashed_lazily_per_captured_pair(tmp_path: Path, monk
     assert len(calls) == 2
 
 
-def test_cartesian_pairing_rejects_multi_million_task_explosion(tmp_path: Path, monkeypatch):
+def test_seeded_pairing_is_linear_reproducible_and_changes_with_seed(tmp_path: Path, monkeypatch):
     cfg = ExperimentConfig().scene
     cfg.source_mode = "folders"
-    cfg.pairing_mode = "cartesian"
     cfg.target_folder = str(tmp_path / "targets")
     cfg.interferer_folder = str(tmp_path / "interferers")
     fake_targets = [tmp_path / f"t{index}.wav" for index in range(2_000)]
     fake_interferers = [tmp_path / f"n{index}.wav" for index in range(2_000)]
-    scans = iter((fake_targets, fake_interferers))
-    monkeypatch.setattr("acoustic_capture.scene._scan_audio_folder", lambda *_: next(scans))
-    with pytest.raises(ValueError, match="4,000,000"):
-        discover_source_pairs(cfg)
-    assert MAX_CARTESIAN_PAIRS < 4_000_000
+
+    def plan(seed: int):
+        cfg.pairing_seed = seed
+        scans = iter((fake_targets, fake_interferers))
+        monkeypatch.setattr(
+            "acoustic_capture.scene._scan_audio_folder", lambda *_: next(scans)
+        )
+        return discover_source_pairs(cfg)
+
+    first = plan(17)
+    repeated = plan(17)
+    changed = plan(18)
+    assert len(first) == 2_000
+    assert [pair.target for pair in first] == fake_targets
+    assert [pair.interferer for pair in first] == [
+        pair.interferer for pair in repeated
+    ]
+    assert [pair.interferer for pair in first] != [
+        pair.interferer for pair in changed
+    ]
 
 
 def test_speech_dataset_packages_multichannel_pairs_and_flattened_labels(tmp_path: Path):

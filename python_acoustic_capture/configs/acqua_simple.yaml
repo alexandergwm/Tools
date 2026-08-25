@@ -1,0 +1,41 @@
+audio:
+  backend: sounddevice
+  host_api: ASIO
+  input_device: ASIO Fireface USB
+  output_device: ASIO Fireface USB
+  sample_rate: 48000
+  block_size: 0
+  input_channels: [1, 2]
+  target_output_channel: 1
+  interferer_output_channel: 2
+  latency: high
+  dtype: float32
+
+acqua:
+  # 生成后的文件由 ACQUA 播放；也可在 GUI 中重新选择。
+  program_file: ''
+  segment_duration_s: 4.0
+  gap_s: 0.5
+  pairing_seed: 20260825
+  wav_subtype: PCM_24
+  recording_margin_s: 0.0
+
+scene:
+  items: [target_only, mixture]
+  source_mode: folders
+  target_folder: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\targets
+  interferer_folder: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\interferers
+  file_extensions: [.wav, .flac]
+  target_level_dbfs: -26.0
+  interferer_level_dbfs: -26.0
+
+storage:
+  root: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\runs
+  session_name: acqua_sequence
+  wav_subtype: FLOAT
+  save_playback_reference: false
+  compute_sha256: true
+
+metadata:
+  project_id: headset_speech_generalization_v1
+  task_type: speech_enhancement

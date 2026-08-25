@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import csv
-import itertools
+import hashlib
 import json
 import re
+import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,7 +32,7 @@ Log = Callable[[str], None]
 StopRequested = Callable[[], bool]
 Progress = Callable[[dict], None]
 PAIRED_ITEM_ORDER = ("target_only", "interferer_only", "mixture")
-MAX_CARTESIAN_PAIRS = 100_000
+PAIRING_STRATEGY = "stable_target_seeded_interferer_v1"
 
 
 class _CaptureCancelled(Exception):
@@ -61,7 +62,7 @@ class SourcePair:
 
 
 def discover_source_pairs(scene: SceneConfig) -> list[SourcePair]:
-    """Resolve stable target/interferer pairs from files or folders."""
+    """Resolve a bounded and reproducible target/interferer pairing plan."""
     target_required = any(item in {"target_only", "mixture"} for item in scene.items)
     interferer_required = any(item in {"interferer_only", "mixture"} for item in scene.items)
     if scene.source_mode == "single":
@@ -83,19 +84,43 @@ def discover_source_pairs(scene: SceneConfig) -> list[SourcePair]:
         raise FileNotFoundError(f"目标语音文件夹中没有匹配音频：{scene.target_folder}")
     if interferer_required and not interferers:
         raise FileNotFoundError(f"干扰声音文件夹中没有匹配音频：{scene.interferer_folder}")
-    if scene.pairing_mode == "cartesian":
-        pair_count = len(targets) * len(interferers)
-        if pair_count > MAX_CARTESIAN_PAIRS:
-            raise ValueError(
-                "全部组合配对会生成 "
-                f"{pair_count:,} 组任务（{len(targets):,} target × "
-                f"{len(interferers):,} interferer），超过安全上限 "
-                f"{MAX_CARTESIAN_PAIRS:,}。请改用‘按顺序循环配对’，"
-                "或先用测试清单拆分成较小批次。"
-            )
-        return [SourcePair(target, interferer) for target, interferer in itertools.product(targets, interferers)]
     count = max(len(targets), len(interferers))
-    return [SourcePair(targets[index % len(targets)], interferers[index % len(interferers)]) for index in range(count)]
+    interferer_plan = (
+        _seeded_repeat(
+            interferers,
+            count,
+            Path(scene.interferer_folder),
+            scene.pairing_seed,
+        )
+        if target_required and interferer_required
+        else [interferers[index % len(interferers)] for index in range(count)]
+    )
+    return [
+        SourcePair(targets[index % len(targets)], interferer_plan[index])
+        for index in range(count)
+    ]
+
+
+def _seeded_repeat(
+    paths: list[Path], count: int, root: Path, seed: int
+) -> list[Path]:
+    """Repeat deterministic shuffle bags without depending on RNG versions."""
+    result: list[Path] = []
+    resolved_root = root.resolve()
+    epoch = 0
+    while len(result) < count:
+        def stable_key(path: Path) -> bytes:
+            try:
+                identity = path.resolve().relative_to(resolved_root).as_posix()
+            except ValueError:
+                identity = path.name
+            return hashlib.sha256(
+                f"{PAIRING_STRATEGY}\0{seed}\0{epoch}\0{identity}".encode("utf-8")
+            ).digest()
+
+        result.extend(sorted(paths, key=stable_key))
+        epoch += 1
+    return result[:count]
 
 
 def validate_source_audio(pairs: list[SourcePair]) -> None:
@@ -328,7 +353,18 @@ def _finish_scene(
     label_files = write_label_files(store.root, label_rows, metadata)
     for path in label_files.values():
         store.add_artifact(path.name)
+    # Keep the machine-readable labels beside the WAVs that will be copied to
+    # a training server.  Root-level copies remain for backwards compatibility
+    # and the formatted XLSX stays at the run root for human review.
+    raw_label_files = {}
+    for key in ("jsonl", "csv", "supervised_jsonl", "supervised_csv"):
+        source = label_files[key]
+        destination = store.path(f"raw/{source.name}")
+        shutil.copy2(source, destination)
+        store.add_artifact(f"raw/{source.name}")
+        raw_label_files[key] = f"raw/{source.name}"
     summary["labels"] = {name: path.name for name, path in label_files.items()}
+    summary["raw_labels"] = raw_label_files
     summary["label_rows"] = len(label_rows)
     summary["supervision_ready_rows"] = sum(
         row.get("supervision_ready") == "是" for row in label_rows
@@ -380,7 +416,8 @@ def capture_scene_block(
             for pair in pairs
         ],
         "source_mode": scene.source_mode,
-        "pairing_mode": scene.pairing_mode,
+        "pairing_strategy": PAIRING_STRATEGY,
+        "pairing_seed": scene.pairing_seed,
         "target_index": optional_file_signature(scene.target_index_csv),
         "interferer_index": optional_file_signature(scene.interferer_index_csv),
         "items": list(scene.items),
@@ -487,11 +524,18 @@ def capture_scene_block(
 
     def save_source_index() -> None:
         store.write_json(
-            "references/sources.json", {"mode": scene.source_mode, "pairs": source_info}
+            "references/sources.json",
+            {
+                "mode": scene.source_mode,
+                "pairing_strategy": PAIRING_STRATEGY,
+                "pairing_seed": scene.pairing_seed,
+                "pairs": source_info,
+            },
         )
     summary: dict = {
         "source_mode": scene.source_mode,
-        "pairing_mode": scene.pairing_mode,
+        "pairing_strategy": PAIRING_STRATEGY,
+        "pairing_seed": scene.pairing_seed,
         "pair_count": len(pairs),
         "items": scene.items,
         "repetitions": scene.repetitions,
@@ -839,6 +883,9 @@ def capture_scene_block(
                             supervision_metrics_path, store.root
                         ),
                         "repetition": repetition,
+                        "pair_index": pair_index,
+                        "pairing_strategy": PAIRING_STRATEGY,
+                        "pairing_seed": scene.pairing_seed,
                         "target_source": str(pair.target) if pair.target else "",
                         "interferer_source": str(pair.interferer) if pair.interferer else "",
                         "target_source_sha256": source_hashes["target"]["sha256"] or "",

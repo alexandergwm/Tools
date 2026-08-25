@@ -189,8 +189,9 @@ ASIO 流的硬件延迟，因此 target-only 可以作为 mixture 的样本级�
 真实 mixture，因此三种实采录音仍应保留。
 
 服务器训练汇总要求人工头、耳机型号/个体、佩戴、麦杆、麦克风通道身份，以及目标和干扰源的
-位置、方位、俯仰、高度、距离完整。缺项时原始 WAV 仍保留，但该条不会进入
-`supervised_pairs.csv`，并在 `speech_samples.csv/.xlsx` 的 `dataset_validation_error` 中说明原因。
+位置、方位、俯仰、高度、距离完整。缺项时原始 WAV 仍保留，但该条不会进入服务器数据集索引中
+训练可用的 `supervised_pairs.csv`，并会在 `speech_samples.csv/.xlsx` 的
+`dataset_validation_error` 中说明原因；本次运行目录的审计配对表仍保留该条。
 断点续采会核对播放电平、通道、素材大小/修改时间和整份物理标签，条件变化时拒绝把新数据接到
 旧实验后面。
 
@@ -202,15 +203,12 @@ ASIO 流的硬件延迟，因此 target-only 可以作为 mixture 的样本级�
 ### 4 秒文件夹批量模式
 
 在“音频 / 语音采集”中选择语音采集方案，把“素材选择方式”设为“文件夹批量”，然后分别选择目标语音目录
-和干扰声音目录。程序递归扫描配置的扩展名，并支持：
+和干扰声音目录。目标文件保持稳定排序，干扰文件由“配对随机种子”生成确定性乱序；相同文件和种子
+一定得到相同配对，更换种子才会改变组合。数量较少的一侧按新的确定性 shuffle bag 循环使用。
 
-- `cycle`：按排序顺序循环配对，数量较少的一侧循环使用；
-- `cartesian`：目标与干扰做全部组合。
-
-大素材库会在后台扫描，开始采集时也只读取、重采样并计算当前一对文件的 SHA256，不会先把
-整个目录的音频读进内存。2000 条 target + 2000 条 interferer 使用 `cycle` 时形成 2000 组任务；
-不要误选 `cartesian`，因为它会形成 4,000,000 组。程序对超过 100,000 组的笛卡尔组合会直接
-给出提示并阻止启动，避免实验电脑因任务表过大而长时间无响应。
+配对数量始终等于两个文件夹中较大的文件数，不再提供笛卡尔积选项。大素材库会在后台扫描，开始采集时
+也只读取、重采样并计算当前一对文件的 SHA256，不会先把整个目录的音频读进内存。因此 2000 条
+target + 2000 条 interferer 只形成 2000 组任务，不会意外展开成 4,000,000 组。
 
 正式开始前会逐个读取音频文件头，损坏或空音频会在扬声器发声之前报出。每完成一组配对，
 程序都会立即落盘标签和断点；停止、驱动报错或断电后，用同一实验名重新开始，GUI 会询问是否从
@@ -230,12 +228,17 @@ ASIO 流的硬件延迟，因此 target-only 可以作为 mixture 的样本级�
 
 - `labels.jsonl`：适合 Python/PyTorch 数据加载；
 - `labels.csv`：UTF-8 BOM，便于通用表格工具读取；
-- `supervised_pairs.csv/jsonl`：只包含已经通过对齐与质量检查的 mixture/target-only 监督对；
+- `supervised_pairs.csv/jsonl`：包含所有已经形成 mixture/target-only 文件配对的记录；未通过的记录也保留，
+  由 `supervision_ready`、`valid` 和 `quality_flag` 明确说明能否进入训练；
 - `labels.xlsx`：包含“标签”“采集参数”“实验条件”“监督配对”“文件索引”“汇总”“字段说明”，
   人工头、耳机、佩戴、麦杆和声源几何均为独立列，不必从 JSON 中解析；
 - `raw/*_paired_sequence_mics.wav`：未切分的一次连续双麦录音；
 - `references/*_paired_sequence_playback.wav`：未切分的连续播放矩阵；
 - `metrics/*_paired_sequence_layout.json`：三个片段的精确起止采样点和对齐方式。
+
+`labels.csv/jsonl` 和 `supervised_pairs.csv/jsonl` 还会复制到本次运行的 `raw/` 中，因此只搬运
+`raw/` 时不会漏掉配对关系。正常完成、人工停止、质量未通过或采集中途报错都会尽量生成当前已完成
+样本的标签；“未通过”不会从配对表中静默消失。
 
 在 `labels.xlsx` 的“标签”页修改人工标签、train/valid/test、是否有效或备注后，从 GUI“文件 →
 导入人工质检 labels.xlsx”，或运行 `acoustic-capture labels-import <运行目录>`。这会生成
@@ -262,6 +265,40 @@ acoustic-capture speech-dataset runs datasets\headset_speech_generalization_v1 `
 出现在 train/valid/test；Excel 中的“划分泄漏检查”工作表给测试工程师直接查看。每组监督采集还会
 自动计算 `mixture` 与 `target_only + interferer_only` 的分通道相关性、相对残差和估计 SIR。该指标
 用于发现接线、播放或场景变化异常，不要求现场人工评分，也不会默认用一个武断阈值拒绝真实录音。
+
+## 大实验与自动精简打包
+
+GUI 顶部的“大实验”用于一次实验室班次或一套固定采集任务：
+
+1. 点击“开始一次大实验”并命名；
+2. 像原来一样逐条开始 RIR 或语音增强实验，每条仍手动命名；角度、高度、佩戴等物理变化仍是独立实验；
+3. 全部完成后点击“结束大实验并自动打包”。
+
+程序只在第 3 步生成一个 ZIP，同时生成 `big_experiment_runs.csv/jsonl/xlsx`，汇总完成、失败和取消的
+所有子实验。磁盘上的原运行目录保持完整；传服务器的 ZIP 会排除全部 `references/`、RIR 的原始扫频
+录音、RIR 的逐 take 中间结果以及语音的 `*_paired_sequence_mics.wav`，但保留最终每麦平均 RIR、
+切分后的语音 WAV、labels、配对表、指标、配置和 manifest。
+
+打包在后台进行，可以停止；取消时临时压缩包会删除，大实验仍保持进行中，可再次点击结束打包。
+
+## ACQUA：生成长音频后只录制
+
+在“简单录制”模式点击“ACQUA 长序列…”，会打开一个按需使用的小窗口；主界面不再增加独立的
+ACQUA 模式。该工具不控制 ACQUA 播放，也不做 marker 检测，流程只有两步：
+
+1. 选择 target 和 interferer 语料文件夹，设置配对随机种子，点击“生成 mixed-target 长音频”；
+2. 把生成的双通道 WAV 交给 ACQUA 播放，再点击“按所选长音频开始只录制”。
+
+长音频顺序固定为 `mixed → target_only → mixed → target_only ...`。通道 1 是 target；mixed 段的
+通道 2 是 interferer，target_only 段的通道 2 是静音。程序同时生成
+`sequence_mapping.csv/jsonl/xlsx`，记录每段的源文件、随机种子以及精确起止 sample。配对完全由
+语料路径和种子确定，不会把 2000×2000 种组合展开到内存或磁盘。
+
+录制最长时间由所选长音频时长决定，也可在高级设置增加结束余量。人工提前停止时 WAV 会正常封口，
+已录前缀和映射表都会保留；程序另存 `recorded_prefix_mapping.csv/jsonl/xlsx`，其中只包含满足
+`end_sample <= recorded_frames` 的完整段。
+该简化模式不做 marker 对齐，所以映射是 ACQUA 播放文件的时间轴；正式切割前仍需校准设备启动偏移，
+或在服务器端离线对齐。
 
 ## 6. RIR 重复与平均
 
@@ -306,6 +343,10 @@ repeats:
 反向放大的风险。第 1 个麦克风的直达峰提供每次 take 的公共裁剪和对齐基准；所有麦克风只做
 同一个时间平移，因此麦克风之间真实的到达时差（ITD）会保留。每次还会保存未裁剪的
 `take_NNN_full_ir.wav` 以及各麦克风相对麦克风 1 的峰值偏移。
+
+恰好两个麦克风时，最终平均 RIR 还会同时计算 GCC-PHAT 延迟和 100–1000 Hz 低频群延迟，结果写入
+`metrics/summary.json` 的 `two_channel_delay_acceptance`。两种算法的延迟、拟合质量和差异只作为验收
+警告，不会自动删除 RIR；正式阈值应先用已知麦克风几何距离标定。
 
 “重新佩戴”必须建立新的 session，不能作为同一个 RIR 的重复 take 参与平均。
 

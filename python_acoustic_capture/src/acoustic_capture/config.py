@@ -62,6 +62,22 @@ class RepeatConfig:
     reject_clipped: bool = True
     clip_threshold: float = 0.999
     pause_s: float = 0.5
+    delay_low_hz: float = 100.0
+    delay_high_hz: float = 1_000.0
+    delay_max_ms: float = 3.0
+    delay_agreement_samples: float = 2.0
+
+
+@dataclass
+class AcquaConfig:
+    """Simple external ACQUA program generation and record-only capture."""
+
+    program_file: str = ""
+    segment_duration_s: float = 4.0
+    gap_s: float = 0.5
+    pairing_seed: int = 0
+    wav_subtype: str = "PCM_24"  # PCM_16 | PCM_24 | FLOAT
+    recording_margin_s: float = 0.0
 
 
 @dataclass
@@ -83,7 +99,7 @@ class SceneConfig:
     target_index_csv: str = ""
     interferer_index_csv: str = ""
     resume_run: str = ""
-    pairing_mode: str = "cycle"  # cycle | cartesian
+    pairing_seed: int = 0
     file_extensions: list[str] = field(default_factory=lambda: [".wav", ".flac"])
     label_prefix: str = ""
     dataset_split: str = "train"
@@ -111,6 +127,7 @@ class ExperimentConfig:
     general: GeneralIOConfig = field(default_factory=GeneralIOConfig)
     sweep: SweepConfig = field(default_factory=SweepConfig)
     repeats: RepeatConfig = field(default_factory=RepeatConfig)
+    acqua: AcquaConfig = field(default_factory=AcquaConfig)
     scene: SceneConfig = field(default_factory=SceneConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -161,6 +178,17 @@ class ExperimentConfig:
             raise ValueError("repeats.minimum_sweep_snr_db must be non-negative")
         if r.pause_s < 0:
             raise ValueError("repeats.pause_s must be non-negative")
+        if not 0 < r.delay_low_hz < r.delay_high_hz < a.sample_rate / 2:
+            raise ValueError("RIR delay frequency band must be within Nyquist")
+        if r.delay_max_ms <= 0 or r.delay_agreement_samples < 0:
+            raise ValueError("RIR delay limits must be positive")
+        q = self.acqua
+        if q.segment_duration_s <= 0 or q.gap_s < 0 or q.recording_margin_s < 0:
+            raise ValueError("ACQUA segment/gap/margin durations are invalid")
+        if isinstance(q.pairing_seed, bool) or not isinstance(q.pairing_seed, int):
+            raise ValueError("acqua.pairing_seed must be an integer")
+        if q.wav_subtype not in {"PCM_16", "PCM_24", "FLOAT"}:
+            raise ValueError("acqua.wav_subtype must be PCM_16, PCM_24, or FLOAT")
         if not -100 <= s.level_dbfs <= 0:
             raise ValueError("sweep.level_dbfs must be between -100 and 0")
         allowed = {"ambient", "target_only", "interferer_only", "mixture"}
@@ -183,8 +211,10 @@ class ExperimentConfig:
             )
         if self.scene.source_mode not in {"single", "folders"}:
             raise ValueError("scene.source_mode must be single or folders")
-        if self.scene.pairing_mode not in {"cycle", "cartesian"}:
-            raise ValueError("scene.pairing_mode must be cycle or cartesian")
+        if isinstance(self.scene.pairing_seed, bool) or not isinstance(
+            self.scene.pairing_seed, int
+        ):
+            raise ValueError("scene.pairing_seed must be an integer")
         if self.scene.dataset_split not in {"train", "valid", "test"}:
             raise ValueError("scene.dataset_split must be train, valid, or test")
         if not self.scene.file_extensions:
@@ -208,6 +238,10 @@ def load_config(path: str | Path) -> ExperimentConfig:
         raw = yaml.safe_load(handle) or {}
     sweep_values = dict(raw.get("sweep") or {})
     repeat_values = dict(raw.get("repeats") or {})
+    scene_values = dict(raw.get("scene") or {})
+    # Older releases exposed cycle/cartesian.  Folder pairing is now always
+    # bounded and seed-deterministic; silently migrate those YAML files.
+    scene_values.pop("pairing_mode", None)
     for legacy_field in (
         "minimum",
         "maximum",
@@ -227,7 +261,8 @@ def load_config(path: str | Path) -> ExperimentConfig:
         general=_make(GeneralIOConfig, raw.get("general")),
         sweep=_make(SweepConfig, sweep_values),
         repeats=_make(RepeatConfig, repeat_values),
-        scene=_make(SceneConfig, raw.get("scene")),
+        acqua=_make(AcquaConfig, raw.get("acqua")),
+        scene=_make(SceneConfig, scene_values),
         storage=_make(StorageConfig, raw.get("storage")),
         metadata=raw.get("metadata", {}),
     )
@@ -246,6 +281,7 @@ def load_config(path: str | Path) -> ExperimentConfig:
         (cfg.scene, "target_index_csv"),
         (cfg.scene, "interferer_index_csv"),
         (cfg.scene, "resume_run"),
+        (cfg.acqua, "program_file"),
     ):
         raw_value = getattr(section, attr)
         if not raw_value:

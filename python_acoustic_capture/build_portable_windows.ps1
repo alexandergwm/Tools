@@ -1,18 +1,33 @@
+param(
+    [string]$PythonExe = ""
+)
+
 $ErrorActionPreference = "Stop"
 
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$PythonExe = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+$ProjectPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
 $ReleaseRoot = Join-Path $ProjectRoot "portable_release"
 $BuildRoot = Join-Path $ReleaseRoot "build"
 $DistRoot = Join-Path $ReleaseRoot "dist"
 
+if ([string]::IsNullOrWhiteSpace($PythonExe)) {
+    if (Test-Path -LiteralPath $ProjectPython) {
+        $PythonExe = $ProjectPython
+    } else {
+        $PythonCommand = Get-Command python -ErrorAction SilentlyContinue
+        if ($null -eq $PythonCommand) {
+            throw "Python not found. Create .venv or pass -PythonExe C:\path\to\python.exe"
+        }
+        $PythonExe = $PythonCommand.Source
+    }
+}
 if (-not (Test-Path -LiteralPath $PythonExe)) {
-    throw "Virtual environment not found: $PythonExe"
+    throw "Python interpreter not found: $PythonExe"
 }
 
-$PyInstallerPackage = Join-Path $ProjectRoot ".venv\Lib\site-packages\PyInstaller"
-if (-not (Test-Path -LiteralPath $PyInstallerPackage)) {
-    & $PythonExe -m pip install "PyInstaller>=6.0,<7"
+& $PythonExe -c "import PyInstaller" 2>$null
+if ($LASTEXITCODE -ne 0) {
+    throw "PyInstaller is not installed for $PythonExe"
 }
 
 & $PythonExe -m PyInstaller `

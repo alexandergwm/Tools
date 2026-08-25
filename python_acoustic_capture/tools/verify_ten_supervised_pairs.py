@@ -83,7 +83,7 @@ def main() -> int:
     config.scene.source_mode = "folders"
     config.scene.target_folder = str(target_folder)
     config.scene.interferer_folder = str(interferer_folder)
-    config.scene.pairing_mode = "cycle"
+    config.scene.pairing_seed = 0
     config.scene.duration_s = DURATION_S
     config.scene.target_level_dbfs = -18.0
     config.scene.interferer_level_dbfs = -18.0

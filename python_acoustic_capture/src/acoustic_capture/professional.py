@@ -482,7 +482,7 @@ def _scene_pair_count(config: ExperimentConfig) -> int | None:
         )
     if not counts or not all(counts):
         return None
-    return math.prod(counts) if scene.pairing_mode == "cartesian" else max(counts)
+    return max(counts)
 
 
 def _estimated_scene_bytes(config: ExperimentConfig) -> int | None:

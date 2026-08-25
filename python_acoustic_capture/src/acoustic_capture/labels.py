@@ -37,6 +37,9 @@ LABEL_COLUMNS = [
     ("interferer_mixture_sample_aligned", "干扰与混合样本对齐", "仅干扰与混合的干扰片段是否使用同一源、起点和长度"),
     ("supervision_contract", "监督配对约束", "监督配对所满足的采集与样本复用约束"),
     ("repetition", "重复编号", "同一物理条件下的重复编号"),
+    ("pair_index", "配对序号", "本次文件夹配对计划中的一基序号"),
+    ("pairing_strategy", "配对策略", "生成目标与干扰素材配对表的确定性算法版本"),
+    ("pairing_seed", "配对随机种子", "相同素材与相同种子生成相同配对"),
     ("target_source", "目标源文件", "目标干净语音源文件"),
     ("interferer_source", "干扰源文件", "干扰声音源文件"),
     ("target_source_sha256", "目标源 SHA256", "目标源文件内容哈希"),
@@ -116,6 +119,8 @@ CORE_LABEL_KEYS = [
     "shared_hardware_clock",
     "target_mixture_sample_aligned",
     "repetition",
+    "pair_index",
+    "pairing_seed",
     "duration_s",
     "notes",
 ]
@@ -173,6 +178,9 @@ SUPERVISED_PAIR_KEYS = [
     "mixture_consistency_correlation_min",
     "supervision_quality_metrics",
     "shared_hardware_clock",
+    "pair_index",
+    "pairing_strategy",
+    "pairing_seed",
     "microphone_channels",
     "sample_rate_hz",
     "duration_s",
@@ -188,6 +196,9 @@ SUPERVISED_PAIR_KEYS = [
 CAPTURE_PARAMETER_KEYS = [
     "sample_id",
     "capture_strategy",
+    "pair_index",
+    "pairing_strategy",
+    "pairing_seed",
     "sample_rate_hz",
     "microphone_channels",
     "target_output_channel",
@@ -317,22 +328,25 @@ def write_label_files(
         writer.writeheader()
         writer.writerows(normalized)
 
-    supervised = [
+    # This is a *pairing table*, not a pass-only training export.  Failed rows
+    # must remain visible so an operator can audit why a nominal mixed/target
+    # pair was rejected.  ``supervision_ready`` and ``quality_flag`` carry the
+    # acceptance decision explicitly.
+    paired = [
         row
         for row in normalized
-        if row.get("supervision_ready") == "是"
-        and row.get("mixture_recording")
+        if row.get("mixture_recording")
         and row.get("target_recording")
     ]
     supervised_jsonl_path = root / "supervised_pairs.jsonl"
     with supervised_jsonl_path.open("w", encoding="utf-8") as handle:
-        for row in supervised:
+        for row in paired:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
     supervised_csv_path = root / "supervised_pairs.csv"
     with supervised_csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=[key for key, _header, _description in LABEL_COLUMNS])
         writer.writeheader()
-        writer.writerows(supervised)
+        writer.writerows(paired)
 
     xlsx_path = root / "labels.xlsx"
     _write_xlsx(xlsx_path, normalized, metadata)

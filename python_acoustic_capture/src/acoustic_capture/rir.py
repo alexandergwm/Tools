@@ -401,6 +401,136 @@ def normalized_rir_change_db(current: np.ndarray, previous: np.ndarray) -> float
     return float(20.0 * np.log10(max(ratio, 1e-12)))
 
 
+def gcc_phat_delay_samples(
+    first: np.ndarray,
+    second: np.ndarray,
+    sample_rate: int,
+    max_delay_ms: float = 3.0,
+) -> float:
+    """Estimate channel-2 minus channel-1 arrival time using GCC-PHAT."""
+    first = np.asarray(first, dtype=np.float64).reshape(-1)
+    second = np.asarray(second, dtype=np.float64).reshape(-1)
+    count = max(len(first), len(second))
+    if count < 4:
+        raise ValueError("RIR is too short for GCC-PHAT")
+    fft_length = next_fast_len(2 * count)
+    spectrum = np.fft.rfft(second, fft_length) * np.conj(
+        np.fft.rfft(first, fft_length)
+    )
+    spectrum /= np.maximum(np.abs(spectrum), 1e-15)
+    correlation = np.fft.irfft(spectrum, fft_length)
+    maximum = min(
+        round(max_delay_ms * sample_rate / 1000.0), fft_length // 2 - 1
+    )
+    lags = np.arange(-maximum, maximum + 1)
+    values = np.concatenate((correlation[-maximum:], correlation[: maximum + 1]))
+    peak = int(np.argmax(np.abs(values)))
+    fractional = 0.0
+    if 0 < peak < len(values) - 1:
+        left, center, right = np.abs(values[peak - 1 : peak + 2])
+        denominator = left - 2.0 * center + right
+        if abs(denominator) > 1e-15:
+            fractional = float(0.5 * (left - right) / denominator)
+    return float(lags[peak] + fractional)
+
+
+def low_frequency_group_delay_samples(
+    first: np.ndarray,
+    second: np.ndarray,
+    sample_rate: int,
+    low_hz: float = 100.0,
+    high_hz: float = 1_000.0,
+) -> tuple[float, float]:
+    """Return inter-channel low-frequency delay and weighted phase-fit R²."""
+    first = np.asarray(first, dtype=np.float64).reshape(-1)
+    second = np.asarray(second, dtype=np.float64).reshape(-1)
+    count = min(len(first), len(second))
+    if count < 16:
+        raise ValueError("RIR is too short for group-delay analysis")
+    fft_length = max(next_fast_len(count), 4096)
+    window = np.ones(count, dtype=np.float64)
+    fade = max(2, round(count * 0.1))
+    window[-fade:] = np.cos(np.linspace(0.0, np.pi / 2.0, fade)) ** 2
+    first_spectrum = np.fft.rfft(first[:count] * window, fft_length)
+    second_spectrum = np.fft.rfft(second[:count] * window, fft_length)
+    frequencies = np.fft.rfftfreq(fft_length, 1.0 / sample_rate)
+    mask = (frequencies >= low_hz) & (frequencies <= high_hz)
+    if np.count_nonzero(mask) < 3:
+        raise ValueError("group-delay band contains too few FFT bins")
+    cross = second_spectrum[mask] * np.conj(first_spectrum[mask])
+    phase = np.unwrap(np.angle(cross))
+    frequency = frequencies[mask]
+    weights = np.abs(first_spectrum[mask]) * np.abs(second_spectrum[mask])
+    weights /= max(float(np.max(weights)), 1e-24)
+    usable = weights > 1e-5
+    if np.count_nonzero(usable) < 3:
+        raise ValueError("low-frequency RIR energy is insufficient")
+    frequency, phase, weights = frequency[usable], phase[usable], weights[usable]
+    design = np.column_stack((frequency, np.ones_like(frequency)))
+    root_weight = np.sqrt(weights)
+    coefficients, *_ = np.linalg.lstsq(
+        design * root_weight[:, None], phase * root_weight, rcond=None
+    )
+    predicted = design @ coefficients
+    phase_mean = float(np.average(phase, weights=weights))
+    residual = float(np.sum(weights * (phase - predicted) ** 2))
+    total = float(np.sum(weights * (phase - phase_mean) ** 2))
+    r_squared = 1.0 - residual / total if total > 1e-20 else 0.0
+    delay_seconds = -float(coefficients[0]) / (2.0 * np.pi)
+    return delay_seconds * sample_rate, r_squared
+
+
+def rir_delay_acceptance(
+    rir: np.ndarray,
+    sample_rate: int,
+    *,
+    low_hz: float = 100.0,
+    high_hz: float = 1_000.0,
+    max_delay_ms: float = 3.0,
+    agreement_samples: float = 2.0,
+) -> dict:
+    """Compare GCC-PHAT and low-frequency group delay for a two-mic RIR."""
+    values = np.asarray(rir)
+    if values.ndim != 2 or values.shape[1] != 2:
+        return {
+            "applicable": False,
+            "passed": None,
+            "reason": "验收功能要求恰好两个 RIR 通道",
+            "channel_count": int(values.shape[1]) if values.ndim == 2 else 0,
+        }
+    gcc = gcc_phat_delay_samples(
+        values[:, 0], values[:, 1], sample_rate, max_delay_ms
+    )
+    group, fit_quality = low_frequency_group_delay_samples(
+        values[:, 0], values[:, 1], sample_rate, low_hz, high_hz
+    )
+    disagreement = abs(gcc - group)
+    physical_limit = max_delay_ms * sample_rate / 1000.0
+    passed = (
+        abs(gcc) <= physical_limit
+        and abs(group) <= physical_limit
+        and disagreement <= agreement_samples
+    )
+    return {
+        "applicable": True,
+        "passed": bool(passed),
+        "sign_convention": (
+            "positive means microphone channel 2 arrives later than channel 1"
+        ),
+        "gcc_phat_delay_samples": gcc,
+        "gcc_phat_delay_ms": gcc * 1000.0 / sample_rate,
+        "low_frequency_group_delay_samples": group,
+        "low_frequency_group_delay_ms": group * 1000.0 / sample_rate,
+        "low_frequency_band_hz": [low_hz, high_hz],
+        "group_delay_phase_fit_r_squared": fit_quality,
+        "algorithm_disagreement_samples": disagreement,
+        "maximum_abs_delay_ms": max_delay_ms,
+        "maximum_algorithm_disagreement_samples": agreement_samples,
+        "severity": "pass" if passed else "warning",
+        "note": "此项默认只提示、不自动删除 RIR；首次实验应结合已知几何距离标定阈值。",
+    }
+
+
 def _consensus_takes(accepted: list[RIRTake], threshold: float) -> list[RIRTake]:
     if len(accepted) <= 2:
         return list(accepted)
@@ -674,11 +804,28 @@ def _finalize_average(
             relative = f"processed/average_rir_mic_{channel + 1:02d}.wav"
             store.write_audio(relative, average[:, channel], sample_rate)
             mean_rir_files.append(relative)
+        try:
+            delay_acceptance = rir_delay_acceptance(
+                average,
+                sample_rate,
+                low_hz=repeat_config.delay_low_hz,
+                high_hz=repeat_config.delay_high_hz,
+                max_delay_ms=repeat_config.delay_max_ms,
+                agreement_samples=repeat_config.delay_agreement_samples,
+            )
+        except ValueError as exc:
+            delay_acceptance = {
+                "applicable": average.shape[1] == 2,
+                "passed": None,
+                "severity": "warning",
+                "reason": str(exc),
+            }
         summary.update(
             {
                 "rir_samples": len(average),
                 "mean_rir_2ch": "processed/average_rir.wav",
                 "mean_rir_per_microphone": mean_rir_files,
+                "two_channel_delay_acceptance": delay_acceptance,
                 "partial_average": status == "cancelled",
                 "selection_method": "all_accepted_aligned_mean",
                 "selected_take_ids": [take.index for take in accepted],
@@ -708,6 +855,10 @@ def _finalize_average(
                 ),
             }
         )
+        if delay_acceptance.get("applicable") and delay_acceptance.get("passed") is False:
+            summary.setdefault("warnings", []).append(
+                "双麦 RIR 的 GCC-PHAT 与低频群延迟验收未通过，请检查通道、几何距离和直达峰。"
+            )
     store.write_json("metrics/summary.json", summary)
     store.finish(summary, status=status)
     return summary
