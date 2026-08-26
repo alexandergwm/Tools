@@ -6,6 +6,7 @@ from copy import deepcopy
 from datetime import datetime
 import json
 import queue
+import secrets
 import sys
 import threading
 import time
@@ -33,7 +34,7 @@ from .checklist import apply_checklist_row, create_checklist, read_checklist, up
 from .general import capture_general_io
 from .professional import assert_capture_ready, build_preflight_report, format_preflight_report
 from .rir import capture_rir
-from .scene import capture_scene_block, discover_source_pairs
+from .scene import capture_scene_block, discover_source_pairs, estimate_scene_duration
 from .signals import exponential_sweep, measurement_signal
 from .storage import _safe_name
 from .viewer import ResultsViewer
@@ -80,9 +81,10 @@ FIELDS = [
     ("scene.interferer_file", "干扰音频文件", str, "speech"),
     ("scene.target_folder", "干净目标音频文件夹", str, "speech"),
     ("scene.interferer_folder", "干扰音频文件夹", str, "speech"),
+    ("scene.measurement_count", "随机测量次数", int, "speech"),
     ("scene.target_index_csv", "目标素材元数据 CSV（可选）", str, "speech"),
     ("scene.interferer_index_csv", "干扰素材元数据 CSV（可选）", str, "speech"),
-    ("scene.pairing_seed", "目标与干扰配对随机种子", int, "speech"),
+    ("scene.pairing_seed", "本次随机清单种子（新实验自动更新）", int, "speech"),
     ("scene.file_extensions", "扫描扩展名（逗号分隔）", lambda x: [v.strip() for v in x.split(",") if v.strip()], "speech"),
     ("scene.label_prefix", "标签前缀", str, "speech"),
     ("scene.dataset_split", "数据集划分标签", str, "speech"),
@@ -213,10 +215,16 @@ ADVANCED_FIELDS = {
     "repeats.minimum_sweep_snr_db",
     "acqua.wav_subtype",
     "acqua.recording_margin_s",
+    "scene.duration_s",
+    "scene.target_index_csv",
+    "scene.interferer_index_csv",
     "scene.pairing_seed",
     "scene.file_extensions",
     "scene.label_prefix",
     "scene.dataset_split",
+    "scene.target_level_dbfs",
+    "scene.interferer_level_dbfs",
+    "scene.repetitions",
     "scene.capture_strategy",
     "scene.require_supervised_pair",
     "scene.ambient_duration_s",
@@ -296,6 +304,19 @@ def _display(value) -> str:
     return str(value)
 
 
+def _format_duration(seconds: float | None) -> str:
+    if seconds is None:
+        return "由素材实际长度决定"
+    seconds = max(0, round(float(seconds)))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours} 小时 {minutes} 分 {secs} 秒"
+    if minutes:
+        return f"{minutes} 分 {secs} 秒"
+    return f"{secs} 秒"
+
+
 class CaptureGUI(tk.Tk):
     def __init__(
         self,
@@ -329,10 +350,12 @@ class CaptureGUI(tk.Tk):
         self._worker_thread: threading.Thread | None = None
         self._busy_kind: str | None = None
         self._scene_scan_thread: threading.Thread | None = None
+        self._pending_scene_seed: int | None = None
         self._cancel_watch_after_id: str | None = None
         self._campaign_root: Path | None = None
         self._campaign_original_storage_root: str | None = None
         self.campaign_status_var = tk.StringVar(value="未开始大实验")
+        self.scene_estimate_var = tk.StringVar(value="")
         self.checklist_path: Path | None = None
         self.checklist_row: dict | None = None
         self.checklist_kind: str | None = None
@@ -343,6 +366,16 @@ class CaptureGUI(tk.Tk):
         self._load_values()
         for name in RIR_PREVIEW_FIELDS:
             self.variables[name].trace_add("write", self._schedule_rir_preview)
+        for name in (
+            "scene.source_mode",
+            "scene.measurement_count",
+            "scene.duration_s",
+            "scene.ambient_duration_s",
+            "scene.repetitions",
+            "scene.countdown_s",
+            "scene.gap_s",
+        ):
+            self.variables[name].trace_add("write", self._update_scene_estimate)
         # A fixed 1500x900 logical size can extend beyond the work area on
         # Windows machines using 125%/150% display scaling.  Starting maximized
         # keeps the action buttons and log visible on laboratory laptops.
@@ -554,7 +587,9 @@ class CaptureGUI(tk.Tk):
         actions = ttk.Frame(controls)
         actions.pack(fill="x", pady=(0, 5))
         self.start_button = ttk.Button(actions, command=self.start_current_workflow)
-        self.scene_scan_button = ttk.Button(actions, text="扫描并预览文件", command=self.scan_scene_sources)
+        self.scene_scan_button = ttk.Button(
+            actions, text="预览本次随机清单", command=self.scan_scene_sources
+        )
         self.acqua_tools_button = ttk.Button(
             actions,
             text="ACQUA 长序列…",
@@ -574,6 +609,13 @@ class CaptureGUI(tk.Tk):
             foreground="#24415c",
             wraplength=540,
         )
+        self.scene_estimate_label = ttk.Label(
+            controls,
+            textvariable=self.scene_estimate_var,
+            foreground="#0b6b3a",
+            wraplength=540,
+        )
+        self.scene_estimate_label.pack(fill="x", pady=(0, 5))
         self.experiment_status.pack(fill="x", pady=(0, 5))
         self.log = tk.Text(controls, height=9, state="disabled", bg="#151515", fg="#dddddd")
         self.log.pack(fill="x")
@@ -1057,7 +1099,14 @@ class CaptureGUI(tk.Tk):
 
     def scan_scene_sources(self):
         try:
-            config = self._apply_values()
+            config = deepcopy(self._apply_values())
+            if config.scene.source_mode == "folders":
+                seed = secrets.randbits(63)
+                config.scene.pairing_seed = seed
+                self.config_data.scene.pairing_seed = seed
+                self.variables["scene.pairing_seed"].set(str(seed))
+                self._pending_scene_seed = seed
+            estimate = estimate_scene_duration(config.scene)
         except Exception as exc:
             messagebox.showerror("扫描失败", str(exc))
             return
@@ -1079,7 +1128,15 @@ class CaptureGUI(tk.Tk):
                     )
                     for index, pair in enumerate(pairs[:30], 1)
                 ]
-                self.events.put(("SCENE_SCAN_DONE", len(pairs), preview))
+                self.events.put(
+                    (
+                        "SCENE_SCAN_DONE",
+                        len(pairs),
+                        preview,
+                        config.scene.pairing_seed,
+                        estimate.total_s,
+                    )
+                )
             except Exception as exc:
                 self.events.put(("SCENE_SCAN_ERROR", str(exc)))
 
@@ -1165,6 +1222,41 @@ class CaptureGUI(tk.Tk):
                 parent=self,
             ):
                 resume_run = str(latest)
+        if kind == "scene":
+            source_mode = LABEL_TO_SOURCE_MODE.get(
+                self.variables["scene.source_mode"].get().strip(),
+                self.variables["scene.source_mode"].get().strip(),
+            )
+            if resume_run:
+                checkpoint_path = Path(resume_run) / "metrics" / "scene_checkpoint.json"
+                try:
+                    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+                    if "pairing_seed" in checkpoint:
+                        self.variables["scene.pairing_seed"].set(
+                            str(int(checkpoint["pairing_seed"]))
+                        )
+                    if "measurement_count" in checkpoint:
+                        self.variables["scene.measurement_count"].set(
+                            str(int(checkpoint["measurement_count"]))
+                        )
+                    if "repetitions" in checkpoint:
+                        self.variables["scene.repetitions"].set(
+                            str(int(checkpoint["repetitions"]))
+                        )
+                except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                    messagebox.showerror("无法读取续采计划", str(exc), parent=self)
+                    return
+                self._pending_scene_seed = None
+            elif source_mode == "folders":
+                seed = (
+                    self._pending_scene_seed
+                    if self._pending_scene_seed is not None
+                    else secrets.randbits(63)
+                )
+                self.variables["scene.pairing_seed"].set(str(seed))
+                # Folder mode exposes one total only; do not multiply it by a
+                # hidden legacy repetition value from an older YAML file.
+                self.variables["scene.repetitions"].set("1")
         if existing_runs and not messagebox.askyesno(
             "实验名称已经使用",
             f"名称“{name}”已有 {len(existing_runs)} 个完成结果。\n"
@@ -1184,8 +1276,43 @@ class CaptureGUI(tk.Tk):
         self.metadata.insert("1.0", json.dumps(metadata, ensure_ascii=False, indent=2))
         self.variables["storage.session_name"].set(name)
         self.config_data.scene.resume_run = resume_run
-        self._append(f"本次实验名称：{name}")
+        if kind == "scene":
+            try:
+                estimate = estimate_scene_duration(self._scene_for_estimate())
+                completed = 0
+                if resume_run:
+                    checkpoint = json.loads(
+                        (Path(resume_run) / "metrics" / "scene_checkpoint.json").read_text(
+                            encoding="utf-8"
+                        )
+                    )
+                    completed = int(checkpoint.get("completed_ordinal", 0))
+                remaining = (
+                    None
+                    if estimate.per_task_s is None
+                    else (
+                        max(0, estimate.task_count - completed) * estimate.per_task_s
+                        + (estimate.ambient_s if completed == 0 else 0.0)
+                    )
+                )
+                self._append(
+                    f"本次实验名称：{name}；随机清单 {estimate.task_count} 条，"
+                    f"已完成 {completed} 条，预计剩余 {_format_duration(remaining)}"
+                )
+                self.experiment_status.configure(
+                    text=(
+                        f"{'断点续采' if resume_run else '新的随机清单'}："
+                        f"{completed}/{estimate.task_count} 已完成，"
+                        f"预计剩余 {_format_duration(remaining)}"
+                    )
+                )
+            except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                messagebox.showerror("测量计划无效", str(exc), parent=self)
+                return
+        else:
+            self._append(f"本次实验名称：{name}")
         self._update_metadata_summary()
+        self._pending_scene_seed = None
         self.run(kind)
 
     def _audio_preset_changed(self, _event=None):
@@ -1892,6 +2019,12 @@ class CaptureGUI(tk.Tk):
                 visible = visible and source_mode == "single"
             elif name in {"scene.target_folder", "scene.interferer_folder"}:
                 visible = visible and source_mode == "folders"
+            elif name == "scene.measurement_count":
+                visible = visible and source_mode == "folders"
+            elif name == "scene.repetitions":
+                # Folder capture has one unambiguous total: measurement_count.
+                # Legacy single-file workflows may still repeat the same pair.
+                visible = visible and source_mode == "single"
             for widget in self.field_rows.get(name, ()):
                 widget.grid() if visible else widget.grid_remove()
         for widget, group in self.section_widgets:
@@ -1909,7 +2042,12 @@ class CaptureGUI(tk.Tk):
             self.metadata_summary_panel.grid()
         else:
             self.metadata_summary_panel.grid_remove()
+        if is_scene:
+            self.scene_estimate_label.pack(fill="x", pady=(0, 5), before=self.experiment_status)
+        else:
+            self.scene_estimate_label.pack_forget()
         self._update_metadata_summary()
+        self._update_scene_estimate()
 
         for widget in self.audio_preset_widgets:
             if mode == "audio":
@@ -1937,6 +2075,41 @@ class CaptureGUI(tk.Tk):
             self._schedule_rir_preview()
         elif is_scene and self.viewer.run_dir is None:
             self.viewer.show_speech_workflow_guide()
+
+    def _scene_for_estimate(self):
+        scene = deepcopy(self.config_data.scene)
+        scene.source_mode = LABEL_TO_SOURCE_MODE.get(
+            self.variables["scene.source_mode"].get().strip(),
+            self.variables["scene.source_mode"].get().strip(),
+        )
+        scene.measurement_count = int(
+            self.variables["scene.measurement_count"].get().strip()
+        )
+        duration = self.variables["scene.duration_s"].get().strip()
+        scene.duration_s = None if not duration else float(duration)
+        scene.ambient_duration_s = float(
+            self.variables["scene.ambient_duration_s"].get().strip()
+        )
+        scene.repetitions = int(self.variables["scene.repetitions"].get().strip())
+        scene.countdown_s = float(self.variables["scene.countdown_s"].get().strip())
+        scene.gap_s = float(self.variables["scene.gap_s"].get().strip())
+        preset = AUDIO_PRESETS[self.audio_preset_var.get()]
+        scene.items = list(
+            preset.get("items")
+            if preset.get("items") is not None
+            else [name for name, variable in self.item_vars.items() if variable.get()]
+        )
+        return scene
+
+    def _update_scene_estimate(self, *_):
+        try:
+            estimate = estimate_scene_duration(self._scene_for_estimate())
+            self.scene_estimate_var.set(
+                f"计划 {estimate.task_count} 次测量；预计最短测试时长 "
+                f"{_format_duration(estimate.total_s)}（不含首次声卡初始化和写盘耗时）"
+            )
+        except (KeyError, TypeError, ValueError):
+            self.scene_estimate_var.set("请填写有效的测量次数和时长以计算预计测试时间")
 
     def _schedule_rir_preview(self, *_):
         if self._busy or self.mode_var.get() != "rir":
@@ -2019,14 +2192,18 @@ class CaptureGUI(tk.Tk):
                     self._append(f"预检提醒：{title}：{detail}")
                     self._logged_preflight_warning_ids.add(check_id)
             elif isinstance(event, tuple) and event and event[0] == "SCENE_SCAN_DONE":
-                _, pair_count, preview = event
+                _, pair_count, preview, pairing_seed, estimated_total_s = event
                 self._scene_scan_thread = None
                 if not self._busy:
                     self.scene_scan_button.configure(state="normal")
                 suffix = "" if pair_count <= 30 else f"\n……另有 {pair_count - 30} 组未显示"
                 messagebox.showinfo(
-                    "语音文件扫描结果",
-                    f"共形成 {pair_count} 组采集任务。\n\n" + "\n".join(preview) + suffix,
+                    "本次随机测量清单",
+                    f"随机种子：{pairing_seed}\n"
+                    f"共 {pair_count} 次测量，预计最短时长 "
+                    f"{_format_duration(estimated_total_s)}。\n\n"
+                    + "\n".join(preview)
+                    + suffix,
                 )
             elif isinstance(event, tuple) and event and event[0] == "SCENE_SCAN_ERROR":
                 _, error = event
@@ -2038,14 +2215,37 @@ class CaptureGUI(tk.Tk):
                 self._append(str(event[1]))
             elif isinstance(event, tuple) and event and event[0] == "SCENE_PROGRESS":
                 _, update = event
-                if update.get("event") == "pair_loading":
+                if update.get("event") == "plan_ready":
+                    completed = int(update.get("completed_tasks", 0))
+                    total = int(update.get("total_tasks", 0))
+                    remaining = update.get("estimated_remaining_s")
+                    self.experiment_status.configure(
+                        text=(
+                            f"语音增强采集中：{completed}/{total} 已完成；"
+                            f"预计剩余 {_format_duration(remaining)}；可随时停止并续采"
+                        )
+                    )
                     self._append(
-                        f"正在读取素材 {update['pair_index']}/{update['pair_count']}："
+                        f"随机测量清单已锁定：种子 {update.get('pairing_seed')}，"
+                        f"共 {total} 条，已完成 {completed} 条"
+                    )
+                elif update.get("event") == "pair_loading":
+                    task_index = int(update.get("task_index", update["pair_index"]))
+                    task_count = int(update.get("task_count", update["pair_count"]))
+                    remaining = update.get("estimated_remaining_s")
+                    self._append(
+                        f"正在读取素材 {task_index}/{task_count}："
                         f"target={update['target_name']} | interferer={update['interferer_name']}"
+                    )
+                    self.experiment_status.configure(
+                        text=(
+                            f"语音增强采集中：第 {task_index}/{task_count} 条；"
+                            f"预计剩余 {_format_duration(remaining)}；停止后可从本条继续"
+                        )
                     )
                     self.viewer.run_label.configure(
                         text=(
-                            f"Loading pair {update['pair_index']}/{update['pair_count']}: "
+                            f"Loading pair {task_index}/{task_count}: "
                             f"target={update['target_name']} | interferer={update['interferer_name']}"
                         )
                     )
@@ -2254,10 +2454,21 @@ class CaptureGUI(tk.Tk):
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
                 if manifest.get("status") == "cancelled":
                     self._update_checklist_progress(
-                        "待采集", completed_run=path, last_error="用户停止；可重新采集"
+                        "待采集", completed_run=path, last_error="用户停止；可断点续采"
                     )
-                    self._append(f"测试已停止，已完成的数据已保存：{path}")
-                    messagebox.showinfo("测试已停止", f"已完成的数据已保存到：\n{path}")
+                    experiment_name = str(
+                        (manifest.get("metadata") or {}).get("experiment_name") or ""
+                    )
+                    self._append(
+                        f"测试已停止，已完成的数据和断点已保存：{path}；"
+                        f"下次输入同一实验名“{experiment_name}”即可继续"
+                    )
+                    messagebox.showinfo(
+                        "测试已停止，可断点继续",
+                        f"已完成的数据和清单断点已保存到：\n{path}\n\n"
+                        f"下次点击开始，输入同一实验名“{experiment_name}”，"
+                        "再选择“是”即可从第一条未完成任务继续。",
+                    )
                     continue
                 self._update_checklist_progress("已完成", completed_run=path)
                 warnings = manifest.get("summary", {}).get("warnings", [])

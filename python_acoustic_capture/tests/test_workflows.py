@@ -18,6 +18,7 @@ from acoustic_capture.scene import (
     build_paired_sequence,
     capture_scene_block,
     discover_source_pairs,
+    estimate_scene_duration,
 )
 from acoustic_capture.labels import import_reviewed_labels
 from acoustic_capture.speech_dataset import compile_speech_dataset
@@ -457,6 +458,7 @@ def test_scene_failure_checkpoints_and_resume_skips_completed_pair(tmp_path: Pat
     cfg.scene.target_folder = str(target_folder)
     cfg.scene.interferer_folder = str(interferer_folder)
     cfg.scene.items = ["target_only", "mixture"]
+    cfg.scene.measurement_count = 3
     cfg.scene.duration_s = 0.02
     cfg.scene.countdown_s = 0
     cfg.scene.gap_s = 0
@@ -479,6 +481,13 @@ def test_scene_failure_checkpoints_and_resume_skips_completed_pair(tmp_path: Pat
     run = next((tmp_path / "runs").iterdir())
     manifest = json.loads((run / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["status"] == "failed"
+    checkpoint = json.loads(
+        (run / "metrics" / "scene_checkpoint.json").read_text(encoding="utf-8")
+    )
+    assert checkpoint["measurement_count"] == 3
+    assert checkpoint["pairing_seed"] == cfg.scene.pairing_seed
+    assert checkpoint["completed_ordinal"] == 1
+    assert checkpoint["total_pairs"] == 3
     assert len((run / "labels.jsonl").read_text(encoding="utf-8").splitlines()) == 1
     cfg.scene.resume_run = str(run)
     resumed_backend = FailSecondBackend(cfg.audio)
@@ -550,6 +559,7 @@ def test_source_indexes_and_reviewed_excel_feed_training_labels(tmp_path: Path):
     cfg.scene.target_index_csv = str(target_index)
     cfg.scene.interferer_index_csv = str(interferer_index)
     cfg.scene.items = ["target_only", "mixture"]
+    cfg.scene.measurement_count = 1
     cfg.scene.duration_s = 0.02
     cfg.scene.countdown_s = 0
     cfg.scene.gap_s = 0
@@ -665,6 +675,7 @@ def test_folder_scene_batch_cycles_files_and_writes_labels(tmp_path: Path):
     cfg.scene.target_folder = str(target_folder)
     cfg.scene.interferer_folder = str(interferer_folder)
     cfg.scene.pairing_seed = 123
+    cfg.scene.measurement_count = 3
     cfg.scene.duration_s = 0.05
     cfg.scene.ambient_duration_s = 0.05
     cfg.scene.items = ["target_only", "interferer_only", "mixture"]
@@ -680,14 +691,13 @@ def test_folder_scene_batch_cycles_files_and_writes_labels(tmp_path: Path):
         labels = list(csv.DictReader(handle))
     assert len(labels) == 3
     assert [Path(row["target_source"]).name for row in labels] == [
-        "speaker_1.wav",
-        "speaker_2.wav",
-        "speaker_3.wav",
+        pair.target.name for pair in planned_pairs
     ]
     assert [Path(row["interferer_source"]).name for row in labels] == [
         pair.interferer.name for pair in planned_pairs
     ]
     assert all(row["pairing_seed"] == "123" for row in labels)
+    assert all(row["measurement_count"] == "3" for row in labels)
     assert all(row["pairing_strategy"] == PAIRING_STRATEGY for row in labels)
     assert all(row["automatic_label"].startswith("batch_") for row in labels)
     assert all(row["duration_s"] == "0.05" for row in labels)
@@ -713,6 +723,7 @@ def test_folder_sources_are_hashed_lazily_per_captured_pair(tmp_path: Path, monk
     cfg.scene.target_folder = str(target_folder)
     cfg.scene.interferer_folder = str(interferer_folder)
     cfg.scene.items = ["target_only", "mixture"]
+    cfg.scene.measurement_count = 4
     cfg.scene.duration_s = 0.01
     cfg.scene.countdown_s = 0
     cfg.scene.gap_s = 0
@@ -742,6 +753,7 @@ def test_seeded_pairing_is_linear_reproducible_and_changes_with_seed(tmp_path: P
     cfg.source_mode = "folders"
     cfg.target_folder = str(tmp_path / "targets")
     cfg.interferer_folder = str(tmp_path / "interferers")
+    cfg.measurement_count = 137
     fake_targets = [tmp_path / f"t{index}.wav" for index in range(2_000)]
     fake_interferers = [tmp_path / f"n{index}.wav" for index in range(2_000)]
 
@@ -756,14 +768,37 @@ def test_seeded_pairing_is_linear_reproducible_and_changes_with_seed(tmp_path: P
     first = plan(17)
     repeated = plan(17)
     changed = plan(18)
-    assert len(first) == 2_000
-    assert [pair.target for pair in first] == fake_targets
+    assert len(first) == 137
+    assert len({pair.target for pair in first}) == 137
+    assert [pair.target for pair in first] == [
+        pair.target for pair in repeated
+    ]
+    assert [pair.target for pair in first] != [
+        pair.target for pair in changed
+    ]
     assert [pair.interferer for pair in first] == [
         pair.interferer for pair in repeated
     ]
     assert [pair.interferer for pair in first] != [
         pair.interferer for pair in changed
     ]
+
+
+def test_scene_duration_estimate_uses_measurement_count_and_sequence_gaps():
+    scene = ExperimentConfig().scene
+    scene.source_mode = "folders"
+    scene.measurement_count = 25
+    scene.items = ["target_only", "interferer_only", "mixture"]
+    scene.duration_s = 4.0
+    scene.countdown_s = 3.0
+    scene.gap_s = 1.0
+    scene.repetitions = 1
+
+    estimate = estimate_scene_duration(scene)
+
+    assert estimate.task_count == 25
+    assert estimate.per_task_s == pytest.approx(19.0)
+    assert estimate.total_s == pytest.approx(475.0)
 
 
 def test_speech_dataset_packages_multichannel_pairs_and_flattened_labels(tmp_path: Path):

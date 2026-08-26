@@ -209,6 +209,19 @@ def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
         assert "干扰源输出通道" in str(
             app.field_rows["audio.interferer_output_channel"][0].cget("text")
         )
+        app.variables["scene.source_mode"].set(
+            gui_module.SOURCE_MODE_TO_LABEL["folders"]
+        )
+        app.variables["scene.measurement_count"].set("12")
+        app._set_mode()
+        assert app.field_rows["scene.measurement_count"][1].winfo_manager() == "grid"
+        assert app.field_rows["scene.repetitions"][1].winfo_manager() == ""
+        assert app.field_rows["scene.duration_s"][1].winfo_manager() == ""
+        assert "计划 12 次测量" in app.scene_estimate_var.get()
+        app.variables["scene.source_mode"].set(
+            gui_module.SOURCE_MODE_TO_LABEL["single"]
+        )
+        app._set_mode()
         app.mode_var.set("rir")
         app._set_mode()
         app.advanced_var.set(True)
@@ -434,6 +447,7 @@ def test_gui_big_experiment_and_acqua_click_paths(tmp_path: Path, monkeypatch):
             dialog_name,
             lambda title, message: dialogs.append((str(title), str(message))),
         )
+    monkeypatch.setattr(gui_module.secrets, "randbits", lambda _bits: 424242)
 
     app = CaptureGUI(config_path)
     app.withdraw()
@@ -465,6 +479,24 @@ def test_gui_big_experiment_and_acqua_click_paths(tmp_path: Path, monkeypatch):
         assert app._campaign_root is None
         assert campaign_root.with_suffix(".zip").is_file()
         assert Path(app.variables["storage.root"].get()) == Path(config.storage.root)
+
+        app.mode_var.set("audio")
+        app.audio_preset_var.set("标准监督：目标 + 干扰 + MIXED（推荐）")
+        app._audio_preset_changed()
+        app.variables["scene.measurement_count"].set("3")
+        app.scan_scene_sources()
+        deadline = time.monotonic() + 5
+        while app._scene_scan_thread is not None and time.monotonic() < deadline:
+            app.update()
+            time.sleep(0.01)
+        app.update()
+        assert app.variables["scene.pairing_seed"].get() == "424242"
+        assert any(
+            title == "本次随机测量清单"
+            and "共 3 次测量" in message
+            and "随机种子：424242" in message
+            for title, message in dialogs
+        )
 
         app.mode_var.set("simple_recording")
         app._set_mode()

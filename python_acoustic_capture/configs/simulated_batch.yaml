@@ -50,6 +50,7 @@ scene:
   interferer_file: ../audio/interferer.wav
   target_folder: ../audio/targets
   interferer_folder: ../audio/interferers
+  measurement_count: 10
   pairing_seed: 0
   file_extensions: [.wav, .flac]
   label_prefix: simulated_batch

@@ -20,7 +20,6 @@ import soundfile as sf
 
 from .config import ExperimentConfig
 from .scene import (
-    PAIRING_STRATEGY,
     SourcePair,
     _load_pair,
     _scan_audio_folder,
@@ -32,6 +31,7 @@ from .storage import _safe_name
 
 StopRequested = Callable[[], bool]
 Progress = Callable[[dict], None]
+ACQUA_PAIRING_STRATEGY = "stable_target_seeded_interferer_v2"
 
 
 def discover_acqua_pairs(config: ExperimentConfig) -> list[SourcePair]:
@@ -184,7 +184,7 @@ def generate_acqua_mixed_target_program(
                             Path(config.scene.interferer_folder).resolve()
                         ).as_posix(),
                         "pairing_seed": config.acqua.pairing_seed,
-                        "pairing_strategy": PAIRING_STRATEGY,
+                        "pairing_strategy": ACQUA_PAIRING_STRATEGY,
                         "sample_rate_hz": fs,
                         "logical_channel_1": "target",
                         "logical_channel_2": (
@@ -221,7 +221,7 @@ def generate_acqua_mixed_target_program(
         "segment_duration_s": config.acqua.segment_duration_s,
         "gap_s": config.acqua.gap_s,
         "pairing_seed": config.acqua.pairing_seed,
-        "pairing_strategy": PAIRING_STRATEGY,
+        "pairing_strategy": ACQUA_PAIRING_STRATEGY,
         "planned_pair_count": len(pairs),
         "completed_pair_count": len(rows) // 2,
         "mapping_row_count": len(rows),

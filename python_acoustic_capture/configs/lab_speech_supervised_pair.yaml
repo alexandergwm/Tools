@@ -28,6 +28,7 @@ scene:
   target_index_csv: ''
   # 可选 CSV：relative_path,noise_id,noise_class
   interferer_index_csv: ''
+  measurement_count: 10
   pairing_seed: 0
   file_extensions: [.wav, .flac]
   label_prefix: speech_pair

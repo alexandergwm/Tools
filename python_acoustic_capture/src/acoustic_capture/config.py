@@ -99,6 +99,7 @@ class SceneConfig:
     target_index_csv: str = ""
     interferer_index_csv: str = ""
     resume_run: str = ""
+    measurement_count: int = 10
     pairing_seed: int = 0
     file_extensions: list[str] = field(default_factory=lambda: [".wav", ".flac"])
     label_prefix: str = ""
@@ -211,6 +212,12 @@ class ExperimentConfig:
             )
         if self.scene.source_mode not in {"single", "folders"}:
             raise ValueError("scene.source_mode must be single or folders")
+        if (
+            isinstance(self.scene.measurement_count, bool)
+            or not isinstance(self.scene.measurement_count, int)
+            or not 1 <= self.scene.measurement_count <= 100_000
+        ):
+            raise ValueError("scene.measurement_count must be between 1 and 100000")
         if isinstance(self.scene.pairing_seed, bool) or not isinstance(
             self.scene.pairing_seed, int
         ):

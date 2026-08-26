@@ -32,7 +32,8 @@ Log = Callable[[str], None]
 StopRequested = Callable[[], bool]
 Progress = Callable[[dict], None]
 PAIRED_ITEM_ORDER = ("target_only", "interferer_only", "mixture")
-PAIRING_STRATEGY = "stable_target_seeded_interferer_v1"
+PAIRING_STRATEGY = "seeded_random_measurement_count_v2"
+SHUFFLE_STRATEGY = "sha256_shuffle_bag_v2"
 
 
 class _CaptureCancelled(Exception):
@@ -61,8 +62,16 @@ class SourcePair:
     interferer: Path | None
 
 
+@dataclass(frozen=True)
+class SceneDurationEstimate:
+    task_count: int
+    per_task_s: float | None
+    ambient_s: float
+    total_s: float | None
+
+
 def discover_source_pairs(scene: SceneConfig) -> list[SourcePair]:
-    """Resolve a bounded and reproducible target/interferer pairing plan."""
+    """Resolve exactly ``measurement_count`` reproducible random folder tasks."""
     target_required = any(item in {"target_only", "mixture"} for item in scene.items)
     interferer_required = any(item in {"interferer_only", "mixture"} for item in scene.items)
     if scene.source_mode == "single":
@@ -76,33 +85,43 @@ def discover_source_pairs(scene: SceneConfig) -> list[SourcePair]:
         value.lower() if value.startswith(".") else f".{value.lower()}"
         for value in scene.file_extensions
     }
-    targets = _scan_audio_folder(Path(scene.target_folder), extensions) if target_required else [None]
+    target_root = Path(scene.target_folder)
+    interferer_root = Path(scene.interferer_folder)
+    targets = _scan_audio_folder(target_root, extensions) if target_required else []
     interferers = (
-        _scan_audio_folder(Path(scene.interferer_folder), extensions) if interferer_required else [None]
+        _scan_audio_folder(interferer_root, extensions) if interferer_required else []
     )
     if target_required and not targets:
         raise FileNotFoundError(f"目标语音文件夹中没有匹配音频：{scene.target_folder}")
     if interferer_required and not interferers:
         raise FileNotFoundError(f"干扰声音文件夹中没有匹配音频：{scene.interferer_folder}")
-    count = max(len(targets), len(interferers))
+    if not target_required and not interferer_required:
+        return [SourcePair(None, None)]
+    count = scene.measurement_count
+    target_plan = (
+        _seeded_repeat(targets, count, target_root, scene.pairing_seed, "target")
+        if target_required
+        else [None] * count
+    )
     interferer_plan = (
         _seeded_repeat(
             interferers,
             count,
-            Path(scene.interferer_folder),
+            interferer_root,
             scene.pairing_seed,
+            "interferer",
         )
-        if target_required and interferer_required
-        else [interferers[index % len(interferers)] for index in range(count)]
+        if interferer_required
+        else [None] * count
     )
     return [
-        SourcePair(targets[index % len(targets)], interferer_plan[index])
+        SourcePair(target_plan[index], interferer_plan[index])
         for index in range(count)
     ]
 
 
 def _seeded_repeat(
-    paths: list[Path], count: int, root: Path, seed: int
+    paths: list[Path], count: int, root: Path, seed: int, namespace: str = "default"
 ) -> list[Path]:
     """Repeat deterministic shuffle bags without depending on RNG versions."""
     result: list[Path] = []
@@ -115,12 +134,46 @@ def _seeded_repeat(
             except ValueError:
                 identity = path.name
             return hashlib.sha256(
-                f"{PAIRING_STRATEGY}\0{seed}\0{epoch}\0{identity}".encode("utf-8")
+                f"{SHUFFLE_STRATEGY}\0{namespace}\0{seed}\0{epoch}\0{identity}".encode(
+                    "utf-8"
+                )
             ).digest()
 
         result.extend(sorted(paths, key=stable_key))
         epoch += 1
     return result[:count]
+
+
+def estimate_scene_duration(scene: SceneConfig) -> SceneDurationEstimate:
+    """Return the deterministic playback/countdown duration for one scene run.
+
+    File I/O and driver startup are deliberately excluded.  Folder capture has
+    a fixed task count, so the operator can see an estimate without scanning or
+    decoding thousands of source files.
+    """
+    pair_count = scene.measurement_count if scene.source_mode == "folders" else 1
+    audible_items = sum(item in scene.items for item in PAIRED_ITEM_ORDER)
+    task_count = pair_count * scene.repetitions if audible_items else 0
+    ambient_s = 0.0
+    if "ambient" in scene.items:
+        ambient_s = scene.repetitions * (
+            scene.countdown_s + scene.ambient_duration_s
+        )
+    if not audible_items:
+        return SceneDurationEstimate(task_count, 0.0, ambient_s, ambient_s)
+    if scene.duration_s is None:
+        return SceneDurationEstimate(task_count, None, ambient_s, None)
+    per_task_s = (
+        scene.countdown_s
+        + scene.gap_s
+        + audible_items * (scene.duration_s + scene.gap_s)
+    )
+    return SceneDurationEstimate(
+        task_count,
+        per_task_s,
+        ambient_s,
+        ambient_s + task_count * per_task_s,
+    )
 
 
 def validate_source_audio(pairs: list[SourcePair]) -> None:
@@ -418,6 +471,7 @@ def capture_scene_block(
         "source_mode": scene.source_mode,
         "pairing_strategy": PAIRING_STRATEGY,
         "pairing_seed": scene.pairing_seed,
+        "measurement_count": scene.measurement_count,
         "target_index": optional_file_signature(scene.target_index_csv),
         "interferer_index": optional_file_signature(scene.interferer_index_csv),
         "items": list(scene.items),
@@ -436,6 +490,8 @@ def capture_scene_block(
         "metadata": config.metadata,
     }
     plan_sha256 = canonical_sha256(plan)
+    duration_estimate = estimate_scene_duration(scene)
+    total_tasks = len(pairs) * scene.repetitions
     store = (
         RunStore.resume(scene.resume_run, config, "scene")
         if scene.resume_run
@@ -465,15 +521,19 @@ def capture_scene_block(
                 "续采标签数量与断点不一致；为避免错配，未自动继续。"
                 f"标签 {len(label_rows)} 行，断点 {completed_ordinal} 条。"
             )
-        log(f"从断点续采：已完成 {completed_ordinal}/{len(pairs) * scene.repetitions} 条")
+        log(f"从断点续采：已完成 {completed_ordinal}/{total_tasks} 条")
     else:
         store.write_json(
             "metrics/scene_checkpoint.json",
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "plan_sha256": plan_sha256,
                 "completed_ordinal": 0,
-                "total_pairs": len(pairs) * scene.repetitions,
+                "total_pairs": total_tasks,
+                "measurement_count": scene.measurement_count,
+                "pairing_seed": scene.pairing_seed,
+                "repetitions": scene.repetitions,
+                "estimated_total_s": duration_estimate.total_s,
             },
         )
         store.checkpoint()
@@ -529,6 +589,7 @@ def capture_scene_block(
                 "mode": scene.source_mode,
                 "pairing_strategy": PAIRING_STRATEGY,
                 "pairing_seed": scene.pairing_seed,
+                "measurement_count": scene.measurement_count,
                 "pairs": source_info,
             },
         )
@@ -536,7 +597,9 @@ def capture_scene_block(
         "source_mode": scene.source_mode,
         "pairing_strategy": PAIRING_STRATEGY,
         "pairing_seed": scene.pairing_seed,
+        "measurement_count": scene.measurement_count,
         "pair_count": len(pairs),
+        "estimated_total_s": duration_estimate.total_s,
         "items": scene.items,
         "repetitions": scene.repetitions,
         "capture_strategy": scene.capture_strategy,
@@ -556,6 +619,28 @@ def capture_scene_block(
             )
     metadata_columns = flatten_experiment_metadata(config.metadata)
     shared_hardware_clock = _shared_hardware_clock(config)
+
+    if progress is not None:
+        progress(
+            {
+                "event": "plan_ready",
+                "pair_count": len(pairs),
+                "total_tasks": total_tasks,
+                "completed_tasks": completed_ordinal,
+                "pairing_seed": scene.pairing_seed,
+                "measurement_count": scene.measurement_count,
+                "estimated_total_s": duration_estimate.total_s,
+                "estimated_remaining_s": (
+                    None
+                    if duration_estimate.per_task_s is None
+                    else (
+                        max(0, total_tasks - completed_ordinal)
+                        * duration_estimate.per_task_s
+                        + (duration_estimate.ambient_s if completed_ordinal == 0 else 0.0)
+                    )
+                ),
+            }
+        )
 
     try:
         for repetition in range(1, scene.repetitions + 1):
@@ -602,9 +687,17 @@ def capture_scene_block(
                             "event": "pair_loading",
                             "pair_index": pair_index,
                             "pair_count": len(pairs),
+                            "task_index": ordinal,
+                            "task_count": total_tasks,
                             "repetition": repetition,
                             "target_name": pair.target.name if pair.target else "(not used)",
                             "interferer_name": pair.interferer.name if pair.interferer else "(not used)",
+                            "estimated_remaining_s": (
+                                None
+                                if duration_estimate.per_task_s is None
+                                else (total_tasks - ordinal + 1)
+                                * duration_estimate.per_task_s
+                            ),
                         }
                     )
                 samples = _pair_sample_count(pair, config)
@@ -652,6 +745,8 @@ def capture_scene_block(
                             "event": "pair_prepared",
                             "pair_index": pair_index,
                             "pair_count": len(pairs),
+                            "task_index": ordinal,
+                            "task_count": total_tasks,
                             "repetition": repetition,
                             "target_name": pair.target.name if pair.target else "(not used)",
                             "interferer_name": pair.interferer.name if pair.interferer else "(not used)",
@@ -886,6 +981,7 @@ def capture_scene_block(
                         "pair_index": pair_index,
                         "pairing_strategy": PAIRING_STRATEGY,
                         "pairing_seed": scene.pairing_seed,
+                        "measurement_count": scene.measurement_count,
                         "target_source": str(pair.target) if pair.target else "",
                         "interferer_source": str(pair.interferer) if pair.interferer else "",
                         "target_source_sha256": source_hashes["target"]["sha256"] or "",
@@ -930,10 +1026,14 @@ def capture_scene_block(
                 store.write_json(
                     "metrics/scene_checkpoint.json",
                     {
-                        "schema_version": 1,
+                        "schema_version": 2,
                         "plan_sha256": plan_sha256,
                         "completed_ordinal": ordinal,
-                        "total_pairs": len(pairs) * scene.repetitions,
+                        "total_pairs": total_tasks,
+                        "measurement_count": scene.measurement_count,
+                        "pairing_seed": scene.pairing_seed,
+                        "repetitions": scene.repetitions,
+                        "estimated_total_s": duration_estimate.total_s,
                     },
                 )
                 # labels.partial.jsonl and scene_checkpoint.json are already
