@@ -56,7 +56,7 @@ class SweepConfig:
 class RepeatConfig:
     strategy: str = "reconstruct_average"  # reconstruct_average | fixed_count
     fixed_count: int = 5
-    correlation_threshold: float = 0.98
+    correlation_threshold: float = 0.90
     peak_drift_samples: int = 2
     minimum_sweep_snr_db: float = 6.0
     reject_clipped: bool = True
@@ -99,8 +99,7 @@ class SceneConfig:
     target_index_csv: str = ""
     interferer_index_csv: str = ""
     resume_run: str = ""
-    measurement_count: int = 10
-    pairing_seed: int = 0
+    pairing_mode: str = "cycle"  # cycle | cartesian
     file_extensions: list[str] = field(default_factory=lambda: [".wav", ".flac"])
     label_prefix: str = ""
     dataset_split: str = "train"
@@ -179,17 +178,6 @@ class ExperimentConfig:
             raise ValueError("repeats.minimum_sweep_snr_db must be non-negative")
         if r.pause_s < 0:
             raise ValueError("repeats.pause_s must be non-negative")
-        if not 0 < r.delay_low_hz < r.delay_high_hz < a.sample_rate / 2:
-            raise ValueError("RIR delay frequency band must be within Nyquist")
-        if r.delay_max_ms <= 0 or r.delay_agreement_samples < 0:
-            raise ValueError("RIR delay limits must be positive")
-        q = self.acqua
-        if q.segment_duration_s <= 0 or q.gap_s < 0 or q.recording_margin_s < 0:
-            raise ValueError("ACQUA segment/gap/margin durations are invalid")
-        if isinstance(q.pairing_seed, bool) or not isinstance(q.pairing_seed, int):
-            raise ValueError("acqua.pairing_seed must be an integer")
-        if q.wav_subtype not in {"PCM_16", "PCM_24", "FLOAT"}:
-            raise ValueError("acqua.wav_subtype must be PCM_16, PCM_24, or FLOAT")
         if not -100 <= s.level_dbfs <= 0:
             raise ValueError("sweep.level_dbfs must be between -100 and 0")
         allowed = {"ambient", "target_only", "interferer_only", "mixture"}
@@ -212,16 +200,8 @@ class ExperimentConfig:
             )
         if self.scene.source_mode not in {"single", "folders"}:
             raise ValueError("scene.source_mode must be single or folders")
-        if (
-            isinstance(self.scene.measurement_count, bool)
-            or not isinstance(self.scene.measurement_count, int)
-            or not 1 <= self.scene.measurement_count <= 100_000
-        ):
-            raise ValueError("scene.measurement_count must be between 1 and 100000")
-        if isinstance(self.scene.pairing_seed, bool) or not isinstance(
-            self.scene.pairing_seed, int
-        ):
-            raise ValueError("scene.pairing_seed must be an integer")
+        if self.scene.pairing_mode not in {"cycle", "cartesian"}:
+            raise ValueError("scene.pairing_mode must be cycle or cartesian")
         if self.scene.dataset_split not in {"train", "valid", "test"}:
             raise ValueError("scene.dataset_split must be train, valid, or test")
         if not self.scene.file_extensions:
@@ -245,10 +225,6 @@ def load_config(path: str | Path) -> ExperimentConfig:
         raw = yaml.safe_load(handle) or {}
     sweep_values = dict(raw.get("sweep") or {})
     repeat_values = dict(raw.get("repeats") or {})
-    scene_values = dict(raw.get("scene") or {})
-    # Older releases exposed cycle/cartesian.  Folder pairing is now always
-    # bounded and seed-deterministic; silently migrate those YAML files.
-    scene_values.pop("pairing_mode", None)
     for legacy_field in (
         "minimum",
         "maximum",
@@ -268,8 +244,7 @@ def load_config(path: str | Path) -> ExperimentConfig:
         general=_make(GeneralIOConfig, raw.get("general")),
         sweep=_make(SweepConfig, sweep_values),
         repeats=_make(RepeatConfig, repeat_values),
-        acqua=_make(AcquaConfig, raw.get("acqua")),
-        scene=_make(SceneConfig, scene_values),
+        scene=_make(SceneConfig, raw.get("scene")),
         storage=_make(StorageConfig, raw.get("storage")),
         metadata=raw.get("metadata", {}),
     )
@@ -288,7 +263,6 @@ def load_config(path: str | Path) -> ExperimentConfig:
         (cfg.scene, "target_index_csv"),
         (cfg.scene, "interferer_index_csv"),
         (cfg.scene, "resume_run"),
-        (cfg.acqua, "program_file"),
     ):
         raw_value = getattr(section, attr)
         if not raw_value:

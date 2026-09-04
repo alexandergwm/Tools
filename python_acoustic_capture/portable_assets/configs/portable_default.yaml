@@ -54,8 +54,7 @@ scene:
   # 可选逐文件元数据；relative_path 相对于上面的素材文件夹。
   target_index_csv: ''
   interferer_index_csv: ''
-  measurement_count: 10
-  pairing_seed: 0
+  pairing_mode: cycle
   file_extensions: [.wav, .flac]
   label_prefix: speech
   dataset_split: train

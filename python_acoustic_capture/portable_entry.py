@@ -9,7 +9,7 @@ import sys
 import traceback
 from pathlib import Path
 
-PORTABLE_CONFIG_VERSION = "0.3.0"
+PORTABLE_CONFIG_VERSION = "0.2.11"
 
 
 def _portable_config_path(root: Path) -> Path:
@@ -161,6 +161,11 @@ def main() -> int:
         if os.environ.get("ACOUSTIC_CAPTURE_PORTABLE_SMOKE") == "1":
             _portable_smoke_test(root)
             return 0
+        # Select sounddevice's ASIO-enabled PortAudio DLL before any GUI or
+        # plotting imports can indirectly import sounddevice.
+        from acoustic_capture.audio import _enable_windows_asio
+
+        _enable_windows_asio()
         from acoustic_capture.gui import main as gui_main
 
         gui_main(config)

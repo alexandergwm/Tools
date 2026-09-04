@@ -14,7 +14,7 @@ import queue
 import sys
 import threading
 import time
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 import soundfile as sf
@@ -48,21 +48,6 @@ class AudioBackend(ABC):
     def stop(self) -> None:
         """Request that an active audio operation stop as soon as possible."""
 
-    def record_to_file(
-        self,
-        path: str | Path,
-        *,
-        stop_requested: Callable[[], bool],
-        subtype: str = "FLOAT",
-    ) -> dict[str, Any]:
-        """Continuously record selected inputs to ``path`` until stopped.
-
-        Implementations must stream to disk instead of accumulating an
-        unbounded recording in memory.  This is the backend primitive used by
-        the GUI's deliberately minimal standalone recording workflow.
-        """
-        raise NotImplementedError
-
     def set_progress_callback(self, callback) -> None:
         """Receive lightweight playback progress dictionaries when supported.
 
@@ -78,17 +63,26 @@ class SoundDeviceBackend(AudioBackend):
     ``sounddevice.playrec(..., blocking=True)`` is concise, but a driver that
     never reaches its callback leaves the calling worker blocked forever.  This
     matters on laptops where the Windows microphone and speakers are separate
-    devices.  Owning the stream explicitly lets the GUI abort it and lets us
-    surface a useful timeout instead of appearing to hang indefinitely.
+    devices.  Owning the stream explicitly lets the GUI request cancellation
+    and lets us surface a useful timeout instead of appearing to hang
+    indefinitely.
+
+    PortAudio/ASIO stream control is deliberately thread-affine: the thread
+    that constructs and starts a stream is also the only thread that aborts
+    and closes it.  The Tk thread merely sets ``_abort_requested``.  Several
+    Windows ASIO drivers become unstable when a second helper thread invokes
+    ``abort()`` or ``close()``.
     """
 
     def __init__(self, config: AudioConfig):
         super().__init__(config)
         self._stream_lock = threading.Lock()
         self._active_stream: Any | None = None
+        self._stream_owner_thread_id: int | None = None
         self._abort_requested = threading.Event()
         self._progress_callback = None
         self._last_progress_at = 0.0
+        self._last_check_warnings: list[str] = []
 
     def set_progress_callback(self, callback) -> None:
         self._progress_callback = callback
@@ -173,6 +167,10 @@ class SoundDeviceBackend(AudioBackend):
                     "max_input_channels": info.get("max_input_channels"),
                     "max_output_channels": info.get("max_output_channels"),
                     "default_sample_rate": info.get("default_samplerate"),
+                    "default_low_input_latency": info.get("default_low_input_latency"),
+                    "default_high_input_latency": info.get("default_high_input_latency"),
+                    "default_low_output_latency": info.get("default_low_output_latency"),
+                    "default_high_output_latency": info.get("default_high_output_latency"),
                 }
             except Exception as exc:
                 return {"error": str(exc), "configured": device}
@@ -187,6 +185,7 @@ class SoundDeviceBackend(AudioBackend):
         return {
             "backend": "sounddevice",
             "requested_host_api": self.config.host_api,
+            "requested_sample_rate": self.config.sample_rate,
             "sounddevice_version": getattr(sd, "__version__", None),
             "portaudio_version": portaudio_version,
             "windows_asio_requested": bool(os.environ.get("SD_ENABLE_ASIO")),
@@ -201,6 +200,7 @@ class SoundDeviceBackend(AudioBackend):
         status = self._device_status(sd)
         status["callback_status"] = callback_status or self._callback_status(sd)
         status["xrun"] = status["callback_status"]["xrun"]
+        status["warnings"] = list(self._last_check_warnings)
         return status
 
     @staticmethod
@@ -212,7 +212,24 @@ class SoundDeviceBackend(AudioBackend):
             "input_overflow": False,
             "output_underflow": False,
             "output_overflow": False,
+            "callback_count": 0,
+            "first_callback_time": None,
+            "last_callback_time": None,
         }
+
+    @staticmethod
+    def _record_callback_time(target: dict[str, Any], time_info: Any) -> None:
+        """Keep PortAudio ADC/DAC timestamps for later clock/latency diagnosis."""
+        timing = {}
+        for name in ("inputBufferAdcTime", "currentTime", "outputBufferDacTime"):
+            try:
+                timing[name] = float(getattr(time_info, name))
+            except Exception:
+                continue
+        target["callback_count"] = int(target.get("callback_count", 0)) + 1
+        if target.get("first_callback_time") is None:
+            target["first_callback_time"] = timing
+        target["last_callback_time"] = timing
 
     @staticmethod
     def _merge_callback_status(
@@ -231,27 +248,19 @@ class SoundDeviceBackend(AudioBackend):
     def _set_active_stream(self, stream: Any | None) -> None:
         with self._stream_lock:
             self._active_stream = stream
+            self._stream_owner_thread_id = (
+                threading.get_ident() if stream is not None else None
+            )
 
-    def _abort_stream_async(self, stream: Any) -> None:
-        """Abort outside the Tk thread: a broken driver must not freeze the UI."""
-        def abort() -> None:
-            try:
-                stream.abort()
-            except Exception:
-                # The worker will either observe an inactive stream or time out
-                # and report the original device failure.
-                pass
-
-        threading.Thread(target=abort, daemon=True, name="acoustic-audio-abort").start()
-
-    def _run_stream(self, stream: Any, expected_frames: int, sd) -> tuple[bool, bool]:
+    def _run_stream(
+        self, stream: Any, expected_frames: int, sd, *, active_phase: str = "playing"
+    ) -> tuple[bool, bool]:
         """Start, observe and close a stream.
 
         Returns ``(cancelled, timed_out)``.  The limit includes ample room for
         high-latency MME devices, while still preventing an endless wait caused
         by an unavailable laptop audio endpoint.
         """
-        self._abort_requested.clear()
         self._set_active_stream(stream)
         expected_s = expected_frames / max(1, self.config.sample_rate)
         deadline = time.monotonic() + max(15.0, expected_s * 2.0 + 8.0)
@@ -259,8 +268,11 @@ class SoundDeviceBackend(AudioBackend):
         timed_out = False
         try:
             self._emit_progress("opening_audio_stream", 0, expected_frames, force=True)
-            stream.start()
-            self._emit_progress("playing", 0, expected_frames, force=True)
+            if self._abort_requested.is_set():
+                cancelled = True
+            else:
+                stream.start()
+                self._emit_progress(active_phase, 0, expected_frames, force=True)
             while bool(getattr(stream, "active", False)):
                 if self._abort_requested.is_set():
                     cancelled = True
@@ -277,6 +289,10 @@ class SoundDeviceBackend(AudioBackend):
                         pass
                     break
                 time.sleep(0.02)
+            if self._abort_requested.is_set() and not timed_out:
+                # The PortAudio callback may have consumed the stop request
+                # just before the owner loop observed the inactive stream.
+                cancelled = True
         finally:
             try:
                 if bool(getattr(stream, "active", False)):
@@ -304,9 +320,10 @@ class SoundDeviceBackend(AudioBackend):
         callback_status = self._new_callback_status()
         cursor = 0
 
-        def callback(indata, outdata, callback_frames, _time, status):
+        def callback(indata, outdata, callback_frames, time_info, status):
             nonlocal cursor
             self._merge_callback_status(callback_status, status)
+            self._record_callback_time(callback_status, time_info)
             available = max(0, frames - cursor)
             copied = min(callback_frames, available)
             outdata.fill(0)
@@ -332,6 +349,11 @@ class SoundDeviceBackend(AudioBackend):
             never_drop_input=False,
             prime_output_buffers_using_stream_callback=False,
         )
+        try:
+            latency = stream.latency
+            callback_status["stream_latency_seconds"] = [float(value) for value in latency]
+        except Exception:
+            callback_status["stream_latency_seconds"] = None
         cancelled, timed_out = self._run_stream(stream, frames, sd)
         if timed_out:
             raise TimeoutError(
@@ -348,9 +370,10 @@ class SoundDeviceBackend(AudioBackend):
         callback_status = self._new_callback_status()
         cursor = 0
 
-        def callback(indata, callback_frames, _time, status):
+        def callback(indata, callback_frames, time_info, status):
             nonlocal cursor
             self._merge_callback_status(callback_status, status)
+            self._record_callback_time(callback_status, time_info)
             copied = min(callback_frames, max(0, frames - cursor))
             if copied:
                 recording[cursor : cursor + copied] = indata[:copied]
@@ -370,7 +393,13 @@ class SoundDeviceBackend(AudioBackend):
             latency=self.config.latency,
             callback=callback,
         )
-        cancelled, timed_out = self._run_stream(stream, frames, sd)
+        try:
+            callback_status["stream_latency_seconds"] = float(stream.latency)
+        except Exception:
+            callback_status["stream_latency_seconds"] = None
+        cancelled, timed_out = self._run_stream(
+            stream, frames, sd, active_phase="recording"
+        )
         if timed_out:
             raise TimeoutError(
                 "录制超时：麦克风驱动没有返回音频。请检查 Windows 麦克风权限和所选设备。"
@@ -383,9 +412,10 @@ class SoundDeviceBackend(AudioBackend):
         callback_status = self._new_callback_status()
         cursor = 0
 
-        def callback(outdata, callback_frames, _time, status):
+        def callback(outdata, callback_frames, time_info, status):
             nonlocal cursor
             self._merge_callback_status(callback_status, status)
+            self._record_callback_time(callback_status, time_info)
             copied = min(callback_frames, max(0, frames - cursor))
             outdata.fill(0)
             if copied:
@@ -407,6 +437,10 @@ class SoundDeviceBackend(AudioBackend):
             callback=callback,
             prime_output_buffers_using_stream_callback=False,
         )
+        try:
+            callback_status["stream_latency_seconds"] = float(stream.latency)
+        except Exception:
+            callback_status["stream_latency_seconds"] = None
         cancelled, timed_out = self._run_stream(stream, frames, sd)
         if timed_out:
             raise TimeoutError(
@@ -470,6 +504,22 @@ class SoundDeviceBackend(AudioBackend):
         ):
             raise RuntimeError("ASIO 同步播录应为输入和输出选择同一个 RME 双工设备")
         warnings = []
+        for required, info, label in (
+            (input_required, input_info, "录制设备"),
+            (output_channels is not None, output_info, "播放设备"),
+        ):
+            default_rate = info.get("default_sample_rate")
+            if required and default_rate is not None:
+                try:
+                    differs = abs(float(default_rate) - self.config.sample_rate) > 0.5
+                except (TypeError, ValueError):
+                    differs = False
+                if differs:
+                    warnings.append(
+                        f"{label}默认采样率为 {float(default_rate):g} Hz，实验请求 "
+                        f"{self.config.sample_rate} Hz；Windows/驱动可能进行重采样。"
+                        "正式 RIR 采集请在声卡和 Windows 中统一采样率"
+                    )
         if sys.platform == "win32" and input_required and output_channels is not None:
             host_name = str(input_info.get("host_api_name") or "")
             if host_name != "ASIO":
@@ -477,10 +527,20 @@ class SoundDeviceBackend(AudioBackend):
                     f"当前同步播录使用 {host_name or '未知接口'}，不是 ASIO；"
                     "正式 RME 数据采集建议选择设备列表中主机接口为 ASIO 的设备"
                 )
+                if input_info.get("index") != output_info.get("index"):
+                    warnings.append(
+                        "录制和播放选择了两个不同的非 ASIO 端点。相同音频协议不代表"
+                        "共用硬件时钟；公共延迟可能变化，长扫频还可能产生采样时钟漂移。"
+                        "RIR 的绝对到达时间需增加有线回环参考后才可信"
+                    )
         status["warnings"] = warnings
+        self._last_check_warnings = list(warnings)
         return status
 
     def play_record(self, output: np.ndarray) -> CaptureResult:
+        # Clear before validation/opening.  A Stop click received while a slow
+        # ASIO driver is opening then remains visible to the owner loop.
+        self._abort_requested.clear()
         sd = self._module()
         self.check_settings(input_required=True, output_channels=output.shape[1])
         recording, callback_status, _ = self._duplex_stream(output, sd)
@@ -491,6 +551,7 @@ class SoundDeviceBackend(AudioBackend):
         )
 
     def record(self, frames: int) -> CaptureResult:
+        self._abort_requested.clear()
         sd = self._module()
         self.check_settings(input_required=True, output_channels=None)
         recording, callback_status, _ = self._input_stream(frames, sd)
@@ -501,135 +562,18 @@ class SoundDeviceBackend(AudioBackend):
         )
 
     def play(self, output: np.ndarray) -> dict[str, Any]:
+        self._abort_requested.clear()
         sd = self._module()
         self.check_settings(input_required=False, output_channels=output.shape[1])
         callback_status, _ = self._output_stream(output, sd)
         return self._operation_status(sd, callback_status)
 
     def stop(self) -> None:
-        # Do not call the convenience-function global stop() here.  It cannot
-        # reliably control our explicit streams and may itself block in a
-        # driver.  The asynchronous abort keeps the Tk event loop responsive.
+        # Do not invoke stream.abort(), stream.close() or sounddevice.stop()
+        # from this caller (normally Tk's main thread).  The owner loop in
+        # _run_stream observes this event within 20 ms and performs all ASIO
+        # control calls on the same thread that opened and started the stream.
         self._abort_requested.set()
-        with self._stream_lock:
-            stream = self._active_stream
-        if stream is not None:
-            self._abort_stream_async(stream)
-
-    def record_to_file(
-        self,
-        path: str | Path,
-        *,
-        stop_requested: Callable[[], bool],
-        subtype: str = "FLOAT",
-    ) -> dict[str, Any]:
-        """Record indefinitely with a bounded RAM queue and a disk writer.
-
-        PortAudio's callback only copies blocks into a queue.  The calling
-        worker writes those blocks to the WAV file, so a slow disk cannot make
-        the real-time callback perform filesystem I/O.
-        """
-        sd = self._module()
-        self.check_settings(input_required=True, output_channels=None)
-        output_path = Path(path).expanduser().resolve()
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        input_count = max(self.config.input_channels)
-        selected = np.asarray(self.config.input_channels, dtype=np.int64) - 1
-        block_queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=128)
-        callback_status = self._new_callback_status()
-        callback_errors: list[str] = []
-        captured_frames = 0
-        written_frames = 0
-
-        def callback(indata, callback_frames, _time, status):
-            nonlocal captured_frames
-            self._merge_callback_status(callback_status, status)
-            try:
-                block_queue.put_nowait(
-                    np.asarray(indata[:, selected], dtype=np.float32).copy()
-                )
-            except queue.Full:
-                callback_status["xrun"] = True
-                callback_status["writer_overflow"] = True
-                callback_errors.append(
-                    "录音写盘队列已满；磁盘持续写入速度不足，录音已停止"
-                )
-                raise sd.CallbackAbort()
-            captured_frames += callback_frames
-            self._emit_progress("recording_to_file", captured_frames, 0)
-            if self._abort_requested.is_set() or stop_requested():
-                raise sd.CallbackStop()
-
-        input_device, _ = self._devices()
-        input_device = self._device_argument(input_device)
-        stream = sd.InputStream(
-            samplerate=self.config.sample_rate,
-            blocksize=self.config.block_size,
-            device=input_device,
-            channels=input_count,
-            dtype=self.config.dtype,
-            latency=self.config.latency,
-            callback=callback,
-        )
-        self._abort_requested.clear()
-        self._set_active_stream(stream)
-        self._emit_progress("opening_audio_stream", 0, 0, force=True)
-        try:
-            with sf.SoundFile(
-                output_path,
-                mode="w",
-                samplerate=self.config.sample_rate,
-                channels=len(selected),
-                subtype=subtype,
-                format="WAV",
-            ) as audio_file:
-                stream.start()
-                self._emit_progress("recording_to_file", 0, 0, force=True)
-                while bool(getattr(stream, "active", False)) or not block_queue.empty():
-                    if stop_requested() and not self._abort_requested.is_set():
-                        self._abort_requested.set()
-                        try:
-                            stream.abort()
-                        except Exception:
-                            pass
-                    try:
-                        block = block_queue.get(timeout=0.1)
-                    except queue.Empty:
-                        continue
-                    audio_file.write(block)
-                    written_frames += len(block)
-                while not block_queue.empty():
-                    block = block_queue.get_nowait()
-                    audio_file.write(block)
-                    written_frames += len(block)
-        finally:
-            try:
-                if bool(getattr(stream, "active", False)):
-                    stream.abort()
-            except Exception:
-                pass
-            try:
-                stream.close()
-            except Exception:
-                pass
-            self._set_active_stream(None)
-        if callback_errors:
-            raise RuntimeError(callback_errors[0])
-        self._emit_progress("completed", written_frames, written_frames, force=True)
-        result = self._operation_status(sd, callback_status)
-        result.update(
-            {
-                "path": str(output_path),
-                "frames": int(written_frames),
-                "channels": int(len(selected)),
-                "sample_rate": int(self.config.sample_rate),
-                "duration_s": written_frames / self.config.sample_rate,
-                "stopped_by_user": bool(
-                    self._abort_requested.is_set() or stop_requested()
-                ),
-            }
-        )
-        return result
 
 
 class SimulatedBackend(AudioBackend):
@@ -643,7 +587,6 @@ class SimulatedBackend(AudioBackend):
             config.interferer_output_channel: self._paths(0.72),
         }
         self._progress_callback = None
-        self._abort_requested = threading.Event()
 
     def set_progress_callback(self, callback) -> None:
         self._progress_callback = callback
@@ -691,49 +634,7 @@ class SimulatedBackend(AudioBackend):
         return {"backend": "simulated", "frames": len(output)}
 
     def stop(self) -> None:
-        self._abort_requested.set()
-
-    def record_to_file(
-        self,
-        path: str | Path,
-        *,
-        stop_requested: Callable[[], bool],
-        subtype: str = "FLOAT",
-    ) -> dict[str, Any]:
-        output_path = Path(path).expanduser().resolve()
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        self._abort_requested.clear()
-        frames = 0
-        block_frames = self.config.block_size or 1024
-        with sf.SoundFile(
-            output_path,
-            mode="w",
-            samplerate=self.config.sample_rate,
-            channels=len(self.config.input_channels),
-            subtype=subtype,
-            format="WAV",
-        ) as audio_file:
-            while not self._abort_requested.is_set() and not stop_requested():
-                block = self.rng.normal(
-                    0,
-                    2e-5,
-                    (block_frames, len(self.config.input_channels)),
-                ).astype(np.float32)
-                audio_file.write(block)
-                frames += len(block)
-                self._emit_progress("recording_to_file", frames, 0)
-                time.sleep(block_frames / self.config.sample_rate)
-        self._emit_progress("completed", frames, frames)
-        return {
-            "backend": "simulated",
-            "path": str(output_path),
-            "frames": frames,
-            "channels": len(self.config.input_channels),
-            "sample_rate": self.config.sample_rate,
-            "duration_s": frames / self.config.sample_rate,
-            "stopped_by_user": True,
-            "overflow": False,
-        }
+        return None
 
 
 def create_backend(config: AudioConfig) -> AudioBackend:
@@ -761,6 +662,8 @@ def format_hardware_status(status: dict[str, Any]) -> str:
     lines = [f"音频后端：{status.get('backend', '未知')}"]
     if status.get("requested_host_api"):
         lines.append(f"配置选择的音频协议：{status['requested_host_api']}")
+    if status.get("requested_sample_rate"):
+        lines.append(f"实验采样率：{status['requested_sample_rate']} Hz")
     if status.get("sounddevice_version"):
         lines.append(f"sounddevice 版本：{status['sounddevice_version']}")
     if status.get("portaudio_version"):
@@ -779,6 +682,10 @@ def format_hardware_status(status: dict[str, Any]) -> str:
                 f"  最大输入通道：{device.get('max_input_channels', '未知')}",
                 f"  最大输出通道：{device.get('max_output_channels', '未知')}",
                 f"  默认采样率：{device.get('default_sample_rate', '未知')}",
+                f"  默认低/高延迟（输入）：{device.get('default_low_input_latency', '未知')} / "
+                f"{device.get('default_high_input_latency', '未知')} 秒",
+                f"  默认低/高延迟（输出）：{device.get('default_low_output_latency', '未知')} / "
+                f"{device.get('default_high_output_latency', '未知')} 秒",
             ]
         )
     for warning in status.get("warnings", []):

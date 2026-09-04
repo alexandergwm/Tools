@@ -51,7 +51,6 @@ def main() -> int:
         config.scene.source_mode = "folders"
         config.scene.target_folder = str(targets)
         config.scene.interferer_folder = str(interferers)
-        config.scene.measurement_count = PAIR_COUNT
         config.scene.duration_s = FRAMES / SAMPLE_RATE
         config.scene.countdown_s = 0
         config.scene.gap_s = 0

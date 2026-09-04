@@ -24,6 +24,12 @@ def _descendants(widget):
         yield from _descendants(child)
 
 
+def _descendants(widget):
+    for child in widget.winfo_children():
+        yield child
+        yield from _descendants(child)
+
+
 def _wait_for_run(app: CaptureGUI, root: Path, kind: str, timeout_s: float = 15.0) -> Path:
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
@@ -124,14 +130,7 @@ def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
         "showerror",
         lambda title, message: dialogs.append((str(title), str(message))),
     )
-    experiment_names = iter(
-        (
-            "gui_simple_recording",
-            "gui_basic_io",
-            "gui_rir_az090",
-            "gui_speech_scene01",
-        )
-    )
+    experiment_names = iter(("gui_basic_io", "gui_rir_az090", "gui_speech_scene01"))
     monkeypatch.setattr(
         gui_module.simpledialog,
         "askstring",
@@ -146,8 +145,10 @@ def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
         assert app.mode_var.get() == "rir"
         assert not app.advanced_var.get()
         assert app.variables["repeats.strategy"].get().startswith("固定次数 + 重构质检")
-        assert app.field_rows["repeats.strategy"][1].winfo_manager() == "grid"
+        assert app.field_rows["repeats.strategy"][1].winfo_manager() == ""
         assert app.field_rows["repeats.fixed_count"][1].winfo_manager() == "grid"
+        assert tuple(app.audio_preset_box.cget("values")) == gui_module.CORE_AUDIO_PRESETS
+        assert app.viewer.result_controls.winfo_manager() == ""
         app.variables["repeats.strategy"].set(
             gui_module.RIR_STRATEGY_TO_LABEL["fixed_count"]
         )
@@ -209,24 +210,13 @@ def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
         assert "干扰源输出通道" in str(
             app.field_rows["audio.interferer_output_channel"][0].cget("text")
         )
-        app.variables["scene.source_mode"].set(
-            gui_module.SOURCE_MODE_TO_LABEL["folders"]
-        )
-        app.variables["scene.measurement_count"].set("12")
-        app._set_mode()
-        assert app.field_rows["scene.measurement_count"][1].winfo_manager() == "grid"
-        assert app.field_rows["scene.repetitions"][1].winfo_manager() == ""
-        assert app.field_rows["scene.duration_s"][1].winfo_manager() == ""
-        assert "计划 12 次测量" in app.scene_estimate_var.get()
-        app.variables["scene.source_mode"].set(
-            gui_module.SOURCE_MODE_TO_LABEL["single"]
-        )
-        app._set_mode()
         app.mode_var.set("rir")
         app._set_mode()
         app.advanced_var.set(True)
         app._set_mode()
         assert app.field_rows["sweep.start_hz"][1].winfo_manager() == "grid"
+        assert app.field_rows["repeats.strategy"][1].winfo_manager() == "grid"
+        assert len(app.audio_preset_box.cget("values")) == len(gui_module.AUDIO_PRESETS)
         app.advanced_var.set(False)
         app._set_mode()
         assert str(app.stop_button.cget("state")) == "disabled"
@@ -255,50 +245,6 @@ def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
         app._active_backend = None
         app._stop_event.clear()
         app._set_busy(False)
-
-        # Simple recording is a named main mode and ignores unrelated ESS text.
-        original_sweep_end = app.variables["sweep.end_hz"].get()
-        app.variables["sweep.end_hz"].set("999999")
-        app.mode_var.set("simple_recording")
-        app._set_mode()
-        assert "简单录制" in str(app.start_button.cget("text"))
-        assert app.field_rows["audio.input_device"][1].winfo_manager() == "grid"
-        assert app.field_rows["audio.output_device"][1].winfo_manager() == ""
-        assert app.field_rows["storage.root"][1].winfo_manager() == "grid"
-        app.start_button.invoke()
-        assert app._busy
-        assert str(app.stop_button.cget("state")) == "normal"
-        recording_deadline = time.monotonic() + 2.0
-        while time.monotonic() < recording_deadline:
-            app.update()
-            candidates = list(Path(config.storage.root).glob("*_gui_simple_recording.wav"))
-            if candidates:
-                try:
-                    if sf.info(candidates[0]).frames > 0:
-                        break
-                except RuntimeError:
-                    pass
-            time.sleep(0.01)
-        app.stop_button.invoke()
-        deadline = time.monotonic() + 5.0
-        while app._busy and time.monotonic() < deadline:
-            app.update()
-            time.sleep(0.01)
-        assert not app._busy
-        simple_recordings = list(
-            Path(config.storage.root).glob("*_gui_simple_recording.wav")
-        )
-        assert len(simple_recordings) == 1
-        simple_recording = simple_recordings[0]
-        recorded_data, recorded_rate = sf.read(
-            simple_recording, always_2d=True, dtype="float32"
-        )
-        assert recorded_rate == config.audio.sample_rate
-        assert recorded_data.shape[0] > 0
-        assert recorded_data.shape[1] == len(config.audio.input_channels)
-        assert app.viewer._selected_path("recording") == simple_recording.resolve()
-        assert app.variables["storage.session_name"].get() == "gui_simple_recording"
-        app.variables["sweep.end_hz"].set(original_sweep_end)
         loaded_runs: list[Path] = []
         original_load_run = app.viewer.load_run
 
@@ -374,6 +320,7 @@ def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
         assert (scene_run / "labels.xlsx").is_file()
         assert "gui_speech_scene01" in scene_run.name
         assert app.viewer.run_dir == scene_run
+        assert app.viewer.result_controls.winfo_manager() == "pack"
         assert all(str(button.cget("state")) == "normal" for button in (
             app.start_button,
             app.scene_scan_button,

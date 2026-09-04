@@ -463,21 +463,26 @@ def _scene_pair_count(config: ExperimentConfig) -> int | None:
         for value in scene.file_extensions
     }
     items = set(scene.items)
+    counts: list[int] = []
     for required, folder_value in (
         (bool(items & {"target_only", "mixture"}), scene.target_folder),
         (bool(items & {"interferer_only", "mixture"}), scene.interferer_folder),
     ):
         if not required:
+            counts.append(1)
             continue
         folder = Path(folder_value)
         if not folder.is_dir():
             return None
-        if not any(
-            path.is_file() and path.suffix.lower() in extensions
-            for path in folder.rglob("*")
-        ):
-            return None
-    return scene.measurement_count
+        counts.append(
+            sum(
+                path.is_file() and path.suffix.lower() in extensions
+                for path in folder.rglob("*")
+            )
+        )
+    if not counts or not all(counts):
+        return None
+    return math.prod(counts) if scene.pairing_mode == "cartesian" else max(counts)
 
 
 def _estimated_scene_bytes(config: ExperimentConfig) -> int | None:

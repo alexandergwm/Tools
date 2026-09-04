@@ -19,7 +19,7 @@ import soundfile as sf
 
 from acoustic_capture.audio import SimulatedBackend
 from acoustic_capture.config import ExperimentConfig
-from acoustic_capture.scene import capture_scene_block, discover_source_pairs
+from acoustic_capture.scene import capture_scene_block
 from acoustic_capture.speech_dataset import compile_speech_dataset
 
 
@@ -83,8 +83,7 @@ def main() -> int:
     config.scene.source_mode = "folders"
     config.scene.target_folder = str(target_folder)
     config.scene.interferer_folder = str(interferer_folder)
-    config.scene.pairing_seed = 0
-    config.scene.measurement_count = PAIR_COUNT
+    config.scene.pairing_mode = "cycle"
     config.scene.duration_s = DURATION_S
     config.scene.target_level_dbfs = -18.0
     config.scene.interferer_level_dbfs = -18.0
@@ -126,7 +125,6 @@ def main() -> int:
     }
     config.validate()
 
-    planned_pairs = discover_source_pairs(config.scene)
     store = capture_scene_block(config, SimulatedBackend(config.audio), log=print)
     labels = _read_rows(store.path("labels.csv"))
     assert len(labels) == PAIR_COUNT, f"expected {PAIR_COUNT} label rows, got {len(labels)}"
@@ -135,8 +133,8 @@ def main() -> int:
     assert all(row["target_mixture_sample_aligned"] == "是" for row in labels)
 
     for index, row in enumerate(labels, 1):
-        assert Path(row["target_source"]) == planned_pairs[index - 1].target
-        assert Path(row["interferer_source"]) == planned_pairs[index - 1].interferer
+        assert Path(row["target_source"]).name == f"target_{index:02d}.wav"
+        assert Path(row["interferer_source"]).name == f"interferer_{index:02d}.wav"
         target, target_fs = sf.read(store.path(row["target_recording"]), always_2d=True)
         interferer, interferer_fs = sf.read(
             store.path(row["interferer_recording"]), always_2d=True

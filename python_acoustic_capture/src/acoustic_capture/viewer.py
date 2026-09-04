@@ -153,6 +153,13 @@ class ResultsViewer(ttk.Frame):
         self.monitor_db = tk.DoubleVar(value=-12.0)
         self.show_spectrogram = tk.BooleanVar(value=False)
         self.summary_var = tk.StringVar(value="完成一次测试后，这里会显示本次结果。")
+        self.transport_title_var = tk.StringVar(value="准备就绪")
+        self.playback_state_var = tk.StringVar(value="等待")
+        self.recording_state_var = tk.StringVar(value="等待")
+        self.transport_progress_var = tk.DoubleVar(value=0.0)
+        self.transport_progress_text_var = tk.StringVar(value="0.00 / 0.00 秒")
+        self._transport_playback_enabled = False
+        self._transport_recording_enabled = False
         self._x_bounds: dict[object, tuple[float, float]] = {}
         self._drag_state: tuple[object, float, tuple[float, float]] | None = None
         self.preview_spec: dict[str, float] | None = None
@@ -161,25 +168,92 @@ class ResultsViewer(ttk.Frame):
         self._live_source_lines: dict[str, object] = {}
         self._live_timeline_line: object | None = None
         self._live_total_s = 0.0
+        self._monitor_active = False
         self._build()
 
     def _build(self):
         header = ttk.Frame(self)
         header.pack(fill="x", pady=(0, 5))
-        ttk.Label(header, text="测试结果", font=("TkDefaultFont", 14, "bold")).pack(side="left")
+        ttk.Label(header, text="实时监控 / 测试结果", font=("TkDefaultFont", 14, "bold")).pack(side="left")
         ttk.Button(header, text="打开历史结果", command=self.open_run).pack(side="right")
 
         self.run_label = ttk.Label(self, text="尚未加载结果", foreground="#555555")
         self.run_label.pack(fill="x", pady=(0, 6))
 
-        selectors = ttk.LabelFrame(self, text="已保存信号", padding=6)
+        transport = ttk.LabelFrame(self, text="当前播放 / 录制", padding=8)
+        transport.pack(fill="x", pady=(0, 6))
+        cards = ttk.Frame(transport)
+        cards.pack(fill="x")
+        self.playback_card = tk.Frame(
+            cards, bg="#f2f4f6", highlightbackground="#c8cdd2", highlightthickness=1
+        )
+        self.playback_card.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        self.playback_icon = tk.Label(
+            self.playback_card, text="▶", font=("TkDefaultFont", 20, "bold"),
+            bg="#f2f4f6", fg="#7a7f85",
+        )
+        self.playback_icon.pack(side="left", padx=(12, 8), pady=8)
+        playback_text = tk.Frame(self.playback_card, bg="#f2f4f6")
+        playback_text.pack(side="left", fill="both", expand=True, pady=7)
+        tk.Label(
+            playback_text, text="播放声源", font=("TkDefaultFont", 10, "bold"),
+            bg="#f2f4f6", anchor="w",
+        ).pack(fill="x")
+        self.playback_state_label = tk.Label(
+            playback_text, textvariable=self.playback_state_var,
+            bg="#f2f4f6", fg="#60656a", anchor="w",
+        )
+        self.playback_state_label.pack(fill="x")
+
+        self.recording_card = tk.Frame(
+            cards, bg="#f2f4f6", highlightbackground="#c8cdd2", highlightthickness=1
+        )
+        self.recording_card.pack(side="left", fill="x", expand=True, padx=(4, 0))
+        self.recording_icon = tk.Label(
+            self.recording_card, text="●", font=("TkDefaultFont", 20, "bold"),
+            bg="#f2f4f6", fg="#7a7f85",
+        )
+        self.recording_icon.pack(side="left", padx=(12, 8), pady=8)
+        recording_text = tk.Frame(self.recording_card, bg="#f2f4f6")
+        recording_text.pack(side="left", fill="both", expand=True, pady=7)
+        tk.Label(
+            recording_text, text="麦克风录制", font=("TkDefaultFont", 10, "bold"),
+            bg="#f2f4f6", anchor="w",
+        ).pack(fill="x")
+        self.recording_state_label = tk.Label(
+            recording_text, textvariable=self.recording_state_var,
+            bg="#f2f4f6", fg="#60656a", anchor="w",
+        )
+        self.recording_state_label.pack(fill="x")
+
+        progress_row = ttk.Frame(transport, padding=(0, 7, 0, 0))
+        progress_row.pack(fill="x")
+        ttk.Label(
+            progress_row, textvariable=self.transport_title_var, width=18
+        ).pack(side="left")
+        self.transport_progress = ttk.Progressbar(
+            progress_row,
+            variable=self.transport_progress_var,
+            maximum=100.0,
+            mode="determinate",
+        )
+        self.transport_progress.pack(side="left", fill="x", expand=True, padx=8)
+        ttk.Label(
+            progress_row, textvariable=self.transport_progress_text_var, width=16,
+            anchor="e",
+        ).pack(side="right")
+
+        self.result_controls = ttk.Frame(self)
+        self.result_controls.pack(fill="x")
+
+        selectors = ttk.LabelFrame(self.result_controls, text="结果浏览", padding=6)
         selectors.pack(fill="x")
         self._selector(selectors, 0, "播放或参考信号", self.playback_var)
         self._selector(selectors, 1, "麦克风录制信号", self.recording_var)
         self._selector(selectors, 2, "计算得到的脉冲响应", self.rir_var)
         selectors.columnconfigure(1, weight=1)
 
-        plot_options = ttk.Frame(self, padding=(0, 6, 0, 0))
+        plot_options = ttk.Frame(self.result_controls, padding=(0, 6, 0, 0))
         plot_options.pack(fill="x")
         ttk.Checkbutton(
             plot_options,
@@ -194,15 +268,20 @@ class ResultsViewer(ttk.Frame):
             foreground="#555555",
         ).pack(side="right")
 
-        listen = ttk.Frame(self, padding=(0, 6))
+        listen = ttk.Frame(self.result_controls, padding=(0, 6))
         listen.pack(fill="x")
-        ttk.Button(listen, text="▶ 试听播放信号", command=lambda: self.play_selected("playback")).pack(
-            side="left", padx=(0, 4)
+        self.listen_playback_button = ttk.Button(
+            listen, text="▶ 试听播放信号", command=lambda: self.play_selected("playback")
         )
-        ttk.Button(listen, text="▶ 试听录制信号", command=lambda: self.play_selected("recording")).pack(
-            side="left", padx=4
+        self.listen_playback_button.pack(side="left", padx=(0, 4))
+        self.listen_recording_button = ttk.Button(
+            listen, text="▶ 试听录制信号", command=lambda: self.play_selected("recording")
         )
-        ttk.Button(listen, text="■ 停止试听", command=self.stop_audio).pack(side="left", padx=4)
+        self.listen_recording_button.pack(side="left", padx=4)
+        self.listen_stop_button = ttk.Button(
+            listen, text="■ 停止试听", command=self.stop_audio
+        )
+        self.listen_stop_button.pack(side="left", padx=4)
         self.channel_box = ttk.Combobox(
             listen,
             textvariable=self.listen_channel,
@@ -214,7 +293,7 @@ class ResultsViewer(ttk.Frame):
         self.channel_box.bind("<<ComboboxSelected>>", self._channel_changed)
         ttk.Label(listen, text="监听/语谱图通道").pack(side="left", before=self.channel_box, padx=(12, 0))
 
-        listen_options = ttk.Frame(self)
+        listen_options = ttk.Frame(self.result_controls)
         listen_options.pack(fill="x", pady=(0, 5))
         ttk.Label(listen_options, text="试听设备").pack(side="left")
         ttk.Entry(listen_options, textvariable=self.listen_device, width=24).pack(side="left", padx=4)
@@ -229,9 +308,9 @@ class ResultsViewer(ttk.Frame):
         self.figure = Figure(figsize=(7.2, 7.2), dpi=100, constrained_layout=True)
         self.axes = self.figure.subplots(3, 1)
         self.canvas = FigureCanvasTkAgg(self.figure, master=self)
-        toolbar = NavigationToolbar2Tk(self.canvas, self, pack_toolbar=False)
-        toolbar.update()
-        toolbar.pack(fill="x")
+        self.plot_toolbar = NavigationToolbar2Tk(self.canvas, self, pack_toolbar=False)
+        self.plot_toolbar.update()
+        self.plot_toolbar.pack(fill="x")
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
         self.canvas.mpl_connect("scroll_event", self._on_scroll)
         self.canvas.mpl_connect("button_press_event", self._on_button_press)
@@ -246,6 +325,110 @@ class ResultsViewer(ttk.Frame):
             axis.grid(True, alpha=0.25)
         self.canvas.draw_idle()
         ttk.Label(self, textvariable=self.summary_var, anchor="w", justify="left").pack(fill="x", pady=4)
+        self._set_result_controls_visible(False)
+
+    def _set_result_controls_visible(self, visible: bool) -> None:
+        """Keep history/listening controls out of the live-capture workspace."""
+        canvas_widget = self.canvas.get_tk_widget()
+        if visible:
+            if not self.result_controls.winfo_manager():
+                self.result_controls.pack(fill="x", before=canvas_widget)
+            if not self.plot_toolbar.winfo_manager():
+                self.plot_toolbar.pack(fill="x", before=canvas_widget)
+        else:
+            self.result_controls.pack_forget()
+            self.plot_toolbar.pack_forget()
+
+    def set_capture_mode(
+        self,
+        *,
+        playback: bool,
+        recording: bool,
+        title: str = "准备就绪",
+    ) -> None:
+        """Configure the large transport cards for the selected workflow."""
+        self._transport_playback_enabled = bool(playback)
+        self._transport_recording_enabled = bool(recording)
+        self._set_result_controls_visible(False)
+        self.transport_title_var.set(title)
+        self.transport_progress_var.set(0.0)
+        self.transport_progress_text_var.set("0.00 / 0.00 秒")
+        self._paint_transport_card("playback", "等待" if playback else "本方案不播放", False)
+        self._paint_transport_card("recording", "等待" if recording else "本方案不录制", False)
+
+    def set_capture_busy(self, busy: bool) -> None:
+        """Prevent a monitor stream from competing with an active ASIO stream."""
+        state = "disabled" if busy else "normal"
+        self.listen_playback_button.configure(state=state)
+        self.listen_recording_button.configure(state=state)
+        self.listen_stop_button.configure(state=state)
+
+    def _paint_transport_card(self, kind: str, text: str, active: bool) -> None:
+        enabled = (
+            self._transport_playback_enabled
+            if kind == "playback"
+            else self._transport_recording_enabled
+        )
+        card = self.playback_card if kind == "playback" else self.recording_card
+        icon = self.playback_icon if kind == "playback" else self.recording_icon
+        state_label = (
+            self.playback_state_label if kind == "playback" else self.recording_state_label
+        )
+        variable = self.playback_state_var if kind == "playback" else self.recording_state_var
+        if active and enabled:
+            background = "#e6f3e9" if kind == "playback" else "#fdeaea"
+            foreground = "#19723a" if kind == "playback" else "#c62828"
+        else:
+            background = "#f2f4f6"
+            foreground = "#7a7f85"
+        card.configure(bg=background)
+        icon.configure(bg=background, fg=foreground)
+        state_label.configure(bg=background, fg=foreground if active and enabled else "#60656a")
+        # The two text labels live in the only nested frame in each card.
+        for child in card.winfo_children():
+            if isinstance(child, tk.Frame):
+                child.configure(bg=background)
+                for nested in child.winfo_children():
+                    nested.configure(bg=background)
+        variable.set(text)
+
+    def _update_transport_progress(
+        self, frames: int, total_frames: int, sample_rate: int, phase: str
+    ) -> None:
+        total = max(1, int(total_frames))
+        rate = max(1, int(sample_rate))
+        completed = min(max(0, int(frames)), total)
+        elapsed_s = completed / rate
+        total_s = total / rate
+        self.transport_progress_var.set(100.0 * completed / total)
+        self.transport_progress_text_var.set(f"{elapsed_s:.2f} / {total_s:.2f} 秒")
+        active = phase in {"playing", "recording"}
+        playback_active = active and phase == "playing" and self._transport_playback_enabled
+        recording_active = active and self._transport_recording_enabled
+        labels = {
+            "opening_audio_stream": "正在打开声卡…",
+            "playing": "正在同步播录" if self._transport_recording_enabled else "正在播放",
+            "recording": "正在录制",
+            "completed": "已完成，正在保存…",
+            "cancelled": "正在停止…",
+            "timed_out": "声卡超时",
+        }
+        title = labels.get(phase, phase or "准备就绪")
+        self.transport_title_var.set(title)
+        play_text = (
+            "正在播放" if playback_active else
+            "已完成" if phase == "completed" and self._transport_playback_enabled else
+            "停止中" if phase == "cancelled" and self._transport_playback_enabled else
+            "等待" if self._transport_playback_enabled else "本方案不播放"
+        )
+        record_text = (
+            "正在录制" if recording_active else
+            "已完成" if phase == "completed" and self._transport_recording_enabled else
+            "停止中" if phase == "cancelled" and self._transport_recording_enabled else
+            "等待" if self._transport_recording_enabled else "本方案不录制"
+        )
+        self._paint_transport_card("playback", play_text, playback_active)
+        self._paint_transport_card("recording", record_text, recording_active)
 
     def _channel_changed(self, _event=None):
         if self.show_spectrogram.get():
@@ -284,6 +467,7 @@ class ResultsViewer(ttk.Frame):
         fade_out_s: float,
     ) -> None:
         """Show the ESS that would be played before a measurement starts."""
+        self.set_capture_mode(playback=True, recording=True, title="RIR 准备就绪")
         self.run_dir = None
         self.preview_spec = {
             "sample_rate": float(sample_rate),
@@ -418,6 +602,7 @@ class ResultsViewer(ttk.Frame):
         stream_samples: int,
     ) -> None:
         """Show the exact two source signals while a paired stream is running."""
+        self.set_capture_mode(playback=True, recording=True, title="语音播录准备中")
         self.run_dir = None
         self.preview_spec = None
         self._x_bounds.clear()
@@ -466,6 +651,7 @@ class ResultsViewer(ttk.Frame):
 
     def update_live_progress(self, frames: int, total_frames: int, sample_rate: int, phase: str) -> None:
         """Advance the red cursor for RIR and speech live previews."""
+        self._update_transport_progress(frames, total_frames, sample_rate, phase)
         if not self._live_lines and not self._live_source_lines and self.preview_spec is None:
             return
         total = max(1, int(total_frames))
@@ -509,6 +695,7 @@ class ResultsViewer(ttk.Frame):
 
     def show_speech_workflow_guide(self) -> None:
         """Replace a stale ESS preview with the supervised speech workflow."""
+        self.set_capture_mode(playback=True, recording=True, title="语音增强准备就绪")
         self.run_dir = None
         self.preview_spec = None
         self.files = {"playback": [], "recording": [], "rir": []}
@@ -577,12 +764,85 @@ class ResultsViewer(ttk.Frame):
         )
         self.canvas.draw_idle()
 
+    def show_basic_workflow_guide(self, action: str) -> None:
+        """Use the otherwise empty result area as a plain playback/recording map."""
+        playback = action in {"play", "play_record"}
+        recording = action in {"record", "play_record"}
+        title = {
+            "play": "仅播放准备就绪",
+            "record": "仅录制准备就绪",
+            "play_record": "同步播录准备就绪",
+        }.get(action, "音频操作准备就绪")
+        self.set_capture_mode(playback=playback, recording=recording, title=title)
+        self.run_dir = None
+        self.preview_spec = None
+        self.files = {"playback": [], "recording": [], "rir": []}
+        self.path_by_label.clear()
+        for category, variable in (
+            ("playback", self.playback_var),
+            ("recording", self.recording_var),
+            ("rir", self.rir_var),
+        ):
+            variable.set("")
+            getattr(self, f"_{category}_box").configure(values=[])
+        self.run_label.configure(text="基础音频采集：开始后此处显示实时状态和进度")
+        self._x_bounds.clear()
+        self._drag_state = None
+        self._live_lines.clear()
+        self._live_segments = {}
+        self._live_source_lines.clear()
+        self._live_timeline_line = None
+        descriptions = (
+            ("▶", "PLAYBACK", "Audio file -> selected output channel", "#19723a", playback),
+            ("●", "RECORDING", "Selected microphone channels -> multichannel WAV", "#c62828", recording),
+        )
+        for axis in self.axes:
+            axis.clear()
+            axis.set_axis_off()
+        for axis, (icon, heading, detail, color, enabled) in zip(self.axes[:2], descriptions):
+            shown_color = color if enabled else "#a0a4a8"
+            axis.text(
+                0.18, 0.5, icon, ha="center", va="center", fontsize=40,
+                weight="bold", color=shown_color, transform=axis.transAxes,
+            )
+            axis.text(
+                0.32, 0.60, heading, ha="left", va="center", fontsize=15,
+                weight="bold", color=shown_color, transform=axis.transAxes,
+            )
+            axis.text(
+                0.32, 0.38, detail if enabled else "Not used by this mode",
+                ha="left", va="center", fontsize=10, color="#555555",
+                transform=axis.transAxes,
+            )
+        route = (
+            "PLAYBACK  ->  ROOM / DEVICE UNDER TEST  ->  MICROPHONE RECORDING"
+            if playback and recording else
+            "AUDIO FILE  ->  SELECTED OUTPUT CHANNEL"
+            if playback else
+            "MICROPHONE INPUTS  ->  MULTICHANNEL WAV"
+        )
+        self.axes[2].text(
+            0.5, 0.55, route, ha="center", va="center", fontsize=13,
+            weight="bold", color="#24415c", transform=self.axes[2].transAxes,
+        )
+        self.axes[2].text(
+            0.5, 0.32, "The running experiment can be stopped; completed data is retained.",
+            ha="center", va="center", fontsize=10, color="#555555",
+            transform=self.axes[2].transAxes,
+        )
+        self.summary_var.set(
+            "这里是当前播录控制台；开始后上方图标会点亮，并显示实际音频进度。"
+        )
+        self.canvas.draw_idle()
+
     def load_run(self, run_dir: str | Path):
         root = Path(run_dir).resolve()
         if not (root / "manifest.json").is_file():
             messagebox.showerror("结果目录无效", "所选目录中没有 manifest.json。")
             return
         self.run_dir = root
+        self._set_result_controls_visible(True)
+        self.transport_title_var.set("测试完成")
         self.preview_spec = None
         self._live_lines.clear()
         self._live_segments = {}
@@ -699,6 +959,12 @@ class ResultsViewer(ttk.Frame):
                     (self.run_dir / "manifest.json").read_text(encoding="utf-8")
                 )
                 result = manifest.get("summary") or {}
+                quality = result.get("quality") or {}
+                if quality.get("status") == "review_required":
+                    issues = "；".join(map(str, quality.get("issues") or []))
+                    summaries.append(f"RIR 质量：需要复核（{issues or '请查看指标'}）")
+                elif quality.get("status") == "pass":
+                    summaries.append("RIR 质量：通过，可用于聚合/训练")
                 method = result.get("selection_method")
                 if method:
                     if method == "all_accepted_aligned_mean":
@@ -720,18 +986,61 @@ class ResultsViewer(ttk.Frame):
                             f"RIR 聚合：全部有效 take 对齐平均"
                             f"（take {selected or '-'}{metric_text}）"
                         )
-                        delay = result.get("two_channel_delay_acceptance") or {}
-                        if delay.get("applicable"):
-                            gcc = delay.get("gcc_phat_delay_samples")
-                            group = delay.get("low_frequency_group_delay_samples")
-                            if isinstance(gcc, (int, float)) and isinstance(
-                                group, (int, float)
-                            ):
+                        timing = result.get("average_rir_timing") or {}
+                        per_channel = timing.get("per_channel") or []
+                        sample_rate = result.get("sample_rate")
+                        arrival = timing.get("reference_arrival") or {}
+                        direct_peak = arrival.get("direct_peak_sample")
+                        if (
+                            isinstance(sample_rate, (int, float))
+                            and sample_rate > 0
+                            and isinstance(direct_peak, (int, float))
+                        ):
+                            delay_text = []
+                            rir_axis = self.axes[2]
+                            for item in per_channel:
+                                channel = item.get("microphone_channel")
+                                gcc_delay = item.get("gcc_phat_delay_samples")
+                                if not isinstance(channel, int) or not isinstance(
+                                    gcc_delay, (int, float)
+                                ):
+                                    continue
+                                direct_time = (direct_peak + gcc_delay) / sample_rate
+                                rir_axis.axvline(
+                                    direct_time,
+                                    linestyle="--",
+                                    linewidth=1.0,
+                                    alpha=0.8,
+                                    color=f"C{(channel - 1) % 10}",
+                                    label=f"Mic {channel} direct",
+                                )
+                                if channel > 1:
+                                    group_delay = item.get(
+                                        "low_frequency_group_delay_samples"
+                                    )
+                                    group_details = item.get(
+                                        "low_frequency_group_delay"
+                                    ) or {}
+                                    group_text = (
+                                        f"，低频群延迟 {group_delay:+.2f}"
+                                        if isinstance(group_delay, (int, float))
+                                        and group_details.get("reliable")
+                                        else "，低频群延迟不可靠"
+                                    )
+                                    delay_text.append(
+                                        f"Mic{channel}-Mic1：GCC-PHAT "
+                                        f"{gcc_delay:+.2f} 样点{group_text}"
+                                    )
+                            if per_channel:
+                                rir_axis.legend(
+                                    loc="upper right",
+                                    ncol=min(4, len(per_channel)),
+                                    fontsize=8,
+                                )
+                            if delay_text:
                                 summaries.append(
-                                    "双麦延迟验收："
-                                    f"GCC-PHAT={gcc:.2f} samples，"
-                                    f"低频群延迟={group:.2f} samples，"
-                                    f"{'通过' if delay.get('passed') else '请复核'}"
+                                    "通道间到达时差（正值=该麦克风更晚）："
+                                    + "；".join(delay_text)
                                 )
                     else:
                         method_label = {
@@ -838,6 +1147,9 @@ class ResultsViewer(ttk.Frame):
             messagebox.showinfo("试听", "尚未选择对应的音频文件。")
             return
         try:
+            from .audio import _enable_windows_asio
+
+            _enable_windows_asio()
             import sounddevice as sd
 
             data, sample_rate = sf.read(path, always_2d=True, dtype="float32")
@@ -848,6 +1160,7 @@ class ResultsViewer(ttk.Frame):
             device = int(device_text) if device_text.isdigit() else (device_text or None)
             sd.stop()
             sd.play(monitor, sample_rate, device=device, blocking=False)
+            self._monitor_active = True
             self.summary_var.set(
                 f"正在试听：{path.name}（{resolved_selection}），试听电平 {self.monitor_db.get():.0f} 分贝"
             )
@@ -855,10 +1168,17 @@ class ResultsViewer(ttk.Frame):
             messagebox.showerror("试听失败", str(exc))
 
     def stop_audio(self):
+        if not self._monitor_active:
+            return
         try:
+            from .audio import _enable_windows_asio
+
+            _enable_windows_asio()
             import sounddevice as sd
 
             sd.stop()
+            self._monitor_active = False
             self.summary_var.set("试听已停止")
         except Exception as exc:
+            self._monitor_active = False
             messagebox.showerror("停止试听失败", str(exc))

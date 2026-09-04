@@ -69,22 +69,15 @@ FIELDS = [
     ("repeats.fixed_count", "每次实验的录制次数", int, "rir"),
     ("repeats.correlation_threshold", "脉冲响应相关性阈值", float, "rir"),
     ("repeats.minimum_sweep_snr_db", "扫频相对底噪最低信噪比（分贝）", float, "rir"),
-    ("acqua.program_file", "ACQUA 要播放的长音频", str, "acqua"),
-    ("acqua.segment_duration_s", "每个 mixed / target 片段时长（秒）", float, "acqua"),
-    ("acqua.gap_s", "片段间静音（秒）", float, "acqua"),
-    ("acqua.pairing_seed", "配对随机种子", int, "acqua"),
-    ("acqua.wav_subtype", "生成音频位深格式", str, "acqua"),
-    ("acqua.recording_margin_s", "录制结束余量（秒）", float, "acqua"),
     ("scene.source_mode", "素材选择方式", str, "speech"),
     ("scene.duration_s", "每条片段时长（秒，推荐 4）", lambda x: None if not x else float(x), "speech"),
     ("scene.target_file", "干净目标音频文件", str, "speech"),
     ("scene.interferer_file", "干扰音频文件", str, "speech"),
     ("scene.target_folder", "干净目标音频文件夹", str, "speech"),
     ("scene.interferer_folder", "干扰音频文件夹", str, "speech"),
-    ("scene.measurement_count", "随机测量次数", int, "speech"),
     ("scene.target_index_csv", "目标素材元数据 CSV（可选）", str, "speech"),
     ("scene.interferer_index_csv", "干扰素材元数据 CSV（可选）", str, "speech"),
-    ("scene.pairing_seed", "本次随机清单种子（新实验自动更新）", int, "speech"),
+    ("scene.pairing_mode", "目标与干扰配对方式", str, "speech"),
     ("scene.file_extensions", "扫描扩展名（逗号分隔）", lambda x: [v.strip() for v in x.split(",") if v.strip()], "speech"),
     ("scene.label_prefix", "标签前缀", str, "speech"),
     ("scene.dataset_split", "数据集划分标签", str, "speech"),
@@ -111,6 +104,8 @@ BACKEND_TO_LABEL = {"sounddevice": "真实声卡", "simulated": "模拟声卡"}
 LABEL_TO_BACKEND = {label: backend for backend, label in BACKEND_TO_LABEL.items()}
 SOURCE_MODE_TO_LABEL = {"single": "单个文件", "folders": "文件夹批量"}
 LABEL_TO_SOURCE_MODE = {label: value for value, label in SOURCE_MODE_TO_LABEL.items()}
+PAIRING_MODE_TO_LABEL = {"cycle": "按顺序循环配对", "cartesian": "全部组合配对"}
+LABEL_TO_PAIRING_MODE = {label: value for value, label in PAIRING_MODE_TO_LABEL.items()}
 RIR_STRATEGY_TO_LABEL = {
     "reconstruct_average": "固定次数 + 重构质检 + 全部有效平均（推荐）",
     "fixed_count": "固定次数 + 保留原始 take，之后再选",
@@ -120,7 +115,6 @@ LABEL_TO_RIR_STRATEGY = {
 }
 FILE_PATH_FIELDS = {
     "general.source_file",
-    "acqua.program_file",
     "scene.target_file",
     "scene.interferer_file",
     "scene.target_index_csv",
@@ -197,6 +191,16 @@ AUDIO_PRESETS = {
     },
 }
 
+# The dropdown stays focused on the workflows used during a time-limited lab
+# session.  The remaining presets are still available when advanced settings
+# are enabled, so no capability or old configuration is removed.
+CORE_AUDIO_PRESETS = (
+    "标准监督：目标 + 干扰 + MIXED（推荐）",
+    "只采干净目标",
+    "只采干扰",
+    "仅录制麦克风",
+)
+
 ADVANCED_FIELDS = {
     "audio.backend",
     "audio.sample_rate",
@@ -211,20 +215,15 @@ ADVANCED_FIELDS = {
     "sweep.fade_out_s",
     "sweep.rir_duration_s",
     "sweep.pre_peak_s",
+    "repeats.strategy",
     "repeats.correlation_threshold",
     "repeats.minimum_sweep_snr_db",
-    "acqua.wav_subtype",
-    "acqua.recording_margin_s",
-    "scene.duration_s",
     "scene.target_index_csv",
     "scene.interferer_index_csv",
-    "scene.pairing_seed",
+    "scene.pairing_mode",
     "scene.file_extensions",
     "scene.label_prefix",
     "scene.dataset_split",
-    "scene.target_level_dbfs",
-    "scene.interferer_level_dbfs",
-    "scene.repetitions",
     "scene.capture_strategy",
     "scene.require_supervised_pair",
     "scene.ambient_duration_s",
@@ -333,6 +332,7 @@ class CaptureGUI(tk.Tk):
         self.mode_var = tk.StringVar(value="rir")
         self.audio_preset_var = tk.StringVar(value=next(iter(AUDIO_PRESETS)))
         self.advanced_var = tk.BooleanVar(value=False)
+        self.show_log_var = tk.BooleanVar(value=False)
         self.field_rows: dict[str, tuple[tk.Widget, tk.Widget]] = {}
         self.section_widgets: list[tuple[tk.Widget, str]] = []
         self.device_boxes: dict[str, ttk.Combobox] = {}
@@ -348,19 +348,16 @@ class CaptureGUI(tk.Tk):
         self._stop_event = threading.Event()
         self._active_backend = None
         self._worker_thread: threading.Thread | None = None
-        self._busy_kind: str | None = None
         self._scene_scan_thread: threading.Thread | None = None
-        self._pending_scene_seed: int | None = None
         self._cancel_watch_after_id: str | None = None
-        self._campaign_root: Path | None = None
-        self._campaign_original_storage_root: str | None = None
-        self.campaign_status_var = tk.StringVar(value="未开始大实验")
-        self.scene_estimate_var = tk.StringVar(value="")
         self.checklist_path: Path | None = None
         self.checklist_row: dict | None = None
         self.checklist_kind: str | None = None
         self._logged_preflight_warning_ids: set[str] = set()
         self._preview_after_id: str | None = None
+        self._closing = False
+        self._close_deadline = 0.0
+        self._viewer_mode_key: tuple[str, str] | None = None
         self._build_menu()
         self._build()
         self._load_values()
@@ -387,29 +384,25 @@ class CaptureGUI(tk.Tk):
             self.after(800, lambda: self.run(run_once))
 
     def _build(self):
+        style = ttk.Style(self)
+        style.configure("Capture.TButton", padding=(18, 10), font=("TkDefaultFont", 10, "bold"))
+        style.configure("StopCapture.TButton", padding=(14, 10))
         toolbar = ttk.Frame(self, padding=8)
         toolbar.pack(fill="x")
-        for text, command in (
-            ("打开配置", self.open_config),
-            ("保存", self.save),
-            ("另存为", self.save_as),
-            ("查看音频设备", self.show_devices),
-            ("检查声卡", self.check_hardware),
-            ("检查配置", self.validate_config),
-        ):
-            ttk.Button(toolbar, text=text, command=command).pack(side="left", padx=3)
-        ttk.Button(toolbar, text="测试清单 (.xlsx)", command=self.open_checklist).pack(
-            side="left", padx=3
-        )
-        self.campaign_button = ttk.Button(
-            toolbar, text="开始大实验", command=self.toggle_campaign
-        )
-        self.campaign_button.pack(side="left", padx=(12, 3))
+        ttk.Label(
+            toolbar, text="现场采集", font=("TkDefaultFont", 13, "bold")
+        ).pack(side="left")
         ttk.Label(
             toolbar,
-            textvariable=self.campaign_status_var,
-            foreground="#24415c",
-        ).pack(side="left", padx=4)
+            text="其余配置与工具位于顶部菜单",
+            foreground="#6a7076",
+        ).pack(side="left", padx=10)
+        ttk.Button(toolbar, text="检查声卡", command=self.check_hardware).pack(
+            side="right", padx=3
+        )
+        ttk.Button(toolbar, text="打开测试清单", command=self.open_checklist).pack(
+            side="right", padx=3
+        )
 
         mode_bar = ttk.Frame(self, padding=(10, 0, 10, 6))
         mode_bar.pack(fill="x")
@@ -417,14 +410,13 @@ class CaptureGUI(tk.Tk):
         for value, label in (
             ("rir", "RIR 采集"),
             ("audio", "音频 / 语音采集"),
-            ("simple_recording", "简单录制"),
         ):
             ttk.Radiobutton(
                 mode_bar, text=label, value=value, variable=self.mode_var, command=self._set_mode
             ).pack(side="left", padx=8)
         advanced = ttk.Checkbutton(
             mode_bar,
-            text="显示高级设置",
+            text="更多设置",
             variable=self.advanced_var,
             command=self._set_mode,
         )
@@ -440,6 +432,7 @@ class CaptureGUI(tk.Tk):
             width=26,
         )
         preset_box.bind("<<ComboboxSelected>>", self._audio_preset_changed)
+        self.audio_preset_box = preset_box
         self.audio_preset_help = ttk.Label(
             preset_bar,
             foreground="#24415c",
@@ -527,6 +520,13 @@ class CaptureGUI(tk.Tk):
                     values=list(RIR_STRATEGY_TO_LABEL.values()),
                     state="readonly",
                 )
+            elif name == "repeats.strategy":
+                input_widget = ttk.Combobox(
+                    body,
+                    textvariable=self.variables[name],
+                    values=list(RIR_STRATEGY_TO_LABEL.values()),
+                    state="readonly",
+                )
                 input_widget.bind("<<ComboboxSelected>>", lambda _: self._set_mode())
             elif name in {"audio.input_device", "audio.output_device"}:
                 input_widget = ttk.Combobox(body, textvariable=self.variables[name])
@@ -573,7 +573,7 @@ class CaptureGUI(tk.Tk):
         ).pack(side="left", fill="x", expand=True, padx=10)
         self.edit_metadata_button = ttk.Button(
             self.metadata_summary_panel,
-            text="编辑实验标签",
+            text="编辑标签",
             command=self.edit_experiment_labels,
         )
         self.edit_metadata_button.pack(side="right")
@@ -586,26 +586,24 @@ class CaptureGUI(tk.Tk):
         controls.pack(fill="x", side="bottom", before=parameter_area)
         actions = ttk.Frame(controls)
         actions.pack(fill="x", pady=(0, 5))
-        self.start_button = ttk.Button(actions, command=self.start_current_workflow)
-        self.scene_scan_button = ttk.Button(
-            actions, text="预览本次随机清单", command=self.scan_scene_sources
+        self.start_button = ttk.Button(
+            actions, command=self.start_current_workflow, style="Capture.TButton"
         )
-        self.acqua_tools_button = ttk.Button(
-            actions,
-            text="ACQUA 长序列…",
-            command=self.open_acqua_tools,
+        self.scene_scan_button = ttk.Button(
+            actions, text="扫描并预览文件", command=self.scan_scene_sources
         )
         self.stop_button = ttk.Button(
             actions,
-            text="停止录制 / 测试",
+            text="■  停止当前测试",
             command=self.stop_capture,
             state="disabled",
+            style="StopCapture.TButton",
         )
         self.stop_button.pack(side="right", padx=4)
         self.actions = actions
         self.experiment_status = ttk.Label(
             controls,
-            text="RIR 使用默认 ESS 即可；只有需要修改扫频或质量阈值时才打开高级设置。每次改变佩戴、角度、高度或麦杆姿态后，请开始一个新实验并重新命名。",
+            text="",
             foreground="#24415c",
             wraplength=540,
         )
@@ -617,10 +615,23 @@ class CaptureGUI(tk.Tk):
         )
         self.scene_estimate_label.pack(fill="x", pady=(0, 5))
         self.experiment_status.pack(fill="x", pady=(0, 5))
+        log_header = ttk.Frame(controls)
+        log_header.pack(fill="x")
+        ttk.Checkbutton(
+            log_header,
+            text="显示运行日志",
+            variable=self.show_log_var,
+            command=self._toggle_log,
+        ).pack(side="right")
         self.log = tk.Text(controls, height=9, state="disabled", bg="#151515", fg="#dddddd")
-        self.log.pack(fill="x")
         body.columnconfigure(1, weight=1)
         self._set_mode()
+
+    def _toggle_log(self):
+        if self.show_log_var.get():
+            self.log.pack(fill="x", pady=(4, 0))
+        else:
+            self.log.pack_forget()
 
     def _build_menu(self):
         menu = tk.Menu(self)
@@ -672,6 +683,8 @@ class CaptureGUI(tk.Tk):
                 shown = BACKEND_TO_LABEL.get(value, _display(value))
             elif name == "scene.source_mode":
                 shown = SOURCE_MODE_TO_LABEL.get(value, _display(value))
+            elif name == "scene.pairing_mode":
+                shown = PAIRING_MODE_TO_LABEL.get(value, _display(value))
             elif name == "repeats.strategy":
                 if value == "adaptive_select":
                     value = "reconstruct_average"
@@ -704,6 +717,8 @@ class CaptureGUI(tk.Tk):
                 value = LABEL_TO_BACKEND.get(raw, raw)
             elif name == "scene.source_mode":
                 value = LABEL_TO_SOURCE_MODE.get(raw, raw)
+            elif name == "scene.pairing_mode":
+                value = LABEL_TO_PAIRING_MODE.get(raw, raw)
             elif name == "repeats.strategy":
                 value = LABEL_TO_RIR_STRATEGY.get(raw, raw)
             else:
@@ -1070,6 +1085,9 @@ class CaptureGUI(tk.Tk):
             messagebox.showerror("配置无效", str(exc))
 
     def show_devices(self):
+        if self._busy:
+            messagebox.showinfo("声卡正在使用", "请先停止当前采集，再查询音频设备。")
+            return
         self._refresh_device_choices()
         window = tk.Toplevel(self)
         window.title("音频设备")
@@ -1099,14 +1117,7 @@ class CaptureGUI(tk.Tk):
 
     def scan_scene_sources(self):
         try:
-            config = deepcopy(self._apply_values())
-            if config.scene.source_mode == "folders":
-                seed = secrets.randbits(63)
-                config.scene.pairing_seed = seed
-                self.config_data.scene.pairing_seed = seed
-                self.variables["scene.pairing_seed"].set(str(seed))
-                self._pending_scene_seed = seed
-            estimate = estimate_scene_duration(config.scene)
+            config = self._apply_values()
         except Exception as exc:
             messagebox.showerror("扫描失败", str(exc))
             return
@@ -1128,15 +1139,7 @@ class CaptureGUI(tk.Tk):
                     )
                     for index, pair in enumerate(pairs[:30], 1)
                 ]
-                self.events.put(
-                    (
-                        "SCENE_SCAN_DONE",
-                        len(pairs),
-                        preview,
-                        config.scene.pairing_seed,
-                        estimate.total_s,
-                    )
-                )
+                self.events.put(("SCENE_SCAN_DONE", len(pairs), preview))
             except Exception as exc:
                 self.events.put(("SCENE_SCAN_ERROR", str(exc)))
 
@@ -1146,6 +1149,9 @@ class CaptureGUI(tk.Tk):
         self._scene_scan_thread.start()
 
     def check_hardware(self):
+        if self._busy:
+            messagebox.showinfo("声卡正在使用", "请先停止当前采集，再重新检查声卡。")
+            return
         try:
             config = self._apply_values()
             result = check_hardware_settings(config.audio)
@@ -1222,41 +1228,6 @@ class CaptureGUI(tk.Tk):
                 parent=self,
             ):
                 resume_run = str(latest)
-        if kind == "scene":
-            source_mode = LABEL_TO_SOURCE_MODE.get(
-                self.variables["scene.source_mode"].get().strip(),
-                self.variables["scene.source_mode"].get().strip(),
-            )
-            if resume_run:
-                checkpoint_path = Path(resume_run) / "metrics" / "scene_checkpoint.json"
-                try:
-                    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-                    if "pairing_seed" in checkpoint:
-                        self.variables["scene.pairing_seed"].set(
-                            str(int(checkpoint["pairing_seed"]))
-                        )
-                    if "measurement_count" in checkpoint:
-                        self.variables["scene.measurement_count"].set(
-                            str(int(checkpoint["measurement_count"]))
-                        )
-                    if "repetitions" in checkpoint:
-                        self.variables["scene.repetitions"].set(
-                            str(int(checkpoint["repetitions"]))
-                        )
-                except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
-                    messagebox.showerror("无法读取续采计划", str(exc), parent=self)
-                    return
-                self._pending_scene_seed = None
-            elif source_mode == "folders":
-                seed = (
-                    self._pending_scene_seed
-                    if self._pending_scene_seed is not None
-                    else secrets.randbits(63)
-                )
-                self.variables["scene.pairing_seed"].set(str(seed))
-                # Folder mode exposes one total only; do not multiply it by a
-                # hidden legacy repetition value from an older YAML file.
-                self.variables["scene.repetitions"].set("1")
         if existing_runs and not messagebox.askyesno(
             "实验名称已经使用",
             f"名称“{name}”已有 {len(existing_runs)} 个完成结果。\n"
@@ -1276,43 +1247,8 @@ class CaptureGUI(tk.Tk):
         self.metadata.insert("1.0", json.dumps(metadata, ensure_ascii=False, indent=2))
         self.variables["storage.session_name"].set(name)
         self.config_data.scene.resume_run = resume_run
-        if kind == "scene":
-            try:
-                estimate = estimate_scene_duration(self._scene_for_estimate())
-                completed = 0
-                if resume_run:
-                    checkpoint = json.loads(
-                        (Path(resume_run) / "metrics" / "scene_checkpoint.json").read_text(
-                            encoding="utf-8"
-                        )
-                    )
-                    completed = int(checkpoint.get("completed_ordinal", 0))
-                remaining = (
-                    None
-                    if estimate.per_task_s is None
-                    else (
-                        max(0, estimate.task_count - completed) * estimate.per_task_s
-                        + (estimate.ambient_s if completed == 0 else 0.0)
-                    )
-                )
-                self._append(
-                    f"本次实验名称：{name}；随机清单 {estimate.task_count} 条，"
-                    f"已完成 {completed} 条，预计剩余 {_format_duration(remaining)}"
-                )
-                self.experiment_status.configure(
-                    text=(
-                        f"{'断点续采' if resume_run else '新的随机清单'}："
-                        f"{completed}/{estimate.task_count} 已完成，"
-                        f"预计剩余 {_format_duration(remaining)}"
-                    )
-                )
-            except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
-                messagebox.showerror("测量计划无效", str(exc), parent=self)
-                return
-        else:
-            self._append(f"本次实验名称：{name}")
+        self._append(f"本次实验名称：{name}")
         self._update_metadata_summary()
-        self._pending_scene_seed = None
         self.run(kind)
 
     def _audio_preset_changed(self, _event=None):
@@ -1327,117 +1263,11 @@ class CaptureGUI(tk.Tk):
                 variable.set(name in selected)
         self._set_mode()
 
-    def toggle_campaign(self):
-        if self._campaign_root is None:
-            self.start_campaign()
-        else:
-            self.end_campaign()
-
-    def start_campaign(self):
-        """Start one operator-controlled experiment containing named child tests."""
-        if self._busy:
-            messagebox.showinfo("正在工作", "请先停止或完成当前任务。")
-            return
-        if self._campaign_root is not None:
-            messagebox.showinfo("大实验已开始", f"当前大实验：\n{self._campaign_root}")
-            return
-        name = simpledialog.askstring(
-            "开始一次大实验",
-            "请输入这次大实验名称（后续每条 RIR / 语音实验仍会分别命名）：",
-            parent=self,
-        )
-        if name is None:
-            return
-        try:
-            storage_root = self.variables["storage.root"].get().strip() or "runs"
-            root = create_campaign(storage_root, name)
-        except Exception as exc:
-            messagebox.showerror("无法开始大实验", str(exc))
-            return
-        self._campaign_original_storage_root = storage_root
-        self._campaign_root = root
-        child_root = str(root / "runs")
-        self.variables["storage.root"].set(child_root)
-        self.config_data.storage.root = child_root
-        self.campaign_status_var.set(f"进行中：{name.strip()}")
-        self.campaign_button.configure(text="结束大实验并打包")
-        self._set_busy(False)
-        self._append(
-            f"大实验已开始：{root}\n"
-            "现在可逐条开始并命名 RIR 或语音增强实验；全部完成后点击“结束大实验并自动打包”。"
-        )
-
-    def end_campaign(self):
-        """Package the current campaign without blocking Tk's event loop."""
-        if self._campaign_root is None:
-            messagebox.showinfo("没有大实验", "请先点击“开始一次大实验”。")
-            return
-        if self._busy:
-            messagebox.showinfo("正在工作", "请先完成或停止当前采集。")
-            return
-        root = self._campaign_root
-        self._stop_event.clear()
-        self._busy_kind = "campaign_packaging"
-        self._set_busy(True)
-        self.experiment_status.configure(text="正在汇总并打包整个大实验；可点击停止取消打包。")
-        self._append(f"开始打包大实验：{root}")
-
-        def worker():
-            try:
-                result = package_campaign(
-                    root,
-                    stop_requested=self._stop_event.is_set,
-                    progress=lambda update: self.events.put(
-                        ("CAMPAIGN_PACKAGE_PROGRESS", update)
-                    ),
-                )
-                self.events.put(("CAMPAIGN_PACKAGE_DONE", result))
-            except CampaignPackagingCancelled as exc:
-                self.events.put(("CAMPAIGN_PACKAGE_CANCELLED", str(exc)))
-            except Exception as exc:
-                self.events.put(("CAMPAIGN_PACKAGE_ERROR", str(exc)))
-
-        self._worker_thread = threading.Thread(
-            target=worker, daemon=True, name="acoustic-campaign-packager"
-        )
-        self._worker_thread.start()
-
-    def _finish_campaign_ui(self):
-        original = self._campaign_original_storage_root or "runs"
-        self.variables["storage.root"].set(original)
-        self.config_data.storage.root = original
-        if self.config_path is not None:
-            try:
-                save_config(self.config_data, self.config_path)
-            except Exception as exc:
-                self._append(f"恢复配置保存目录时未能写入 YAML：{exc}")
-        self._campaign_root = None
-        self._campaign_original_storage_root = None
-        self.campaign_status_var.set("未开始大实验")
-        self.campaign_button.configure(text="开始大实验")
-        self._set_busy(False)
-
     def start_current_workflow(self):
-        mode = self.mode_var.get()
-        if self._campaign_root is not None and mode == "simple_recording":
-            messagebox.showinfo(
-                "当前正在进行大实验",
-                "大实验只汇总 RIR 和语音增强的命名子实验。请先结束大实验，再做简单录制或 ACQUA 录制。",
-            )
-            return
-        if mode == "rir":
+        if self.mode_var.get() == "rir":
             self.start_named_experiment("rir")
             return
-        if mode == "simple_recording":
-            self.start_simple_recording()
-            return
         preset = AUDIO_PRESETS[self.audio_preset_var.get()]
-        if self._campaign_root is not None and preset["kind"] != "scene":
-            messagebox.showinfo(
-                "请选择语音增强方案",
-                "大实验中的音频子实验必须使用语音增强场景方案，普通播录不纳入自动打包。",
-            )
-            return
         if preset["kind"] == "io":
             self.variables["general.action"].set(
                 ACTION_TO_LABEL[str(preset["action"])]
@@ -1507,9 +1337,22 @@ class CaptureGUI(tk.Tk):
         if kind != "scene":
             config.scene.resume_run = ""
         self._stop_event.clear()
-        self._busy_kind = kind
+        # Monitoring uses a separate PortAudio stream.  Close it before an
+        # experiment so a single-client ASIO driver is never opened twice.
+        self.viewer.stop_audio()
         self._set_busy(True)
-        self._append("正在后台预检、扫描素材并准备声卡；界面保持可操作。")
+        if kind == "rir":
+            self.viewer.set_capture_mode(playback=True, recording=True, title="正在预检 RIR 实验…")
+        elif kind == "scene":
+            self.viewer.set_capture_mode(playback=True, recording=True, title="正在预检语音实验…")
+        else:
+            action = str(config.general.action)
+            self.viewer.set_capture_mode(
+                playback=action in {"play", "play_record"},
+                recording=action in {"record", "play_record"},
+                title="正在预检音频操作…",
+            )
+        self._append("正在预检、扫描素材并准备声卡；音频流由专用线程管理，界面保持可操作。")
 
         def worker():
             try:
@@ -1520,6 +1363,12 @@ class CaptureGUI(tk.Tk):
                 for warning in report.warnings:
                     self.events.put(("PREFLIGHT_WARNING", warning.check_id, warning.title, warning.detail))
                 self.events.put(("STATUS", "预检完成；正在打开声卡流…"))
+                if str(config.audio.host_api or "").casefold() == "asio":
+                    self.events.put((
+                        "STATUS",
+                        "ASIO 安全模式：音频流在同一工作线程中打开、启动、停止和关闭；"
+                        "界面仅发送停止请求。",
+                    ))
                 backend = create_backend(config.audio)
                 self._active_backend = backend
                 logger = lambda message: self.events.put(str(message))
@@ -1567,344 +1416,9 @@ class CaptureGUI(tk.Tk):
         )
         self._worker_thread.start()
 
-    def _simple_recording_audio_config(self):
-        """Read only the input settings needed by standalone recording.
-
-        This intentionally avoids validating sweep, playback, metadata and
-        dataset fields: none of them should be able to block a plain recording.
-        """
-        audio = deepcopy(self.config_data.audio)
-        backend_text = self.variables["audio.backend"].get().strip()
-        audio.backend = LABEL_TO_BACKEND.get(backend_text, backend_text)
-        audio.host_api = self.variables["audio.host_api"].get().strip() or None
-        device_text = self.variables["audio.input_device"].get().strip()
-        prefix = device_text.partition(":")[0]
-        audio.input_device = int(prefix) if prefix.isdigit() else (device_text or None)
-        audio.sample_rate = int(self.variables["audio.sample_rate"].get().strip())
-        audio.block_size = int(self.variables["audio.block_size"].get().strip())
-        audio.input_channels = [
-            int(value.strip())
-            for value in self.variables["audio.input_channels"].get().split(",")
-            if value.strip()
-        ]
-        if audio.backend not in {"sounddevice", "simulated"}:
-            raise ValueError("请选择真实声卡或模拟声卡")
-        if audio.sample_rate < 8_000:
-            raise ValueError("采样率不能低于 8000 Hz")
-        if audio.block_size != 0 and audio.block_size < 16:
-            raise ValueError("缓冲区帧数必须为 0，或至少为 16")
-        if not audio.input_channels:
-            raise ValueError("至少选择一个录制通道")
-        if any(channel < 1 for channel in audio.input_channels):
-            raise ValueError("录制通道从 1 开始，必须为正整数")
-        if len(set(audio.input_channels)) != len(audio.input_channels):
-            raise ValueError("录制通道不能重复")
-        return audio
-
-    def start_simple_recording(self):
-        """Name and start one standalone recording in the selected save root."""
-        if self._busy:
-            messagebox.showinfo("正在录制", "请先停止当前录制或测试。")
-            return
-        current_name = self.variables["storage.session_name"].get().strip()
-        if current_name == "measurement":
-            current_name = ""
-        recording_name = simpledialog.askstring(
-            "简单录制名称",
-            "请输入本次录音名称：",
-            initialvalue=current_name,
-            parent=self,
-        )
-        if recording_name is None:
-            return
-        recording_name = recording_name.strip()
-        if not recording_name:
-            messagebox.showerror("录音名称无效", "录音名称不能为空。")
-            return
-        safe_name = _safe_name(recording_name)
-        root = Path(
-            self.variables["storage.root"].get().strip() or "runs"
-        ).expanduser().resolve()
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = root / f"{timestamp}_{safe_name}.wav"
-        suffix = 2
-        while output_path.exists():
-            output_path = root / f"{timestamp}_{safe_name}_{suffix:03d}.wav"
-            suffix += 1
-        try:
-            audio = self._simple_recording_audio_config()
-        except Exception as exc:
-            messagebox.showerror("录音设置无效", str(exc))
-            return
-        self.variables["storage.session_name"].set(recording_name)
-        self._stop_event.clear()
-        self._busy_kind = "simple_recording"
-        self._set_busy(True)
-        self.experiment_status.configure(
-            text=f"简单录制中：{recording_name}  |  点击右侧“停止录制 / 测试”即可保存"
-        )
-        self._append(
-            f"简单录制“{recording_name}”准备中：{output_path}；采样率 {audio.sample_rate} Hz，"
-            f"录制通道 {','.join(map(str, audio.input_channels))}"
-        )
-
-        def worker():
-            try:
-                backend = create_backend(audio)
-                self._active_backend = backend
-                backend.set_progress_callback(
-                    lambda update: self.events.put(("SIMPLE_RECORD_PROGRESS", update))
-                )
-                status = backend.record_to_file(
-                    output_path,
-                    stop_requested=self._stop_event.is_set,
-                    subtype=self.config_data.storage.wav_subtype,
-                )
-                self.events.put(("SIMPLE_RECORD_DONE", str(output_path), status))
-            except Exception as exc:
-                self.events.put(("SIMPLE_RECORD_ERROR", str(output_path), str(exc)))
-            finally:
-                self._active_backend = None
-
-        self._worker_thread = threading.Thread(
-            target=worker,
-            daemon=True,
-            name="acoustic-simple-recording-worker",
-        )
-        self._worker_thread.start()
-
-    def open_acqua_tools(self):
-        """Show ACQUA helpers only when needed, keeping the main UI compact."""
-        if self._busy:
-            messagebox.showinfo("正在工作", "请先停止或完成当前任务。")
-            return
-        for child in self.winfo_children():
-            if isinstance(child, tk.Toplevel) and child.title() == "ACQUA 长序列工具":
-                child.lift()
-                child.focus_force()
-                return
-        window = tk.Toplevel(self)
-        window.title("ACQUA 长序列工具")
-        window.transient(self)
-        window.resizable(True, False)
-        body = ttk.Frame(window, padding=14)
-        body.pack(fill="both", expand=True)
-        ttk.Label(
-            body,
-            text=(
-                "可选功能：先把 target/interferer 拼成 mixed → target_only 长音频交给 ACQUA 播放，"
-                "再由本工具只录制。普通简单录制不需要填写这里。"
-            ),
-            wraplength=660,
-            foreground="#24415c",
-        ).grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 10))
-        rows = (
-            ("scene.target_folder", "Target 语料文件夹", True),
-            ("scene.interferer_folder", "Interferer 语料文件夹", True),
-            ("acqua.program_file", "已生成 / ACQUA 播放音频", False),
-            ("acqua.segment_duration_s", "每个 mixed / target 时长（秒）", None),
-            ("acqua.gap_s", "片段间静音（秒）", None),
-            ("acqua.pairing_seed", "配对随机种子", None),
-            ("scene.target_level_dbfs", "Target 数字电平（dBFS）", None),
-            ("scene.interferer_level_dbfs", "Interferer 数字电平（dBFS）", None),
-        )
-        for row_index, (field, label, is_folder) in enumerate(rows, 1):
-            ttk.Label(body, text=label, width=30).grid(
-                row=row_index, column=0, sticky="w", pady=3
-            )
-            ttk.Entry(body, textvariable=self.variables[field], width=58).grid(
-                row=row_index, column=1, sticky="ew", pady=3
-            )
-            if is_folder is not None:
-                ttk.Button(
-                    body,
-                    text="选择文件夹" if is_folder else "选择音频",
-                    command=lambda name=field: self._browse_path(name),
-                ).grid(row=row_index, column=2, padx=(6, 0), pady=3)
-        ttk.Label(
-            body,
-            text=(
-                "提示：映射表按播放文件时间轴记录。没有 marker 校正时，正式切割前仍需校准 ACQUA "
-                "播放与录制启动偏移。"
-            ),
-            wraplength=660,
-            foreground="#6a4a00",
-        ).grid(row=len(rows) + 1, column=0, columnspan=3, sticky="ew", pady=(10, 6))
-        actions = ttk.Frame(body)
-        actions.grid(row=len(rows) + 2, column=0, columnspan=3, sticky="e")
-
-        def run_and_close(callback):
-            window.destroy()
-            callback()
-
-        ttk.Button(actions, text="关闭", command=window.destroy).pack(side="right", padx=4)
-        ttk.Button(
-            actions,
-            text="按所选长音频开始只录制",
-            command=lambda: run_and_close(self.start_acqua_recording),
-        ).pack(side="right", padx=4)
-        ttk.Button(
-            actions,
-            text="生成 mixed-target 长音频",
-            command=lambda: run_and_close(self.generate_acqua_program),
-        ).pack(side="right", padx=4)
-        body.columnconfigure(1, weight=1)
-        window.update_idletasks()
-        window.minsize(max(760, window.winfo_reqwidth()), window.winfo_reqheight())
-        window.grab_set()
-
-    def generate_acqua_program(self):
-        """Build one deterministic mixed/target program without loading it all into RAM."""
-        if self._busy:
-            messagebox.showinfo("正在工作", "请先停止或完成当前任务。")
-            return
-        if self._campaign_root is not None:
-            messagebox.showinfo(
-                "当前正在进行大实验",
-                "请先结束 RIR / 语音增强大实验，再生成或录制 ACQUA 长序列。",
-            )
-            return
-        name = simpledialog.askstring(
-            "生成 ACQUA 长音频",
-            "请输入长序列名称：",
-            initialvalue=self.variables["storage.session_name"].get().strip(),
-            parent=self,
-        )
-        if name is None:
-            return
-        output_parent = filedialog.askdirectory(
-            title="选择 ACQUA 长音频和映射表的保存位置",
-            initialdir=self.variables["storage.root"].get().strip() or None,
-            parent=self,
-        )
-        if not output_parent:
-            return
-        try:
-            self.variables["scene.source_mode"].set(
-                SOURCE_MODE_TO_LABEL["folders"]
-            )
-            config = deepcopy(self._apply_values())
-            config.scene.source_mode = "folders"
-            config.scene.items = ["target_only", "mixture"]
-        except Exception as exc:
-            messagebox.showerror("ACQUA 序列设置无效", str(exc))
-            return
-        self._stop_event.clear()
-        self._busy_kind = "acqua_generation"
-        self._set_busy(True)
-        self.experiment_status.configure(
-            text="正在逐条生成 mixed-target 长音频和映射表；不会一次性占用大量内存。"
-        )
-
-        def worker():
-            try:
-                result = generate_acqua_mixed_target_program(
-                    config,
-                    output_parent,
-                    name,
-                    stop_requested=self._stop_event.is_set,
-                    progress=lambda update: self.events.put(
-                        ("ACQUA_GENERATE_PROGRESS", update)
-                    ),
-                )
-                self.events.put(("ACQUA_GENERATE_DONE", result))
-            except Exception as exc:
-                self.events.put(("ACQUA_GENERATE_ERROR", str(exc)))
-
-        self._worker_thread = threading.Thread(
-            target=worker, daemon=True, name="acqua-program-generator"
-        )
-        self._worker_thread.start()
-
-    def start_acqua_recording(self):
-        """Record only, bounded by the selected ACQUA program or manual stop."""
-        if self._busy:
-            messagebox.showinfo("正在录制", "请先停止当前录制或测试。")
-            return
-        recording_name = simpledialog.askstring(
-            "ACQUA 录制名称",
-            "请输入本次长序列录制名称：",
-            initialvalue=self.variables["storage.session_name"].get().strip(),
-            parent=self,
-        )
-        if recording_name is None:
-            return
-        try:
-            audio = self._simple_recording_audio_config()
-            program_file = self.variables["acqua.program_file"].get().strip()
-            if not program_file:
-                raise ValueError("请先生成或选择 ACQUA 要播放的长音频")
-            margin_s = float(self.variables["acqua.recording_margin_s"].get().strip())
-            prepared = prepare_acqua_recording(
-                self.variables["storage.root"].get().strip() or "runs",
-                recording_name,
-                program_file,
-                expected_sample_rate=audio.sample_rate,
-            )
-            if margin_s < 0:
-                raise ValueError("录制结束余量不能为负")
-        except Exception as exc:
-            messagebox.showerror("ACQUA 录制设置无效", str(exc))
-            return
-        max_duration_s = float(prepared["program_duration_s"]) + margin_s
-        self.variables["storage.session_name"].set(recording_name.strip())
-        self._stop_event.clear()
-        self._busy_kind = "acqua_recording"
-        self._set_busy(True)
-        self.experiment_status.configure(
-            text=(
-                f"ACQUA 只录制：最多 {max_duration_s:.1f} 秒；"
-                "提前停止也会保留已录前缀。"
-            )
-        )
-        self._append(
-            f"ACQUA 只录制开始：{prepared['output']}；预计 {max_duration_s:.2f} 秒。"
-        )
-
-        def worker():
-            try:
-                backend = create_backend(audio)
-                self._active_backend = backend
-                # Start the duration clock only after the audio backend is
-                # ready.  Driver initialization must not consume recording
-                # time, which matters especially for short verification files.
-                deadline = time.monotonic() + max_duration_s
-
-                def should_stop() -> bool:
-                    return self._stop_event.is_set() or time.monotonic() >= deadline
-
-                backend.set_progress_callback(
-                    lambda update: self.events.put(
-                        ("ACQUA_RECORD_PROGRESS", update, max_duration_s)
-                    )
-                )
-                status = backend.record_to_file(
-                    prepared["output"],
-                    stop_requested=should_stop,
-                    subtype=self.config_data.storage.wav_subtype,
-                )
-                recorded_s = float(status.get("duration_s", 0.0))
-                stopped_early = self._stop_event.is_set() or recorded_s + 0.05 < max_duration_s
-                manifest = finish_acqua_recording(
-                    prepared, status, stopped_early=stopped_early
-                )
-                self.events.put(
-                    ("ACQUA_RECORD_DONE", prepared, status, str(manifest), stopped_early)
-                )
-            except Exception as exc:
-                self.events.put(
-                    ("ACQUA_RECORD_ERROR", str(prepared["root"]), str(exc))
-                )
-            finally:
-                self._active_backend = None
-
-        self._worker_thread = threading.Thread(
-            target=worker, daemon=True, name="acqua-recording-worker"
-        )
-        self._worker_thread.start()
-
     def _set_busy(self, busy: bool):
         self._busy = busy
+        self.viewer.set_capture_busy(busy)
         if busy and self._preview_after_id is not None:
             try:
                 self.after_cancel(self._preview_after_id)
@@ -1914,21 +1428,15 @@ class CaptureGUI(tk.Tk):
         state = "disabled" if busy else "normal"
         self.start_button.configure(state=state)
         self.scene_scan_button.configure(state=state)
-        self.acqua_tools_button.configure(state=state)
         self.edit_metadata_button.configure(state=state)
         self.stop_button.configure(state="normal" if busy else "disabled")
-        self.campaign_button.configure(state="disabled" if busy else "normal")
 
     def stop_capture(self):
         if not self._busy or self._stop_event.is_set():
             return
         self._stop_event.set()
         self.stop_button.configure(state="disabled")
-        self._append(
-            "正在停止录音并写完 WAV 文件，请稍候……"
-            if self._busy_kind in {"simple_recording", "acqua_recording"}
-            else "正在停止当前任务，请稍候……"
-        )
+        self._append("正在停止当前测试，请稍候……")
         backend = self._active_backend
         if backend is not None:
             try:
@@ -1955,9 +1463,10 @@ class CaptureGUI(tk.Tk):
     def _set_mode(self):
         mode = self.mode_var.get()
         preset = AUDIO_PRESETS[self.audio_preset_var.get()]
+        viewer_mode_key = (mode, self.audio_preset_var.get() if mode == "audio" else "rir")
+        viewer_mode_changed = viewer_mode_key != self._viewer_mode_key
         is_scene = mode == "audio" and preset["kind"] == "scene"
         is_basic = mode == "audio" and preset["kind"] == "io"
-        is_simple_recording = mode == "simple_recording"
         visible_groups = {"common"}
         if mode == "rir":
             visible_groups.update({"rir", "rir_speech"})
@@ -1967,6 +1476,9 @@ class CaptureGUI(tk.Tk):
             visible_groups.add("basic")
 
         advanced = self.advanced_var.get()
+        self.audio_preset_box.configure(
+            values=list(AUDIO_PRESETS) if advanced else list(CORE_AUDIO_PRESETS)
+        )
         action = str(preset.get("action") or "")
         if preset.get("items") is None:
             scene_items = {name for name, variable in self.item_vars.items() if variable.get()}
@@ -1977,7 +1489,7 @@ class CaptureGUI(tk.Tk):
         playback_needed = mode == "rir" or is_scene and (target_needed or interferer_needed) or (
             is_basic and action in {"play", "play_record"}
         )
-        recording_needed = mode == "rir" or is_scene or is_simple_recording or (
+        recording_needed = mode == "rir" or is_scene or (
             is_basic and action in {"record", "play_record"}
         )
         source_mode = LABEL_TO_SOURCE_MODE.get(
@@ -2019,12 +1531,6 @@ class CaptureGUI(tk.Tk):
                 visible = visible and source_mode == "single"
             elif name in {"scene.target_folder", "scene.interferer_folder"}:
                 visible = visible and source_mode == "folders"
-            elif name == "scene.measurement_count":
-                visible = visible and source_mode == "folders"
-            elif name == "scene.repetitions":
-                # Folder capture has one unambiguous total: measurement_count.
-                # Legacy single-file workflows may still repeat the same pair.
-                visible = visible and source_mode == "single"
             for widget in self.field_rows.get(name, ()):
                 widget.grid() if visible else widget.grid_remove()
         for widget, group in self.section_widgets:
@@ -2042,12 +1548,7 @@ class CaptureGUI(tk.Tk):
             self.metadata_summary_panel.grid()
         else:
             self.metadata_summary_panel.grid_remove()
-        if is_scene:
-            self.scene_estimate_label.pack(fill="x", pady=(0, 5), before=self.experiment_status)
-        else:
-            self.scene_estimate_label.pack_forget()
         self._update_metadata_summary()
-        self._update_scene_estimate()
 
         for widget in self.audio_preset_widgets:
             if mode == "audio":
@@ -2057,59 +1558,31 @@ class CaptureGUI(tk.Tk):
         self.audio_preset_help.configure(text=str(preset["help"]))
         self.start_button.pack_forget()
         self.scene_scan_button.pack_forget()
-        self.acqua_tools_button.pack_forget()
         if mode == "rir":
-            self.start_button.configure(text="开始新的 RIR 实验")
+            self.start_button.configure(text="▶  开始新的 RIR 实验")
+            self.experiment_status.configure(
+                text="每次佩戴、角度、高度或麦杆姿态对应一个新实验；本实验内的有效 RIR 自动平均。"
+            )
         elif is_scene:
-            self.start_button.configure(text="开始新的语音增强实验")
-        elif is_simple_recording:
-            self.start_button.configure(text="开始简单录制")
+            self.start_button.configure(text="▶  开始新的语音增强实验")
+            self.experiment_status.configure(
+                text="按素材配对连续采集；target-only 与 mixed 使用同一目标语音，可直接用于监督训练。"
+            )
         else:
-            self.start_button.configure(text="开始新的音频播录")
-        self.start_button.pack(side="left", padx=4)
+            self.start_button.configure(text="▶  开始新的音频播录")
+            self.experiment_status.configure(
+                text="输入本次名称并开始；录制过程中可随时停止，已完成的数据会保留。"
+            )
+        self.start_button.pack(side="left", fill="x", expand=True, padx=4)
         if is_scene:
             self.scene_scan_button.pack(side="left", padx=4)
-        if is_simple_recording:
-            self.acqua_tools_button.pack(side="left", padx=4)
         if mode == "rir":
             self._schedule_rir_preview()
-        elif is_scene and self.viewer.run_dir is None:
+        elif is_scene and (self.viewer.run_dir is None or viewer_mode_changed):
             self.viewer.show_speech_workflow_guide()
-
-    def _scene_for_estimate(self):
-        scene = deepcopy(self.config_data.scene)
-        scene.source_mode = LABEL_TO_SOURCE_MODE.get(
-            self.variables["scene.source_mode"].get().strip(),
-            self.variables["scene.source_mode"].get().strip(),
-        )
-        scene.measurement_count = int(
-            self.variables["scene.measurement_count"].get().strip()
-        )
-        duration = self.variables["scene.duration_s"].get().strip()
-        scene.duration_s = None if not duration else float(duration)
-        scene.ambient_duration_s = float(
-            self.variables["scene.ambient_duration_s"].get().strip()
-        )
-        scene.repetitions = int(self.variables["scene.repetitions"].get().strip())
-        scene.countdown_s = float(self.variables["scene.countdown_s"].get().strip())
-        scene.gap_s = float(self.variables["scene.gap_s"].get().strip())
-        preset = AUDIO_PRESETS[self.audio_preset_var.get()]
-        scene.items = list(
-            preset.get("items")
-            if preset.get("items") is not None
-            else [name for name, variable in self.item_vars.items() if variable.get()]
-        )
-        return scene
-
-    def _update_scene_estimate(self, *_):
-        try:
-            estimate = estimate_scene_duration(self._scene_for_estimate())
-            self.scene_estimate_var.set(
-                f"计划 {estimate.task_count} 次测量；预计最短测试时长 "
-                f"{_format_duration(estimate.total_s)}（不含首次声卡初始化和写盘耗时）"
-            )
-        except (KeyError, TypeError, ValueError):
-            self.scene_estimate_var.set("请填写有效的测量次数和时长以计算预计测试时间")
+        elif is_basic and (self.viewer.run_dir is None or viewer_mode_changed):
+            self.viewer.show_basic_workflow_guide(action)
+        self._viewer_mode_key = viewer_mode_key
 
     def _schedule_rir_preview(self, *_):
         if self._busy or self.mode_var.get() != "rir":
@@ -2121,9 +1594,9 @@ class CaptureGUI(tk.Tk):
                 pass
         self._preview_after_id = self.after(180, self._refresh_rir_preview)
 
-    def _refresh_rir_preview(self):
+    def _refresh_rir_preview(self, *, allow_busy: bool = False):
         self._preview_after_id = None
-        if self._busy or self.mode_var.get() != "rir":
+        if (self._busy and not allow_busy) or self.mode_var.get() != "rir":
             return
         try:
             sample_rate = int(self.variables["audio.sample_rate"].get().strip())
@@ -2192,18 +1665,14 @@ class CaptureGUI(tk.Tk):
                     self._append(f"预检提醒：{title}：{detail}")
                     self._logged_preflight_warning_ids.add(check_id)
             elif isinstance(event, tuple) and event and event[0] == "SCENE_SCAN_DONE":
-                _, pair_count, preview, pairing_seed, estimated_total_s = event
+                _, pair_count, preview = event
                 self._scene_scan_thread = None
                 if not self._busy:
                     self.scene_scan_button.configure(state="normal")
                 suffix = "" if pair_count <= 30 else f"\n……另有 {pair_count - 30} 组未显示"
                 messagebox.showinfo(
-                    "本次随机测量清单",
-                    f"随机种子：{pairing_seed}\n"
-                    f"共 {pair_count} 次测量，预计最短时长 "
-                    f"{_format_duration(estimated_total_s)}。\n\n"
-                    + "\n".join(preview)
-                    + suffix,
+                    "语音文件扫描结果",
+                    f"共形成 {pair_count} 组采集任务。\n\n" + "\n".join(preview) + suffix,
                 )
             elif isinstance(event, tuple) and event and event[0] == "SCENE_SCAN_ERROR":
                 _, error = event
@@ -2215,37 +1684,14 @@ class CaptureGUI(tk.Tk):
                 self._append(str(event[1]))
             elif isinstance(event, tuple) and event and event[0] == "SCENE_PROGRESS":
                 _, update = event
-                if update.get("event") == "plan_ready":
-                    completed = int(update.get("completed_tasks", 0))
-                    total = int(update.get("total_tasks", 0))
-                    remaining = update.get("estimated_remaining_s")
-                    self.experiment_status.configure(
-                        text=(
-                            f"语音增强采集中：{completed}/{total} 已完成；"
-                            f"预计剩余 {_format_duration(remaining)}；可随时停止并续采"
-                        )
-                    )
+                if update.get("event") == "pair_loading":
                     self._append(
-                        f"随机测量清单已锁定：种子 {update.get('pairing_seed')}，"
-                        f"共 {total} 条，已完成 {completed} 条"
-                    )
-                elif update.get("event") == "pair_loading":
-                    task_index = int(update.get("task_index", update["pair_index"]))
-                    task_count = int(update.get("task_count", update["pair_count"]))
-                    remaining = update.get("estimated_remaining_s")
-                    self._append(
-                        f"正在读取素材 {task_index}/{task_count}："
+                        f"正在读取素材 {update['pair_index']}/{update['pair_count']}："
                         f"target={update['target_name']} | interferer={update['interferer_name']}"
-                    )
-                    self.experiment_status.configure(
-                        text=(
-                            f"语音增强采集中：第 {task_index}/{task_count} 条；"
-                            f"预计剩余 {_format_duration(remaining)}；停止后可从本条继续"
-                        )
                     )
                     self.viewer.run_label.configure(
                         text=(
-                            f"Loading pair {task_index}/{task_count}: "
+                            f"Loading pair {update['pair_index']}/{update['pair_count']}: "
                             f"target={update['target_name']} | interferer={update['interferer_name']}"
                         )
                     )
@@ -2268,184 +1714,27 @@ class CaptureGUI(tk.Tk):
                     )
             elif isinstance(event, tuple) and event and event[0] == "AUDIO_PROGRESS":
                 _, update = event
+                if (
+                    str(update.get("phase", "")) == "opening_audio_stream"
+                    and self.mode_var.get() == "rir"
+                    and self.viewer.preview_spec is None
+                ):
+                    # Each completed take temporarily shows its measured RIR.
+                    # Restore the ESS preview before the next take so every
+                    # sweep, not only take 1, gets a moving red cursor.
+                    self._refresh_rir_preview(allow_busy=True)
                 self.viewer.update_live_progress(
                     update.get("frames", 0),
                     update.get("total_frames", 1),
                     update.get("sample_rate", 1),
                     str(update.get("phase", "")),
                 )
-            elif isinstance(event, tuple) and event and event[0] == "SIMPLE_RECORD_PROGRESS":
-                _, update = event
-                frames = int(update.get("frames", 0))
-                sample_rate = max(1, int(update.get("sample_rate", 1)))
-                elapsed = frames / sample_rate
-                self.experiment_status.configure(
-                    text=(
-                        f"简单录制中：已录 {elapsed:.1f} 秒  |  "
-                        "点击“停止录制 / 测试”完成保存"
-                    )
-                )
-            elif isinstance(event, tuple) and event and event[0] == "SIMPLE_RECORD_DONE":
-                _, path, status = event
-                self._set_busy(False)
-                self._busy_kind = None
-                self._worker_thread = None
-                duration = float(status.get("duration_s", 0.0))
-                channels = int(status.get("channels", 0))
-                self.experiment_status.configure(
-                    text="简单录制已保存。可继续录下一条，或切换到 RIR / 语音增强实验。"
-                )
-                self._append(
-                    f"简单录制已保存：{path}（{channels} 通道，{duration:.2f} 秒）"
-                )
-                self.viewer.load_recording_file(path)
-                messagebox.showinfo(
-                    "录音已保存",
-                    f"{channels} 通道，{duration:.2f} 秒\n\n保存到：\n{path}",
-                )
-            elif isinstance(event, tuple) and event and event[0] == "SIMPLE_RECORD_ERROR":
-                _, path, error = event
-                self._set_busy(False)
-                self._busy_kind = None
-                self._worker_thread = None
-                self.experiment_status.configure(text="简单录制失败；请检查录制设备和通道。")
-                self._append(f"简单录制失败：{error}")
-                messagebox.showerror(
-                    "简单录制失败",
-                    f"{error}\n\n如果文件已经产生，其中可能保留了停止前的音频：\n{path}",
-                )
-            elif isinstance(event, tuple) and event and event[0] == "ACQUA_GENERATE_PROGRESS":
-                _, update = event
-                index = int(update.get("pair_index", 0))
-                count = int(update.get("pair_count", 0))
-                self.experiment_status.configure(
-                    text=f"正在生成 ACQUA 长音频：{index}/{count} 对素材"
-                )
-                if index == 1 or index == count or index % 50 == 0:
-                    self._append(
-                        f"ACQUA 长音频进度 {index}/{count}："
-                        f"{update.get('target_name', '')} + {update.get('interferer_name', '')}"
-                    )
-            elif isinstance(event, tuple) and event and event[0] == "ACQUA_GENERATE_DONE":
-                _, result = event
-                self._set_busy(False)
-                self._busy_kind = None
-                self._worker_thread = None
-                self.variables["acqua.program_file"].set(str(result["program"]))
-                status = str(result.get("status", "completed"))
-                self.experiment_status.configure(
-                    text=(
-                        "ACQUA 长音频已生成；现在让 ACQUA 播放该文件，再点击“开始 ACQUA 只录制”。"
-                        if status == "completed"
-                        else "生成已提前停止；已完整生成的素材对和映射仍然保留。"
-                    )
-                )
-                self._append(
-                    f"ACQUA 长音频生成{('完成' if status == 'completed' else '已停止')}："
-                    f"{result['program']}；映射行 {result.get('mapping_row_count', 0)}"
-                )
-                messagebox.showinfo(
-                    "ACQUA 序列已生成",
-                    f"状态：{status}\n长音频：\n{result['program']}\n\n"
-                    f"映射表：\n{Path(result['root']) / 'sequence_mapping.xlsx'}",
-                )
-            elif isinstance(event, tuple) and event and event[0] == "ACQUA_GENERATE_ERROR":
-                _, error = event
-                self._set_busy(False)
-                self._busy_kind = None
-                self._worker_thread = None
-                self.experiment_status.configure(text="ACQUA 长音频生成失败。")
-                self._append(f"ACQUA 长音频生成失败：{error}")
-                messagebox.showerror("ACQUA 生成失败", error)
-            elif isinstance(event, tuple) and event and event[0] == "ACQUA_RECORD_PROGRESS":
-                _, update, max_duration_s = event
-                frames = int(update.get("frames", 0))
-                sample_rate = max(1, int(update.get("sample_rate", 1)))
-                elapsed = frames / sample_rate
-                self.experiment_status.configure(
-                    text=(
-                        f"ACQUA 只录制：{elapsed:.1f}/{float(max_duration_s):.1f} 秒；"
-                        "可随时停止并保留前缀"
-                    )
-                )
-            elif isinstance(event, tuple) and event and event[0] == "ACQUA_RECORD_DONE":
-                _, prepared, status, manifest, stopped_early = event
-                self._set_busy(False)
-                self._busy_kind = None
-                self._worker_thread = None
-                duration = float(status.get("duration_s", 0.0))
-                self.experiment_status.configure(
-                    text="ACQUA 录制已保存；映射表已复制到录制目录，可按已录时长截取有效行。"
-                )
-                self._append(
-                    f"ACQUA 录制已保存：{prepared['output']}（{duration:.2f} 秒，"
-                    f"{'提前停止' if stopped_early else '完整录制'}）"
-                )
-                self.viewer.load_recording_file(prepared["output"])
-                messagebox.showinfo(
-                    "ACQUA 录制已保存",
-                    f"录制：\n{prepared['output']}\n\n清单：\n{manifest}",
-                )
-            elif isinstance(event, tuple) and event and event[0] == "ACQUA_RECORD_ERROR":
-                _, root, error = event
-                self._set_busy(False)
-                self._busy_kind = None
-                self._worker_thread = None
-                self.experiment_status.configure(text="ACQUA 录制失败；可能仍保留部分 WAV。")
-                self._append(f"ACQUA 录制失败：{error}")
-                messagebox.showerror(
-                    "ACQUA 录制失败", f"{error}\n\n请检查可能保留的数据：\n{root}"
-                )
-            elif isinstance(event, tuple) and event and event[0] == "CAMPAIGN_PACKAGE_PROGRESS":
-                _, update = event
-                index = int(update.get("file_index", 0))
-                count = int(update.get("file_count", 0))
-                self.experiment_status.configure(
-                    text=f"正在打包整个大实验：{index}/{count} 个文件"
-                )
-                if index == 1 or index == count or index % 25 == 0:
-                    self._append(f"大实验打包进度：{index}/{count}")
-            elif isinstance(event, tuple) and event and event[0] == "CAMPAIGN_PACKAGE_DONE":
-                _, result = event
-                self._busy_kind = None
-                self._worker_thread = None
-                self._finish_campaign_ui()
-                self.experiment_status.configure(
-                    text="大实验已结束并打成一个精简 ZIP；可开始下一次大实验。"
-                )
-                self._append(
-                    f"大实验打包完成：{result['zip']}；共 {result['run_count']} 条命名实验。"
-                )
-                messagebox.showinfo(
-                    "大实验打包完成",
-                    f"子实验数：{result['run_count']}\n压缩包：\n{result['zip']}",
-                )
-            elif isinstance(event, tuple) and event and event[0] == "CAMPAIGN_PACKAGE_CANCELLED":
-                _, error = event
-                self._set_busy(False)
-                self._busy_kind = None
-                self._worker_thread = None
-                self.experiment_status.configure(
-                    text="大实验打包已取消；大实验仍保持进行中，可再次点击结束并打包。"
-                )
-                self._append(error)
-            elif isinstance(event, tuple) and event and event[0] == "CAMPAIGN_PACKAGE_ERROR":
-                _, error = event
-                self._set_busy(False)
-                self._busy_kind = None
-                self._worker_thread = None
-                self.experiment_status.configure(
-                    text="大实验打包失败；原始实验仍完整保留，可修正后重试。"
-                )
-                self._append(f"大实验打包失败：{error}")
-                messagebox.showerror("大实验打包失败", error)
             elif isinstance(event, tuple) and event and event[0] == "RIR_PROGRESS":
                 _, path, take = event
                 self._append(f"第 {take} 次 RIR 已完成，正在刷新右侧图形：{path}")
                 self.viewer.load_run(path)
             elif isinstance(event, str) and event.startswith("__DONE__"):
                 self._set_busy(False)
-                self._busy_kind = None
                 self._worker_thread = None
                 path = event.removeprefix("__DONE__")
                 self._append(f"测试完成：{path}")
@@ -2454,21 +1743,10 @@ class CaptureGUI(tk.Tk):
                 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
                 if manifest.get("status") == "cancelled":
                     self._update_checklist_progress(
-                        "待采集", completed_run=path, last_error="用户停止；可断点续采"
+                        "待采集", completed_run=path, last_error="用户停止；可重新采集"
                     )
-                    experiment_name = str(
-                        (manifest.get("metadata") or {}).get("experiment_name") or ""
-                    )
-                    self._append(
-                        f"测试已停止，已完成的数据和断点已保存：{path}；"
-                        f"下次输入同一实验名“{experiment_name}”即可继续"
-                    )
-                    messagebox.showinfo(
-                        "测试已停止，可断点继续",
-                        f"已完成的数据和清单断点已保存到：\n{path}\n\n"
-                        f"下次点击开始，输入同一实验名“{experiment_name}”，"
-                        "再选择“是”即可从第一条未完成任务继续。",
-                    )
+                    self._append(f"测试已停止，已完成的数据已保存：{path}")
+                    messagebox.showinfo("测试已停止", f"已完成的数据已保存到：\n{path}")
                     continue
                 self._update_checklist_progress("已完成", completed_run=path)
                 warnings = manifest.get("summary", {}).get("warnings", [])
@@ -2478,7 +1756,6 @@ class CaptureGUI(tk.Tk):
                     messagebox.showinfo("测试完成", f"结果已保存到：\n{path}")
             elif isinstance(event, str) and event.startswith("__ERROR__"):
                 self._set_busy(False)
-                self._busy_kind = None
                 self._worker_thread = None
                 error = event.removeprefix("__ERROR__")
                 self._update_checklist_progress("失败", last_error=error)
@@ -2489,15 +1766,29 @@ class CaptureGUI(tk.Tk):
         self.after(100, self._poll_events)
 
     def _close(self):
-        if self._campaign_root is not None and not self._busy:
-            if not messagebox.askyesno(
-                "大实验尚未结束",
-                "当前大实验尚未执行结束打包。退出不会丢失子实验，但不会自动生成 ZIP。仍要退出吗？",
-                parent=self,
-            ):
-                return
         if self._busy:
+            self._closing = True
+            self._close_deadline = time.monotonic() + 15.0
             self.stop_capture()
+            self.title("声学采集工具 - 正在安全关闭声卡…")
+            self.after(100, self._close_when_audio_stops)
+            return
+        self.viewer.stop_audio()
+        self.destroy()
+
+    def _close_when_audio_stops(self):
+        """Do not tear down the process while an ASIO owner thread is active."""
+        worker = self._worker_thread
+        if worker is not None and worker.is_alive():
+            if time.monotonic() >= self._close_deadline:
+                # A vendor driver can hang inside its stream constructor before
+                # Python receives a stream object to close.  Do not trap the
+                # operator in an uncloseable GUI forever in that exceptional
+                # case; the capture worker is daemonized for this fallback.
+                self.destroy()
+                return
+            self.after(100, self._close_when_audio_stops)
+            return
         self.viewer.stop_audio()
         self.destroy()
 
