@@ -180,6 +180,10 @@ SUPERVISED_PAIR_KEYS = [
     "mixture_consistency_correlation_min",
     "supervision_quality_metrics",
     "shared_hardware_clock",
+    "pair_index",
+    "pairing_strategy",
+    "pairing_seed",
+    "measurement_count",
     "microphone_channels",
     "sample_rate_hz",
     "duration_s",
@@ -328,22 +332,24 @@ def write_label_files(
         writer.writeheader()
         writer.writerows(normalized)
 
-    supervised = [
+    # This is a pairing table, not a pass-only training export. Failed rows
+    # remain visible so the operator can audit them; the acceptance decision
+    # is carried by supervision_ready and quality_flag.
+    paired = [
         row
         for row in normalized
-        if row.get("supervision_ready") == "是"
-        and row.get("mixture_recording")
+        if row.get("mixture_recording")
         and row.get("target_recording")
     ]
     supervised_jsonl_path = root / "supervised_pairs.jsonl"
     with supervised_jsonl_path.open("w", encoding="utf-8") as handle:
-        for row in supervised:
+        for row in paired:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
     supervised_csv_path = root / "supervised_pairs.csv"
     with supervised_csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=[key for key, _header, _description in LABEL_COLUMNS])
         writer.writeheader()
-        writer.writerows(supervised)
+        writer.writerows(paired)
 
     xlsx_path = root / "labels.xlsx"
     _write_xlsx(xlsx_path, normalized, metadata)
