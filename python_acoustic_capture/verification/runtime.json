@@ -1,0 +1,9 @@
+{
+  "python": "3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]",
+  "numpy": "1.26.4",
+  "scipy": "1.15.3",
+  "soundfile": "0.13.1",
+  "matplotlib": "3.10.3",
+  "PyYAML": "6.0.2",
+  "pytest": "8.4.2"
+}

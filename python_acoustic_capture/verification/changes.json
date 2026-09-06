@@ -1,0 +1,205 @@
+{
+  "baseline_commit": "a29a30be2ad83388619267643711d0c7be8a44c0",
+  "files": [
+    {
+      "path": "configs/acqua_simple.yaml",
+      "change": "modified",
+      "baseline_sha256": "94eaa92512b68150eca16f79f6f595e5b3b13e8063dadac2c75b6afa2bc00569",
+      "sha256": "f29ad6447a15be400ff6f0d9233346f26b6a6883f0d6201c2b2d0fa18b6585a3"
+    },
+    {
+      "path": "configs/lab_rir_base.yaml",
+      "change": "modified",
+      "baseline_sha256": "9ee58c42fd6c16f058e0a6d3bf04dc1dd182d074772291067e1132fc48402c9f",
+      "sha256": "4adb0cda5cbbea80bc8bc72156280cee5b11150fe2ecab6f3cb480b3dfbce115"
+    },
+    {
+      "path": "configs/lab_rir_experiment_plan.yaml",
+      "change": "modified",
+      "baseline_sha256": "105c025de14c324b28e7e48aa21dafdac8a70bab9555314405c86bcd0c423c47",
+      "sha256": "44a9959f75c50af2cba183df66fdcdcdc804fda195555fa6a9e1107d99e1733f"
+    },
+    {
+      "path": "configs/lab_speech_interferer_only.yaml",
+      "change": "modified",
+      "baseline_sha256": "769d7da2a8ec790dcfa9496af02913eda577e368dd102220fae292b2d07369f6",
+      "sha256": "ba887e3a86abb9afb987c11a8e6aa7f25098de4f1261ce3cada1d291e0b41cef"
+    },
+    {
+      "path": "configs/lab_speech_supervised.yaml",
+      "change": "modified",
+      "baseline_sha256": "59e29b23c9cd24753544b8698d729346c8b17563c38f8ff370b73b5c152baf48",
+      "sha256": "376cee18e6afd3921db457b9e78a84538620bc9f9531d576993d743bbedabd2e"
+    },
+    {
+      "path": "configs/lab_speech_supervised_pair.yaml",
+      "change": "modified",
+      "baseline_sha256": "0fe1f6929d427d434ffdbdb94fe6e64415e70e2789b5300a8064a65b22c1f43b",
+      "sha256": "3c625b24ef85aea844a301e77e64dfecf6f8dd0cdfffe440864ce0bdb85de8f6"
+    },
+    {
+      "path": "configs/lab_speech_target_only.yaml",
+      "change": "modified",
+      "baseline_sha256": "df622aa2fdd4993790c0ecbcb1fcb599b397263910e9fd606527e1ee625d39b1",
+      "sha256": "09f2c674be2cc11282fae79fa521a7c2e37d8cc9c07099eeb37fcf5fc3ec3462"
+    },
+    {
+      "path": "configs/real_wearing_01.yaml",
+      "change": "modified",
+      "baseline_sha256": "0bab27444df3b77dc25e0ef05e79af487ce143f140a1b3ff8318b95091694d8c",
+      "sha256": "b09fb0c76bbfcbcb93c0454417df93b0bbcb56f9b8793b9d449e908227f8d617"
+    },
+    {
+      "path": "configs/real_wearing_02.yaml",
+      "change": "modified",
+      "baseline_sha256": "51f1ee2f03ef8b093efb5c2a3b8850bb7410f8e7ff5a588a38e9851fbddd065b",
+      "sha256": "97deb8ff8d0599ce36c22a0e8d06a7141140f9e4cba01e67c961a3995f3cf3b7"
+    },
+    {
+      "path": "configs/rme_ucx.yaml",
+      "change": "modified",
+      "baseline_sha256": "ef65da5b0ae1cbd393e3fd81955b4522fcded1d7d1c262354fbfc630d2218b7b",
+      "sha256": "847c945510b034c5ba3b67cdf15144d1e79b3e721b50f208d2954490d10bdb0b"
+    },
+    {
+      "path": "configs/simulated.yaml",
+      "change": "modified",
+      "baseline_sha256": "7ca36e4a387001da630e26867aff181b76489a01887b97ea41e963ea54018387",
+      "sha256": "e808fd3587de8ef3c0ce44a11d2b324fcc3ae59f74d34a283e669c645eb8cac8"
+    },
+    {
+      "path": "configs/simulated_batch.yaml",
+      "change": "modified",
+      "baseline_sha256": "7c63dcb8a49f3a02c73314de7db0ed20ca502da128c2a83678e8f20448486bdc",
+      "sha256": "bf197b3c09a0b573788180316773cdeb24480f0e97e6cc4ea3317c6d434f6cf2"
+    },
+    {
+      "path": "pyproject.toml",
+      "change": "modified",
+      "baseline_sha256": "5e3562b45e4cb583040a3614fc71c63ac54c124c8645cd1a381342f3a9db5f39",
+      "sha256": "88a5c74c82b8fd6d392c2e76091f101945d810084b8e85f62227c2d4a038802f"
+    },
+    {
+      "path": "README.md",
+      "change": "modified",
+      "baseline_sha256": "0e7a1cd5afa53633df6e01a5f3908b8f59735add7a6c6981f29ede8cf1a48565",
+      "sha256": "b861c0fa64172e8e65aaf3d87dd088f0163a13c01e0fcc5f5e27aa8c3c808cfa"
+    },
+    {
+      "path": "REFACTOR_NOTES.md",
+      "change": "added",
+      "baseline_sha256": null,
+      "sha256": "a46bb118495f20981e4d25a24d23367581ab926874e7f71ae50fe388291baa4c"
+    },
+    {
+      "path": "src/acoustic_capture/__init__.py",
+      "change": "modified",
+      "baseline_sha256": "96516786ced5feb214be2b918d6fab2f7b8b0708cd352b5cbe78c90a55e39f94",
+      "sha256": "533d997fcd87559640068d9c79bcba298f2c90f2235b72f90c400ad7592ecc81"
+    },
+    {
+      "path": "src/acoustic_capture/audio.py",
+      "change": "modified",
+      "baseline_sha256": "9c3a598c353fa6941522ce9904975841e4ad9fdcd5219e205286ff60fe1061cf",
+      "sha256": "ec61c1d185186c84bed872b59649431f574118195f08eac082005b96eb482927"
+    },
+    {
+      "path": "src/acoustic_capture/config.py",
+      "change": "modified",
+      "baseline_sha256": "d1f53c6202c50445d18343d48ba626b5597fc3ec8892e4fe383cd8dddf4e4c44",
+      "sha256": "ca33baac26380cf8f569ed038c9e2261ba41b56332cfe25cb89fab9da66b2309"
+    },
+    {
+      "path": "src/acoustic_capture/deconvolution.py",
+      "change": "added",
+      "baseline_sha256": null,
+      "sha256": "64f82e9882b88e8d2edb9e1f6056ad6a094a600abb329ab7b756f32f11b62915"
+    },
+    {
+      "path": "src/acoustic_capture/gui.py",
+      "change": "modified",
+      "baseline_sha256": "c7fb8573a2170b3d22f5bb50c9112adbeb5e080dcdf78f3f3e2f69faf7f86039",
+      "sha256": "3d19fc2503b1a11e176b2753cbbe27915128501eeff5d82484aa1fe94e6cf62d"
+    },
+    {
+      "path": "src/acoustic_capture/rir.py",
+      "change": "modified",
+      "baseline_sha256": "558320e9acbc83e5bd61f4b93588c39390cce30603b07d206a52265668f427ef",
+      "sha256": "1c6b7a3ea66157cba0f622d0b1a09b5a656af3a33904a3a500fd673aaed95137"
+    },
+    {
+      "path": "src/acoustic_capture/rir_quality.py",
+      "change": "added",
+      "baseline_sha256": null,
+      "sha256": "01207665b020d9855f5f233ccdd5e513a05104906835dd2ffe96a8fb2c90917c"
+    },
+    {
+      "path": "src/acoustic_capture/storage.py",
+      "change": "modified",
+      "baseline_sha256": "c5de6abf02dd7c3128b647939b785cd17b9cd8194bce14186d25f2da9befc86f",
+      "sha256": "65a66a853506d8986e638c3bade227867fb2ebd9dba9eca378a3d85127a95af0"
+    },
+    {
+      "path": "src/acoustic_capture/timing.py",
+      "change": "added",
+      "baseline_sha256": null,
+      "sha256": "4470fd49063f2a4afd76bafaec59b320a1c01aec5214bd12752a23dd42bc3a0e"
+    },
+    {
+      "path": "src/acoustic_capture/viewer.py",
+      "change": "modified",
+      "baseline_sha256": "77ceecb1de2d92115d3dd3f36ee49fc0ca8f5a306d90b8040bc5735e4fc6a486",
+      "sha256": "bfce889d80010088b8a580f93bb90229146a786b20ff3f1b5e6a08485b3c866b"
+    },
+    {
+      "path": "tests/test_capture_regressions.py",
+      "change": "added",
+      "baseline_sha256": null,
+      "sha256": "12e1f796f61f0363c3a224a30b22775e1f9bbde8b134b0b983d5d50db3da77d8"
+    },
+    {
+      "path": "tests/test_experiment.py",
+      "change": "modified",
+      "baseline_sha256": "c989d361c5d78856229a129f487d4c840791ee5431911cc6db6244adec38ca58",
+      "sha256": "f0802831f978940d083d8a9f9c75f235a90ba3a1b12804bf8e85d6bfe161b9e7"
+    },
+    {
+      "path": "tests/test_gui_workflows.py",
+      "change": "modified",
+      "baseline_sha256": "cdd5add667d43204b821d7c1364c3114caff4a0e2e92576eb73cf3d98e41f5cb",
+      "sha256": "1b0e123de69c1f680f6905fc5f165dcca49a7b14c50d7c940aaa5f479c3f08f8"
+    },
+    {
+      "path": "tests/test_rir_pipeline_regressions.py",
+      "change": "added",
+      "baseline_sha256": null,
+      "sha256": "c55dabe9a19b19598c6af4412ad78f7d84a7615f478a93bab10e86b159421320"
+    },
+    {
+      "path": "tests/test_timing_regressions.py",
+      "change": "added",
+      "baseline_sha256": null,
+      "sha256": "cae4a779318a17a2c956e7e879f10434ee0cf3687c383b553a57a861c62076e3"
+    },
+    {
+      "path": "tests/test_workflows.py",
+      "change": "modified",
+      "baseline_sha256": "1111291f3a6c4f62057d80bb5478773ec72f824f9f8ba404ad2b2ac1e339f3ff",
+      "sha256": "a21b13a5ce32016fc963a529d7ea1b7f0fa9b3d5c38fba8bdb6b8a7313e915f4"
+    }
+  ],
+  "excluded_from_archive": [
+    "*.egg-info",
+    "*.pyc",
+    ".git",
+    ".pytest_cache",
+    ".python-selection.json",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "portable_release",
+    "runs",
+    "verification_10_pairs"
+  ]
+}

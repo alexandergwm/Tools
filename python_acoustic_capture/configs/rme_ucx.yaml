@@ -15,7 +15,7 @@ audio:
   dtype: float32
 general:
   action: play_record
-  source_file: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\source.wav
+  source_file: ../audio/source.wav
   duration_s: 5.0
   level_dbfs: -30.0
   output_channel: 1
@@ -31,15 +31,15 @@ sweep:
   rir_duration_s: 2.0
   pre_peak_s: 0.01
 repeats:
-  minimum: 5
-  maximum: 10
   correlation_threshold: 0.9
   peak_drift_samples: 2
   minimum_sweep_snr_db: 6.0
-  required_stable_takes: 3
   reject_clipped: true
   clip_threshold: 0.999
   pause_s: 1.0
+  fixed_count: 5
+  strategy: reconstruct_average
+  reconstruction_policy: diagnostic
 scene:
   items:
   - target_only
@@ -47,12 +47,10 @@ scene:
   source_mode: folders
   duration_s: 4.0
   ambient_duration_s: 10.0
-  target_file: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\target.wav
-  interferer_file: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\interferer.wav
-  target_folder: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\targets
-  interferer_folder: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\interferers
-  measurement_count: 10
-  pairing_seed: 0
+  target_file: ../audio/target.wav
+  interferer_file: ../audio/interferer.wav
+  target_folder: ../audio/targets
+  interferer_folder: ../audio/interferers
   file_extensions:
   - .wav
   - .flac
@@ -65,8 +63,9 @@ scene:
   require_supervised_pair: true
   countdown_s: 3.0
   gap_s: 1.0
+  measurement_count: 10
 storage:
-  root: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\runs
+  root: ../runs
   session_name: manual_name_entered_in_gui
   wav_subtype: FLOAT
   save_playback_reference: true

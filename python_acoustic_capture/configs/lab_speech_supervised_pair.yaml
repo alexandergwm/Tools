@@ -2,35 +2,33 @@ audio:
   backend: sounddevice
   host_api: ASIO
   device: null
-  # 正式采集：输入和两路输出都选同一个 RME ASIO 双工设备。
   input_device: ASIO Fireface USB
   output_device: ASIO Fireface USB
   sample_rate: 48000
   block_size: 0
-  input_channels: [1, 2]
-  # 通道 1 接人工嘴；通道 2 接干扰扬声器。mixed 时两路同时发声。
+  input_channels:
+  - 1
+  - 2
   target_output_channel: 1
   interferer_output_channel: 2
   latency: high
   dtype: float32
-
 scene:
-  # 默认严格监督方案：同一连续流内 target_only -> interferer_only -> mixture。
-  # 纯干扰既参与现场一致性检查，也可用于回到服务器后离线混合。
-  items: [target_only, interferer_only, mixture]
+  items:
+  - target_only
+  - interferer_only
+  - mixture
   source_mode: folders
   duration_s: 4.0
-  target_file: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\target.wav
-  interferer_file: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\interferer.wav
-  target_folder: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\targets
-  interferer_folder: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\interferers
-  # 可选 CSV：relative_path,speaker_id,utterance_id
+  target_file: ../audio/target.wav
+  interferer_file: ../audio/interferer.wav
+  target_folder: ../audio/targets
+  interferer_folder: ../audio/interferers
   target_index_csv: ''
-  # 可选 CSV：relative_path,noise_id,noise_class
   interferer_index_csv: ''
-  measurement_count: 10
-  pairing_seed: 0
-  file_extensions: [.wav, .flac]
+  file_extensions:
+  - .wav
+  - .flac
   label_prefix: speech_pair
   dataset_split: train
   target_level_dbfs: -26.0
@@ -40,14 +38,13 @@ scene:
   require_supervised_pair: true
   countdown_s: 3.0
   gap_s: 1.0
-
+  measurement_count: 10
 storage:
-  root: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\runs
+  root: ../runs
   session_name: target_interferer_mixed_triplet
   wav_subtype: FLOAT
   save_playback_reference: true
   compute_sha256: true
-
 metadata:
   capture_profile: standard
   task_type: neural_beamforming_and_speech_enhancement
@@ -68,7 +65,7 @@ metadata:
     position_id: mouth_fixed
     azimuth_deg: 0
     elevation_deg: 0
-    height_m: 1.40
+    height_m: 1.4
     distance_m: 0.05
   interferer:
     active: true
@@ -76,5 +73,5 @@ metadata:
     position_id: int090_h170_d100
     azimuth_deg: 90
     elevation_deg: 0
-    height_m: 1.70
-    distance_m: 1.00
+    height_m: 1.7
+    distance_m: 1.0

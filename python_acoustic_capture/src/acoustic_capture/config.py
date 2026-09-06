@@ -7,6 +7,7 @@ the configuration rules remain easy to read and modify.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+import math
 from pathlib import Path
 from typing import Any
 
@@ -56,7 +57,7 @@ class SweepConfig:
 class RepeatConfig:
     strategy: str = "reconstruct_average"  # reconstruct_average | fixed_count
     fixed_count: int = 5
-    correlation_threshold: float = 0.98
+    correlation_threshold: float = 0.90
     peak_drift_samples: int = 2
     minimum_sweep_snr_db: float = 6.0
     reject_clipped: bool = True
@@ -66,6 +67,9 @@ class RepeatConfig:
     delay_high_hz: float = 1_000.0
     delay_max_ms: float = 3.0
     delay_agreement_samples: float = 2.0
+    reconstruction_policy: str = "diagnostic"  # diagnostic | full_response
+    minimum_reconstruction_correlation: float = 0.90
+    maximum_reconstruction_nmse_db: float = -10.0
 
 
 @dataclass
@@ -135,6 +139,8 @@ class ExperimentConfig:
 
     def validate(self) -> None:
         a, s, r = self.audio, self.sweep, self.repeats
+        if a.dtype != "float32":
+            raise ValueError("audio.dtype must be float32 (normalized audio samples)")
         if not a.input_channels:
             raise ValueError("audio.input_channels must contain at least one microphone channel")
         if len(set(a.input_channels)) != len(a.input_channels):
@@ -181,8 +187,19 @@ class ExperimentConfig:
             raise ValueError("repeats.pause_s must be non-negative")
         if not 0 < r.delay_low_hz < r.delay_high_hz < a.sample_rate / 2:
             raise ValueError("RIR delay frequency band must be within Nyquist")
-        if r.delay_max_ms <= 0 or r.delay_agreement_samples < 0:
+        if (
+            not math.isfinite(r.delay_max_ms)
+            or not math.isfinite(r.delay_agreement_samples)
+            or r.delay_max_ms <= 0
+            or r.delay_agreement_samples < 0
+        ):
             raise ValueError("RIR delay limits must be positive")
+        if r.reconstruction_policy not in {"diagnostic", "full_response"}:
+            raise ValueError("reconstruction_policy must be diagnostic or full_response")
+        if not 0 <= r.minimum_reconstruction_correlation <= 1:
+            raise ValueError("minimum_reconstruction_correlation must be between 0 and 1")
+        if not math.isfinite(r.maximum_reconstruction_nmse_db):
+            raise ValueError("maximum_reconstruction_nmse_db must be finite")
         q = self.acqua
         if q.segment_duration_s <= 0 or q.gap_s < 0 or q.recording_margin_s < 0:
             raise ValueError("ACQUA segment/gap/margin durations are invalid")
@@ -246,8 +263,8 @@ def load_config(path: str | Path) -> ExperimentConfig:
     sweep_values = dict(raw.get("sweep") or {})
     repeat_values = dict(raw.get("repeats") or {})
     scene_values = dict(raw.get("scene") or {})
-    # Older releases exposed cycle/cartesian.  Folder pairing is now always
-    # bounded and seed-deterministic; silently migrate those YAML files.
+    # Older releases exposed cycle/cartesian. Folder pairing is now bounded by
+    # measurement_count and deterministically randomized by pairing_seed.
     scene_values.pop("pairing_mode", None)
     for legacy_field in (
         "minimum",

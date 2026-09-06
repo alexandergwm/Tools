@@ -1,19 +1,18 @@
-# 实验室 RIR 基础配置。不要在这里填写某一次佩戴/声源角度/高度；
-# 每个独立实验由 lab_rir_experiment_plan.yaml 展开后写入 metadata。
 audio:
   backend: sounddevice
   host_api: ASIO
   device: null
-  input_device: "ASIO Fireface USB"
-  output_device: "ASIO Fireface USB"
+  input_device: ASIO Fireface USB
+  output_device: ASIO Fireface USB
   sample_rate: 48000
   block_size: 0
-  input_channels: [1, 2]
+  input_channels:
+  - 1
+  - 2
   target_output_channel: 1
   interferer_output_channel: 2
   latency: high
   dtype: float32
-
 sweep:
   start_hz: 40
   end_hz: 22000
@@ -25,26 +24,22 @@ sweep:
   level_dbfs: -20
   rir_duration_s: 2
   pre_peak_s: 0.01
-
 repeats:
-  # 默认严格录制 fixed_count 次，逐次做 ESS 回卷重构质检，并平均全部有效 take。
-  # 改为 fixed_count 时仍生成参考均值，但标记为之后从原始 take 离线重选。
   strategy: reconstruct_average
   fixed_count: 5
-  correlation_threshold: 0.90
+  correlation_threshold: 0.9
   peak_drift_samples: 2
   minimum_sweep_snr_db: 6.0
   reject_clipped: true
   clip_threshold: 0.999
   pause_s: 1
-
+  reconstruction_policy: diagnostic
 storage:
   root: ../runs
   session_name: generated_by_experiment_plan
   wav_subtype: FLOAT
   save_playback_reference: true
   compute_sha256: true
-
 metadata:
   capture_profile: standard
   task_type: rir_for_neural_beamforming
@@ -58,8 +53,18 @@ metadata:
     reference_channel: 1
     geometry_required: false
     channels:
-      - {recording_channel: 1, microphone_id: left, x_m: null, y_m: null, z_m: null, polarity: 1}
-      - {recording_channel: 2, microphone_id: right, x_m: null, y_m: null, z_m: null, polarity: 1}
+    - recording_channel: 1
+      microphone_id: left
+      x_m: null
+      y_m: null
+      z_m: null
+      polarity: 1
+    - recording_channel: 2
+      microphone_id: right
+      x_m: null
+      y_m: null
+      z_m: null
+      polarity: 1
   capture_mode: real_rme_asio
   rme_input_gain_ch1_db: null
   rme_input_gain_ch2_db: null

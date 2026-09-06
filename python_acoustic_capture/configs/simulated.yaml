@@ -15,7 +15,7 @@ audio:
   dtype: float32
 general:
   action: play_record
-  source_file: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\source.wav
+  source_file: ../audio/source.wav
   duration_s: 1.0
   level_dbfs: -24.0
   output_channel: 1
@@ -31,14 +31,14 @@ sweep:
   rir_duration_s: 0.5
   pre_peak_s: 0.01
 repeats:
-  minimum: 2
-  maximum: 4
   correlation_threshold: 0.95
   peak_drift_samples: 2
-  required_stable_takes: 1
   reject_clipped: true
   clip_threshold: 0.999
   pause_s: 0
+  fixed_count: 5
+  strategy: reconstruct_average
+  reconstruction_policy: diagnostic
 scene:
   items:
   - ambient
@@ -48,10 +48,10 @@ scene:
   source_mode: single
   duration_s: 1.0
   ambient_duration_s: 1.0
-  target_file: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\target.wav
-  interferer_file: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\interferer.wav
-  target_folder: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\targets
-  interferer_folder: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\interferers
+  target_file: ../audio/target.wav
+  interferer_file: ../audio/interferer.wav
+  target_folder: ../audio/targets
+  interferer_folder: ../audio/interferers
   pairing_seed: 0
   file_extensions:
   - .wav
@@ -65,8 +65,9 @@ scene:
   require_supervised_pair: true
   countdown_s: 0.0
   gap_s: 0.0
+  measurement_count: 10
 storage:
-  root: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\runs
+  root: ../runs
   session_name: simulated_demo
   wav_subtype: FLOAT
   save_playback_reference: true

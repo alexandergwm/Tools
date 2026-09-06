@@ -2,16 +2,17 @@ audio:
   backend: sounddevice
   host_api: ASIO
   device: null
-  input_device: "ASIO Fireface USB"
-  output_device: "ASIO Fireface USB"
+  input_device: ASIO Fireface USB
+  output_device: ASIO Fireface USB
   sample_rate: 48000
   block_size: 0
-  input_channels: [1, 2]
+  input_channels:
+  - 1
+  - 2
   target_output_channel: 1
   interferer_output_channel: 2
   latency: high
   dtype: float32
-
 sweep:
   start_hz: 40
   end_hz: 22000
@@ -23,21 +24,22 @@ sweep:
   level_dbfs: -20
   rir_duration_s: 2
   pre_peak_s: 0.01
-
 repeats:
-  minimum: 5
-  # 最多允许 10 次尝试，直到得到 5 次通过质检的有效 RIR。
-  maximum: 10
-  correlation_threshold: 0.90
+  correlation_threshold: 0.9
   peak_drift_samples: 2
   minimum_sweep_snr_db: 6.0
-  required_stable_takes: 3
   reject_clipped: true
   clip_threshold: 0.999
   pause_s: 1
-
+  fixed_count: 5
+  strategy: reconstruct_average
+  reconstruction_policy: diagnostic
 scene:
-  items: [ambient, target_only, interferer_only, mixture]
+  items:
+  - ambient
+  - target_only
+  - interferer_only
+  - mixture
   source_mode: single
   duration_s: 2.0
   ambient_duration_s: 5
@@ -50,14 +52,13 @@ scene:
   require_supervised_pair: true
   countdown_s: 3
   gap_s: 1
-
+  measurement_count: 10
 storage:
   root: ../runs
   session_name: real_wearing_02
   wav_subtype: FLOAT
   save_playback_reference: true
   compute_sha256: true
-
 metadata:
   wearing_id: wearing_02
   microphone_1: channel_1

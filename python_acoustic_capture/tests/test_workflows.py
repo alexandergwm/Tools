@@ -10,7 +10,7 @@ from acoustic_capture.audio import CaptureResult, SimulatedBackend
 from acoustic_capture.check import capture_input_check, capture_silent_duplex_check
 from acoustic_capture.config import ExperimentConfig, load_config
 from acoustic_capture.general import capture_general_io
-from acoustic_capture.rir import capture_rir, rir_delay_acceptance
+from acoustic_capture.rir import capture_rir
 from acoustic_capture.scene import (
     PAIRING_STRATEGY,
     _safe_label,
@@ -18,7 +18,6 @@ from acoustic_capture.scene import (
     build_paired_sequence,
     capture_scene_block,
     discover_source_pairs,
-    estimate_scene_duration,
 )
 from acoustic_capture.labels import import_reviewed_labels
 from acoustic_capture.speech_dataset import compile_speech_dataset
@@ -61,9 +60,6 @@ def test_rir_end_to_end(tmp_path: Path):
     cfg.sweep.post_silence_s = 0.1
     cfg.sweep.rir_duration_s = 0.1
     cfg.repeats.fixed_count = 5
-    cfg.repeats.minimum = 5
-    cfg.repeats.maximum = 10
-    cfg.repeats.required_stable_takes = 1
     cfg.repeats.correlation_threshold = 0.9
     cfg.repeats.pause_s = 0
     cfg.storage.root = str(tmp_path)
@@ -91,6 +87,12 @@ def test_rir_end_to_end(tmp_path: Path):
         "all_accepted_aligned_mean"
     )
     assert store.manifest["summary"]["selected_take_ids"] == [1, 2, 3, 4, 5]
+    assert store.manifest["summary"]["quality"]["status"] == "pass"
+    timing = store.manifest["summary"]["average_rir_timing"]
+    assert np.isclose(
+        timing["per_channel"][1]["gcc_phat_delay_samples"], 7.0, atol=0.2
+    )
+    assert timing["per_channel"][1]["estimators_agree_within_one_sample"] is True
     accepted_rirs = np.stack(
         [
             sf.read(
@@ -118,28 +120,54 @@ def test_rir_end_to_end(tmp_path: Path):
                 )
             )
             for take in range(1, 6)
-        ]
+            ]
     )
+
+
+def test_rir_repeat_consensus_is_not_anchored_to_a_bad_first_take(tmp_path: Path):
+    class BadFirstMicrophoneDelayBackend(SimulatedBackend):
+        def __init__(self, config):
+            super().__init__(config)
+            self.take = 0
+
+        def play_record(self, output: np.ndarray) -> CaptureResult:
+            self.take += 1
+            result = super().play_record(output)
+            if self.take == 1:
+                shifted = np.zeros_like(result.microphones[:, 1])
+                shifted[23:] = result.microphones[:-23, 1]
+                result.microphones[:, 1] = shifted
+            return result
+
+    cfg = ExperimentConfig()
+    cfg.audio.backend = "simulated"
+    cfg.sweep.duration_s = 0.2
+    cfg.sweep.pre_silence_s = 0.05
+    cfg.sweep.post_silence_s = 0.1
+    cfg.sweep.rir_duration_s = 0.08
+    cfg.repeats.fixed_count = 5
+    cfg.repeats.correlation_threshold = 0.9
+    cfg.repeats.pause_s = 0
+    cfg.storage.root = str(tmp_path)
+    cfg.storage.compute_sha256 = False
+
+    store = capture_rir(
+        cfg,
+        BadFirstMicrophoneDelayBackend(cfg.audio),
+        log=lambda _: None,
+    )
+    summary = store.manifest["summary"]
+
+    assert summary["repeat_consensus"]["reference_take"] != 1
+    assert summary["accepted_takes"] == [2, 3, 4, 5]
+    assert summary["rejected_takes"] == [1]
+    bad_metrics = json.loads(
+        store.path("metrics/take_001.json").read_text(encoding="utf-8")
+    )
+    assert bad_metrics["accepted_by_recording_qc"] is True
+    assert bad_metrics["repeat_consistency_pass"] is False
+    assert "早期脉冲响应与重复测量共识不一致" in bad_metrics["rejection_reasons"]
     assert store.manifest["status"] == "completed"
-    delay_acceptance = store.manifest["summary"]["two_channel_delay_acceptance"]
-    assert delay_acceptance["applicable"] is True
-    assert "gcc_phat_delay_samples" in delay_acceptance
-    assert "low_frequency_group_delay_samples" in delay_acceptance
-
-
-def test_two_channel_rir_delay_algorithms_agree():
-    fs = 48_000
-    first = np.zeros(4096, dtype=np.float32)
-    first[150] = 1.0
-    first[310] = 0.2
-    second = np.zeros_like(first)
-    second[7:] = first[:-7]
-
-    result = rir_delay_acceptance(np.column_stack((first, second)), fs)
-
-    assert result["passed"] is True
-    assert abs(result["gcc_phat_delay_samples"] - 7) < 0.1
-    assert abs(result["low_frequency_group_delay_samples"] - 7) < 0.25
 
 
 def test_legacy_adaptive_rir_config_migrates_to_reconstruct_average(tmp_path: Path):
@@ -163,9 +191,6 @@ def test_rir_stop_keeps_completed_takes_as_a_partial_average(tmp_path: Path):
     cfg.sweep.post_silence_s = 0.05
     cfg.sweep.rir_duration_s = 0.05
     cfg.repeats.fixed_count = 4
-    cfg.repeats.minimum = 2
-    cfg.repeats.maximum = 4
-    cfg.repeats.required_stable_takes = 2
     cfg.repeats.pause_s = 0
     cfg.storage.root = str(tmp_path)
     cfg.storage.compute_sha256 = False
@@ -211,9 +236,6 @@ def test_rir_fixed_count_records_exact_attempts_and_defers_selection(tmp_path: P
     cfg.repeats.fixed_count = 3
     # Raw-selection mode still records the exact requested number and keeps a
     # reference mean without choosing a best-single take.
-    cfg.repeats.minimum = 5
-    cfg.repeats.maximum = 8
-    cfg.repeats.required_stable_takes = 1
     cfg.repeats.pause_s = 0
     cfg.storage.root = str(tmp_path)
     cfg.storage.compute_sha256 = False
@@ -245,9 +267,6 @@ def test_rir_supports_more_than_two_microphones(tmp_path: Path):
     cfg.sweep.post_silence_s = 0.1
     cfg.sweep.rir_duration_s = 0.08
     cfg.repeats.fixed_count = 2
-    cfg.repeats.minimum = 2
-    cfg.repeats.maximum = 2
-    cfg.repeats.required_stable_takes = 1
     cfg.repeats.correlation_threshold = 0.85
     cfg.repeats.pause_s = 0
     cfg.storage.root = str(tmp_path)
@@ -277,9 +296,6 @@ def test_rir_rejects_take_with_audio_xrun(tmp_path: Path):
     cfg.sweep.post_silence_s = 0.1
     cfg.sweep.rir_duration_s = 0.08
     cfg.repeats.fixed_count = 3
-    cfg.repeats.minimum = 2
-    cfg.repeats.maximum = 3
-    cfg.repeats.required_stable_takes = 1
     cfg.repeats.correlation_threshold = 0.85
     cfg.repeats.pause_s = 0
     cfg.storage.root = str(tmp_path)
@@ -300,12 +316,11 @@ def test_rir_rejects_silent_microphones_instead_of_averaging_zero_ir(tmp_path: P
     cfg = ExperimentConfig()
     cfg.audio.backend = "simulated"
     cfg.sweep.duration_s = 0.05
+    cfg.sweep.fade_in_s = 0.01
     cfg.sweep.pre_silence_s = 0.02
     cfg.sweep.post_silence_s = 0.03
     cfg.sweep.rir_duration_s = 0.03
     cfg.repeats.fixed_count = 1
-    cfg.repeats.minimum = 1
-    cfg.repeats.maximum = 1
     cfg.repeats.pause_s = 0
     cfg.storage.root = str(tmp_path)
     cfg.storage.compute_sha256 = False
@@ -554,6 +569,7 @@ def test_source_indexes_and_reviewed_excel_feed_training_labels(tmp_path: Path):
     cfg.audio.backend = "simulated"
     cfg.audio.sample_rate = fs
     cfg.scene.source_mode = "folders"
+    cfg.scene.measurement_count = 3
     cfg.scene.target_folder = str(target_folder)
     cfg.scene.interferer_folder = str(interferer_folder)
     cfg.scene.target_index_csv = str(target_index)
@@ -656,7 +672,7 @@ def test_pure_target_and_pure_interferer_scenes_are_supported(tmp_path: Path):
         assert row["supervision_ready"] == "否"
 
 
-def test_folder_scene_batch_cycles_files_and_writes_labels(tmp_path: Path):
+def test_folder_scene_batch_uses_seeded_plan_and_writes_labels(tmp_path: Path):
     fs = 16_000
     target_folder = tmp_path / "targets"
     interferer_folder = tmp_path / "interferers"
@@ -723,7 +739,6 @@ def test_folder_sources_are_hashed_lazily_per_captured_pair(tmp_path: Path, monk
     cfg.scene.target_folder = str(target_folder)
     cfg.scene.interferer_folder = str(interferer_folder)
     cfg.scene.items = ["target_only", "mixture"]
-    cfg.scene.measurement_count = 4
     cfg.scene.duration_s = 0.01
     cfg.scene.countdown_s = 0
     cfg.scene.gap_s = 0
@@ -748,58 +763,36 @@ def test_folder_sources_are_hashed_lazily_per_captured_pair(tmp_path: Path, monk
     assert len(calls) == 2
 
 
-def test_seeded_pairing_is_linear_reproducible_and_changes_with_seed(tmp_path: Path, monkeypatch):
+def test_large_folder_pairing_is_bounded_and_reproducible(tmp_path: Path, monkeypatch):
     cfg = ExperimentConfig().scene
     cfg.source_mode = "folders"
+    cfg.measurement_count = 7
+    cfg.pairing_seed = 123
     cfg.target_folder = str(tmp_path / "targets")
     cfg.interferer_folder = str(tmp_path / "interferers")
-    cfg.measurement_count = 137
-    fake_targets = [tmp_path / f"t{index}.wav" for index in range(2_000)]
-    fake_interferers = [tmp_path / f"n{index}.wav" for index in range(2_000)]
+    fake_targets = [Path(cfg.target_folder) / f"t{index}.wav" for index in range(2_000)]
+    fake_interferers = [Path(cfg.interferer_folder) / f"n{index}.wav" for index in range(2_000)]
+    scans = {
+        Path(cfg.target_folder): fake_targets,
+        Path(cfg.interferer_folder): fake_interferers,
+    }
+    monkeypatch.setattr(
+        "acoustic_capture.scene._scan_audio_folder", lambda root, *_: scans[root]
+    )
 
-    def plan(seed: int):
-        cfg.pairing_seed = seed
-        scans = iter((fake_targets, fake_interferers))
-        monkeypatch.setattr(
-            "acoustic_capture.scene._scan_audio_folder", lambda *_: next(scans)
-        )
-        return discover_source_pairs(cfg)
+    pairs = discover_source_pairs(cfg)
+    assert len(pairs) == cfg.measurement_count
+    assert discover_source_pairs(cfg) == pairs
+    assert len({pair.target for pair in pairs}) == cfg.measurement_count
+    assert len({pair.interferer for pair in pairs}) == cfg.measurement_count
+    assert all(pair.target in fake_targets and pair.interferer in fake_interferers for pair in pairs)
 
-    first = plan(17)
-    repeated = plan(17)
-    changed = plan(18)
-    assert len(first) == 137
-    assert len({pair.target for pair in first}) == 137
-    assert [pair.target for pair in first] == [
-        pair.target for pair in repeated
-    ]
-    assert [pair.target for pair in first] != [
-        pair.target for pair in changed
-    ]
-    assert [pair.interferer for pair in first] == [
-        pair.interferer for pair in repeated
-    ]
-    assert [pair.interferer for pair in first] != [
-        pair.interferer for pair in changed
-    ]
-
-
-def test_scene_duration_estimate_uses_measurement_count_and_sequence_gaps():
-    scene = ExperimentConfig().scene
-    scene.source_mode = "folders"
-    scene.measurement_count = 25
-    scene.items = ["target_only", "interferer_only", "mixture"]
-    scene.duration_s = 4.0
-    scene.countdown_s = 3.0
-    scene.gap_s = 1.0
-    scene.repetitions = 1
-
-    estimate = estimate_scene_duration(scene)
-
-    assert estimate.task_count == 25
-    assert estimate.per_task_s == pytest.approx(19.0)
-    assert estimate.total_s == pytest.approx(475.0)
-
+    # Folder enumeration order must not change a saved seed's source plan.
+    scans[Path(cfg.target_folder)] = fake_targets[::-1]
+    scans[Path(cfg.interferer_folder)] = fake_interferers[::-1]
+    assert discover_source_pairs(cfg) == pairs
+    cfg.pairing_seed += 1
+    assert discover_source_pairs(cfg) != pairs
 
 def test_speech_dataset_packages_multichannel_pairs_and_flattened_labels(tmp_path: Path):
     fs = 16_000
@@ -952,3 +945,6 @@ def test_silent_duplex_check_reports_audio_xrun(tmp_path: Path):
     cfg.storage.compute_sha256 = False
     store = capture_silent_duplex_check(cfg, XrunBackend(cfg.audio), duration_s=0.01)
     assert store.manifest["summary"]["warnings"]
+
+
+

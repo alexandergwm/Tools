@@ -16,6 +16,13 @@ from acoustic_capture.checklist import create_checklist
 import acoustic_capture.gui as gui_module
 from acoustic_capture.gui import CaptureGUI
 from acoustic_capture.config import ExperimentConfig
+from acoustic_capture.demo import generate_demo_audio
+
+
+def _descendants(widget):
+    for child in widget.winfo_children():
+        yield child
+        yield from _descendants(child)
 
 
 def _descendants(widget):
@@ -58,6 +65,12 @@ def _wait_for_run(app: CaptureGUI, root: Path, kind: str, timeout_s: float = 15.
 def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
     project = Path(__file__).resolve().parents[1]
     config = load_config(project / "configs" / "simulated.yaml")
+    files = generate_demo_audio(tmp_path / "audio", config.audio.sample_rate, 0.05)
+    config.general.source_file = str(files["source"])
+    config.scene.target_file = str(files["target"])
+    config.scene.interferer_file = str(files["interferer"])
+    config.scene.target_folder = str(files["target_folder_1"].parent)
+    config.scene.interferer_folder = str(files["interferer_folder_1"].parent)
     config.audio.input_device = None
     config.audio.output_device = None
     config.storage.root = str(tmp_path / "runs")
@@ -68,9 +81,6 @@ def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
     config.sweep.post_silence_s = 0.05
     config.sweep.rir_duration_s = 0.05
     config.repeats.fixed_count = 2
-    config.repeats.minimum = 2
-    config.repeats.maximum = 2
-    config.repeats.required_stable_takes = 1
     config.repeats.pause_s = 0
     config.scene.duration_s = 0.05
     config.scene.ambient_duration_s = 0.05
@@ -124,14 +134,7 @@ def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
         "showerror",
         lambda title, message: dialogs.append((str(title), str(message))),
     )
-    experiment_names = iter(
-        (
-            "gui_simple_recording",
-            "gui_basic_io",
-            "gui_rir_az090",
-            "gui_speech_scene01",
-        )
-    )
+    experiment_names = iter(("gui_basic_io", "gui_rir_az090", "gui_speech_scene01"))
     monkeypatch.setattr(
         gui_module.simpledialog,
         "askstring",
@@ -146,8 +149,10 @@ def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
         assert app.mode_var.get() == "rir"
         assert not app.advanced_var.get()
         assert app.variables["repeats.strategy"].get().startswith("固定次数 + 重构质检")
-        assert app.field_rows["repeats.strategy"][1].winfo_manager() == "grid"
+        assert app.field_rows["repeats.strategy"][1].winfo_manager() == ""
         assert app.field_rows["repeats.fixed_count"][1].winfo_manager() == "grid"
+        assert tuple(app.audio_preset_box.cget("values")) == gui_module.CORE_AUDIO_PRESETS
+        assert app.viewer.result_controls.winfo_manager() == ""
         app.variables["repeats.strategy"].set(
             gui_module.RIR_STRATEGY_TO_LABEL["fixed_count"]
         )
@@ -209,24 +214,13 @@ def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
         assert "干扰源输出通道" in str(
             app.field_rows["audio.interferer_output_channel"][0].cget("text")
         )
-        app.variables["scene.source_mode"].set(
-            gui_module.SOURCE_MODE_TO_LABEL["folders"]
-        )
-        app.variables["scene.measurement_count"].set("12")
-        app._set_mode()
-        assert app.field_rows["scene.measurement_count"][1].winfo_manager() == "grid"
-        assert app.field_rows["scene.repetitions"][1].winfo_manager() == ""
-        assert app.field_rows["scene.duration_s"][1].winfo_manager() == ""
-        assert "计划 12 次测量" in app.scene_estimate_var.get()
-        app.variables["scene.source_mode"].set(
-            gui_module.SOURCE_MODE_TO_LABEL["single"]
-        )
-        app._set_mode()
         app.mode_var.set("rir")
         app._set_mode()
         app.advanced_var.set(True)
         app._set_mode()
         assert app.field_rows["sweep.start_hz"][1].winfo_manager() == "grid"
+        assert app.field_rows["repeats.strategy"][1].winfo_manager() == "grid"
+        assert len(app.audio_preset_box.cget("values")) == len(gui_module.AUDIO_PRESETS)
         app.advanced_var.set(False)
         app._set_mode()
         assert str(app.stop_button.cget("state")) == "disabled"
@@ -255,50 +249,6 @@ def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
         app._active_backend = None
         app._stop_event.clear()
         app._set_busy(False)
-
-        # Simple recording is a named main mode and ignores unrelated ESS text.
-        original_sweep_end = app.variables["sweep.end_hz"].get()
-        app.variables["sweep.end_hz"].set("999999")
-        app.mode_var.set("simple_recording")
-        app._set_mode()
-        assert "简单录制" in str(app.start_button.cget("text"))
-        assert app.field_rows["audio.input_device"][1].winfo_manager() == "grid"
-        assert app.field_rows["audio.output_device"][1].winfo_manager() == ""
-        assert app.field_rows["storage.root"][1].winfo_manager() == "grid"
-        app.start_button.invoke()
-        assert app._busy
-        assert str(app.stop_button.cget("state")) == "normal"
-        recording_deadline = time.monotonic() + 2.0
-        while time.monotonic() < recording_deadline:
-            app.update()
-            candidates = list(Path(config.storage.root).glob("*_gui_simple_recording.wav"))
-            if candidates:
-                try:
-                    if sf.info(candidates[0]).frames > 0:
-                        break
-                except RuntimeError:
-                    pass
-            time.sleep(0.01)
-        app.stop_button.invoke()
-        deadline = time.monotonic() + 5.0
-        while app._busy and time.monotonic() < deadline:
-            app.update()
-            time.sleep(0.01)
-        assert not app._busy
-        simple_recordings = list(
-            Path(config.storage.root).glob("*_gui_simple_recording.wav")
-        )
-        assert len(simple_recordings) == 1
-        simple_recording = simple_recordings[0]
-        recorded_data, recorded_rate = sf.read(
-            simple_recording, always_2d=True, dtype="float32"
-        )
-        assert recorded_rate == config.audio.sample_rate
-        assert recorded_data.shape[0] > 0
-        assert recorded_data.shape[1] == len(config.audio.input_channels)
-        assert app.viewer._selected_path("recording") == simple_recording.resolve()
-        assert app.variables["storage.session_name"].get() == "gui_simple_recording"
-        app.variables["sweep.end_hz"].set(original_sweep_end)
         loaded_runs: list[Path] = []
         original_load_run = app.viewer.load_run
 
@@ -374,22 +324,26 @@ def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
         assert (scene_run / "labels.xlsx").is_file()
         assert "gui_speech_scene01" in scene_run.name
         assert app.viewer.run_dir == scene_run
+        assert app.viewer.result_controls.winfo_manager() == "pack"
         assert all(str(button.cget("state")) == "normal" for button in (
             app.start_button,
             app.scene_scan_button,
         ))
         assert not [title for title, _ in dialogs if "失败" in title or "无效" in title]
         assert sum(title == "测试完成" for title, _ in dialogs) == 3
-        assert sum(title == "录音已保存" for title, _ in dialogs) == 1
+        for run in (io_run, rir_run, scene_run):
+            assert any(
+                title == "测试完成" and str(run) in message
+                for title, message in dialogs
+            )
     finally:
         app.destroy()
 
 
-def test_gui_big_experiment_and_acqua_click_paths(tmp_path: Path, monkeypatch):
-    # The bundled Windows test runtime intermittently fails when a second Tk
-    # interpreter is created after another test destroyed the first one.
-    # Exercise this independent click path in a clean process; production uses
-    # one GUI interpreter for the whole application lifetime as well.
+def test_gui_folder_scan_uses_requested_count_and_persisted_seed(tmp_path: Path, monkeypatch):
+    # A fresh process avoids creating a second Tk interpreter after the main
+    # workflow test destroys its root. This exercises the current source GUI;
+    # campaign packaging and ACQUA remain covered by test_campaign_acqua.py.
     if os.environ.get("ACOUSTIC_CAPTURE_GUI_CHILD") != "1":
         environment = os.environ.copy()
         environment["ACOUSTIC_CAPTURE_GUI_CHILD"] = "1"
@@ -398,7 +352,7 @@ def test_gui_big_experiment_and_acqua_click_paths(tmp_path: Path, monkeypatch):
                 sys.executable,
                 "-m",
                 "pytest",
-                f"{Path(__file__).resolve()}::test_gui_big_experiment_and_acqua_click_paths",
+                f"{Path(__file__).resolve()}::test_gui_folder_scan_uses_requested_count_and_persisted_seed",
                 "-q",
             ],
             cwd=Path(__file__).resolve().parents[1],
@@ -410,17 +364,14 @@ def test_gui_big_experiment_and_acqua_click_paths(tmp_path: Path, monkeypatch):
         )
         assert result.returncode == 0, result.stdout + result.stderr
         return
+
     config = ExperimentConfig()
     config.audio.backend = "simulated"
-    config.audio.input_channels = [1, 2]
     config.storage.root = str(tmp_path / "runs")
     config.storage.compute_sha256 = False
     config.scene.source_mode = "folders"
     config.scene.items = ["target_only", "mixture"]
-    config.acqua.segment_duration_s = 0.005
-    config.acqua.gap_s = 0
-    targets = tmp_path / "targets"
-    interferers = tmp_path / "interferers"
+    targets, interferers = tmp_path / "targets", tmp_path / "interferers"
     targets.mkdir()
     interferers.mkdir()
     t = np.arange(480, dtype=np.float32) / config.audio.sample_rate
@@ -428,18 +379,8 @@ def test_gui_big_experiment_and_acqua_click_paths(tmp_path: Path, monkeypatch):
     sf.write(interferers / "noise.wav", 0.1 * np.sin(2 * np.pi * 800 * t), config.audio.sample_rate)
     config.scene.target_folder = str(targets)
     config.scene.interferer_folder = str(interferers)
-    config_path = tmp_path / "gui_campaign_acqua.yaml"
+    config_path = tmp_path / "gui_folder_scan.yaml"
     save_config(config, config_path)
-
-    names = iter(("campaign_gui", "acqua_gui_sequence", "acqua_gui_recording"))
-    monkeypatch.setattr(
-        gui_module.simpledialog, "askstring", lambda *args, **kwargs: next(names)
-    )
-    monkeypatch.setattr(
-        gui_module.filedialog,
-        "askdirectory",
-        lambda **kwargs: str(tmp_path / "acqua_programs"),
-    )
     dialogs: list[tuple[str, str]] = []
     for dialog_name in ("showinfo", "showwarning", "showerror"):
         monkeypatch.setattr(
@@ -452,105 +393,31 @@ def test_gui_big_experiment_and_acqua_click_paths(tmp_path: Path, monkeypatch):
     app = CaptureGUI(config_path)
     app.withdraw()
     try:
-        app.campaign_button.invoke()
-        assert app._campaign_root is not None
-        campaign_root = app._campaign_root
-        assert Path(app.variables["storage.root"].get()) == campaign_root / "runs"
-        fake_run = campaign_root / "runs" / "rir_gui_001"
-        (fake_run / "processed").mkdir(parents=True)
-        (fake_run / "processed" / "average_rir.wav").write_bytes(b"rir")
-        (fake_run / "manifest.json").write_text(
-            json.dumps(
-                {
-                    "kind": "rir",
-                    "status": "completed",
-                    "metadata": {"experiment_name": "rir_gui_001"},
-                    "summary": {"selected_take_ids": [1]},
-                }
-            ),
-            encoding="utf-8",
-        )
-        app.campaign_button.invoke()
-        deadline = time.monotonic() + 5
-        while app._busy and time.monotonic() < deadline:
-            app.update()
-            time.sleep(0.01)
-        assert not app._busy
-        assert app._campaign_root is None
-        assert campaign_root.with_suffix(".zip").is_file()
-        assert Path(app.variables["storage.root"].get()) == Path(config.storage.root)
-
         app.mode_var.set("audio")
         app.audio_preset_var.set("标准监督：目标 + 干扰 + MIXED（推荐）")
         app._audio_preset_changed()
         app.variables["scene.measurement_count"].set("3")
-        app.scan_scene_sources()
+        assert app.scene_scan_button.winfo_manager() == "pack"
+        assert "计划 3 次测量" in app.scene_estimate_var.get()
+        app.scene_scan_button.invoke()
         deadline = time.monotonic() + 5
         while app._scene_scan_thread is not None and time.monotonic() < deadline:
             app.update()
             time.sleep(0.01)
         app.update()
+        assert app._scene_scan_thread is None
+        assert str(app.scene_scan_button.cget("state")) == "normal"
         assert app.variables["scene.pairing_seed"].get() == "424242"
+        assert app._pending_scene_seed == 424242
+        assert app.config_data.scene.pairing_seed == 424242
         assert any(
             title == "本次随机测量清单"
             and "共 3 次测量" in message
             and "随机种子：424242" in message
+            and "0003  target=target.wav  |  interferer=noise.wav" in message
             for title, message in dialogs
         )
-
-        app.mode_var.set("simple_recording")
-        app._set_mode()
-        assert "简单录制" in str(app.start_button.cget("text"))
-        assert app.acqua_tools_button.winfo_manager() == "pack"
-        assert app.field_rows["scene.target_folder"][1].winfo_manager() == ""
-        assert app.field_rows["audio.output_device"][1].winfo_manager() == ""
-        app.acqua_tools_button.invoke()
-        acqua_window = next(
-            child
-            for child in app.winfo_children()
-            if isinstance(child, tk.Toplevel) and child.title() == "ACQUA 长序列工具"
-        )
-        generate_button = next(
-            child
-            for child in _descendants(acqua_window)
-            if isinstance(child, gui_module.ttk.Button)
-            and str(child.cget("text")) == "生成 mixed-target 长音频"
-        )
-        generate_button.invoke()
-        deadline = time.monotonic() + 5
-        while app._busy and time.monotonic() < deadline:
-            app.update()
-            time.sleep(0.01)
-        assert not app._busy
-        program = Path(app.variables["acqua.program_file"].get())
-        assert program.is_file()
-        assert (program.parent / "sequence_mapping.csv").is_file()
-
-        app.acqua_tools_button.invoke()
-        acqua_window = next(
-            child
-            for child in app.winfo_children()
-            if isinstance(child, tk.Toplevel) and child.title() == "ACQUA 长序列工具"
-        )
-        record_button = next(
-            child
-            for child in _descendants(acqua_window)
-            if isinstance(child, gui_module.ttk.Button)
-            and str(child.cget("text")) == "按所选长音频开始只录制"
-        )
-        record_button.invoke()
-        deadline = time.monotonic() + 5
-        while app._busy and time.monotonic() < deadline:
-            app.update()
-            time.sleep(0.01)
-        assert not app._busy
-        recording_manifests = list(
-            Path(config.storage.root).glob("*_acqua_gui_recording_acqua_recording/recording_manifest.json")
-        )
-        assert len(recording_manifests) == 1
-        manifest = json.loads(recording_manifests[0].read_text(encoding="utf-8"))
-        assert manifest["usable_prefix_preserved"] is True
-        assert manifest["status"] == "completed"
         assert not [title for title, _ in dialogs if "失败" in title or "无效" in title]
+        assert not list(Path(config.storage.root).glob("*/manifest.json"))
     finally:
         app.destroy()

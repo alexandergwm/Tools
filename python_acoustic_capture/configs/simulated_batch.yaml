@@ -6,19 +6,19 @@ audio:
   output_device: null
   sample_rate: 48000
   block_size: 1024
-  input_channels: [1, 2]
+  input_channels:
+  - 1
+  - 2
   target_output_channel: 1
   interferer_output_channel: 2
   latency: high
   dtype: float32
-
 general:
   action: play_record
   source_file: ../audio/source.wav
   duration_s: 4.0
   level_dbfs: -24
   output_channel: 1
-
 sweep:
   start_hz: 40
   end_hz: 22000
@@ -30,19 +30,21 @@ sweep:
   level_dbfs: -24
   rir_duration_s: 0.5
   pre_peak_s: 0.01
-
 repeats:
-  minimum: 2
-  maximum: 4
   correlation_threshold: 0.95
   peak_drift_samples: 2
-  required_stable_takes: 1
   reject_clipped: true
   clip_threshold: 0.999
   pause_s: 0
-
+  fixed_count: 5
+  strategy: reconstruct_average
+  reconstruction_policy: diagnostic
 scene:
-  items: [ambient, target_only, interferer_only, mixture]
+  items:
+  - ambient
+  - target_only
+  - interferer_only
+  - mixture
   source_mode: folders
   duration_s: 4.0
   ambient_duration_s: 1.0
@@ -52,7 +54,9 @@ scene:
   interferer_folder: ../audio/interferers
   measurement_count: 10
   pairing_seed: 0
-  file_extensions: [.wav, .flac]
+  file_extensions:
+  - .wav
+  - .flac
   label_prefix: simulated_batch
   dataset_split: train
   target_level_dbfs: -24
@@ -62,14 +66,12 @@ scene:
   require_supervised_pair: true
   countdown_s: 0
   gap_s: 0
-
 storage:
   root: ../runs
   session_name: simulated_4s_folder_batch
   wav_subtype: FLOAT
   save_playback_reference: true
   compute_sha256: true
-
 metadata:
   purpose: 4 秒文件夹批量采集与标签表验收
   artificial_head_id: simulator

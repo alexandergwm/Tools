@@ -6,14 +6,16 @@ audio:
   output_device: ASIO Fireface USB
   sample_rate: 48000
   block_size: 0
-  input_channels: [1, 2]
+  input_channels:
+  - 1
+  - 2
   target_output_channel: 1
   interferer_output_channel: 2
   latency: high
   dtype: float32
 general:
   action: play_record
-  source_file: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\source.wav
+  source_file: ../audio/source.wav
   duration_s: 5.0
   level_dbfs: -30.0
   output_channel: 1
@@ -29,26 +31,30 @@ sweep:
   rir_duration_s: 2.0
   pre_peak_s: 0.01
 repeats:
-  minimum: 1
-  maximum: 1
   correlation_threshold: 0.98
   peak_drift_samples: 2
-  required_stable_takes: 1
   reject_clipped: true
   clip_threshold: 0.999
   pause_s: 0.5
+  fixed_count: 5
+  strategy: reconstruct_average
+  reconstruction_policy: diagnostic
 scene:
-  items: [ambient, interferer_only]
+  items:
+  - ambient
+  - interferer_only
   source_mode: folders
   duration_s: 4.0
   ambient_duration_s: 10.0
-  target_file: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\target.wav
-  interferer_file: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\interferer.wav
-  target_folder: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\targets
-  interferer_folder: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\audio\interferers
+  target_file: ../audio/target.wav
+  interferer_file: ../audio/interferer.wav
+  target_folder: ../audio/targets
+  interferer_folder: ../audio/interferers
   measurement_count: 10
   pairing_seed: 0
-  file_extensions: [.wav, .flac]
+  file_extensions:
+  - .wav
+  - .flac
   label_prefix: speech
   dataset_split: train
   target_level_dbfs: -26.0
@@ -59,7 +65,7 @@ scene:
   countdown_s: 3.0
   gap_s: 1.0
 storage:
-  root: E:\Code_Github\Tools-main\Tools-main\python_acoustic_capture\runs
+  root: ../runs
   session_name: hs01_w01_b00_int090_h170_interfereronly
   wav_subtype: FLOAT
   save_playback_reference: true
@@ -89,6 +95,6 @@ metadata:
     position_id: int090_h170_d100
     azimuth_deg: 90
     elevation_deg: 0
-    height_m: 1.70
-    distance_m: 1.00
+    height_m: 1.7
+    distance_m: 1.0
   notes: 额外纯干扰语料；不具有 target 监督标签

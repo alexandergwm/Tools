@@ -1,0 +1,48 @@
+{
+  "version": "0.2.12",
+  "baseline_commit": "a29a30be2ad83388619267643711d0c7be8a44c0",
+  "baseline_branch": "codex/rir-asio-audit-20260905",
+  "original_source_unchanged": true,
+  "test_command": "python -m pytest -q -p no:cacheprovider tests",
+  "tests": {
+    "tests": 133,
+    "errors": 0,
+    "failures": 0,
+    "skipped": 0,
+    "duration_seconds": 13.93
+  },
+  "runtime": {
+    "python": "3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]",
+    "numpy": "1.26.4",
+    "scipy": "1.15.3",
+    "soundfile": "0.13.1",
+    "matplotlib": "3.10.3",
+    "PyYAML": "6.0.2",
+    "pytest": "8.4.2"
+  },
+  "cli_smoke": {
+    "command": "python -m acoustic_capture rir configs/simulated.yaml",
+    "exit_code": 0,
+    "accepted_takes": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "quality": {
+      "status": "pass",
+      "recommended_for_training": true,
+      "training_recommendation_scope": "recording_and_repeat_consistency_only",
+      "reconstruction_policy": "diagnostic",
+      "issues": [],
+      "warnings": []
+    },
+    "rir_samples": 24000,
+    "minimum_reconstruction_correlation": 0.9960028049896841,
+    "worst_median_nmse_db": -20.742259640857597
+  },
+  "hardware_tested": false,
+  "matlab_executed": false,
+  "packaged_as": "Python source; dependencies required; no precompiled executable"
+}

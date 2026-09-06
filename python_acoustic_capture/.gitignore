@@ -8,6 +8,7 @@ audio/
 build/
 dist/
 !portable_release/dist/
+portable_release/dist/*
 !portable_release/dist/AcousticCapturePortable.exe
 outputs/
 datasets/
