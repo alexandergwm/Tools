@@ -165,6 +165,9 @@ def test_compile_rir_dataset_exports_one_mean_ir_per_microphone_without_cross_ex
     assert manifest["planned_experiments"] == manifest["completed_experiments"] == 2
     assert manifest["cross_experiment_averaging"] is False
     assert all(row["status"] == "completed" for row in rows)
+    assert all(row["dataset_training_ready"] == "False" for row in rows)
+    assert all(row["rir_quality_status"] == "pass" for row in rows)
+    assert all(json.loads(row["average_rir_timing_json"]) for row in rows)
     assert not (dataset_root / "rir/groups").exists()
     assert (dataset_root / "indexes/rir_dataset.xlsx").is_file()
     for row in rows:
@@ -213,8 +216,21 @@ def test_compile_manual_rir_runs_keeps_runs_independent_and_all_microphones(tmp_
         "microphone_3": "right",
         "microphone_5": "reference",
     }
-    for _ in range(2):
+    stores = [
         capture_rir(cfg, SimulatedBackend(cfg.audio), log=lambda _: None)
+        for _ in range(2)
+    ]
+    bad_manifest_path = stores[0].path("manifest.json")
+    bad_manifest = json.loads(bad_manifest_path.read_text(encoding="utf-8"))
+    bad_manifest["summary"]["quality"] = {
+        "status": "review_required",
+        "recommended_for_training": False,
+        "issues": ["synthetic clock fault"],
+        "warnings": [],
+    }
+    bad_manifest_path.write_text(
+        json.dumps(bad_manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
     dataset = compile_completed_rir_runs(
         tmp_path / "runs",
@@ -236,6 +252,11 @@ def test_compile_manual_rir_runs_keeps_runs_independent_and_all_microphones(tmp_
     assert [item["recording_channel"] for item in channel_map] == [1, 3, 5]
     assert [item["microphone_id"] for item in channel_map] == ["left", "right", "reference"]
     assert all(row["mean_ir_mic_03"] for row in rows)
+    readiness = {row["run_id"]: row["dataset_training_ready"] for row in rows}
+    assert readiness[stores[0].root.name] == "False"
+    assert readiness[stores[1].root.name] == "True"
+    bad_row = next(row for row in rows if row["run_id"] == stores[0].root.name)
+    assert "synthetic clock fault" in bad_row["dataset_validation_error"]
     assert (dataset / "indexes/rir_dataset.xlsx").is_file()
 
 

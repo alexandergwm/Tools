@@ -1,6 +1,5 @@
 import numpy as np
 import pytest
-import soundfile as sf
 import sys
 from types import SimpleNamespace
 
@@ -58,6 +57,7 @@ class FakeSoundDevice:
 
 def test_hardware_check_uses_highest_configured_rme_channels(monkeypatch):
     fake = FakeSoundDevice()
+    monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(SoundDeviceBackend, "_module", lambda self: fake)
     config = AudioConfig(
         backend="sounddevice",
@@ -73,6 +73,42 @@ def test_hardware_check_uses_highest_configured_rme_channels(monkeypatch):
     assert fake.input_checks[0]["samplerate"] == 48_000
     assert status["input_device"]["name"] == "RME 输入"
     assert status["output_device"]["name"] == "RME 输出"
+    assert any("不代表共用硬件时钟" in warning for warning in status["warnings"])
+
+
+def test_hardware_check_warns_when_windows_may_resample(monkeypatch):
+    class FortyFourOneKhzDevice(FakeSoundDevice):
+        def query_devices(self, device, kind=None):
+            info = super().query_devices(device, kind)
+            info["default_samplerate"] = 44_100.0
+            return info
+
+    fake = FortyFourOneKhzDevice()
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(SoundDeviceBackend, "_module", lambda self: fake)
+    config = AudioConfig(
+        backend="sounddevice",
+        input_device="input",
+        output_device="output",
+        sample_rate=48_000,
+    )
+
+    status = check_hardware_settings(config)
+
+    assert sum("Windows/驱动可能进行重采样" in item for item in status["warnings"]) == 2
+
+
+def test_hardware_check_rejects_device_outside_selected_protocol(monkeypatch):
+    fake = FakeSoundDevice()
+    monkeypatch.setattr(SoundDeviceBackend, "_module", lambda self: fake)
+    config = AudioConfig(
+        backend="sounddevice",
+        host_api="MME",
+        input_device="RME input",
+        output_device="RME output",
+    )
+    with pytest.raises(RuntimeError, match="不属于所选音频协议 MME"):
+        check_hardware_settings(config)
 
 
 def test_hardware_check_rejects_device_outside_selected_protocol(monkeypatch):
@@ -128,6 +164,7 @@ def test_play_record_keeps_only_selected_input_channels(monkeypatch):
     assert np.allclose(result.microphones[:, 0], 1.0)
     assert np.allclose(result.microphones[:, 1], 3.0)
     assert result.status["xrun"] is False
+    assert result.status["callback_status"]["callback_count"] == 1
     assert np.allclose(captured["outdata"], 0)
 
 
@@ -172,7 +209,7 @@ def test_play_record_reports_stream_progress(monkeypatch):
     assert updates[-1]["phase"] == "completed"
 
 
-def test_stop_requests_abort_without_calling_global_sounddevice_stop(monkeypatch):
+def test_stop_only_sets_event_and_never_calls_stream_from_gui_thread():
     backend = SoundDeviceBackend(AudioConfig())
     calls: list[str] = []
 
@@ -182,51 +219,47 @@ def test_stop_requests_abort_without_calling_global_sounddevice_stop(monkeypatch
 
     backend._set_active_stream(Stream())
     backend.stop()
-    deadline = __import__("time").monotonic() + 1.0
-    while not calls and __import__("time").monotonic() < deadline:
-        __import__("time").sleep(0.01)
     assert backend._abort_requested.is_set()
-    assert calls == ["abort"]
+    assert calls == []
 
 
-def test_sounddevice_standalone_recording_streams_selected_channels(tmp_path, monkeypatch):
-    fake = FakeSoundDevice()
+def test_stream_start_abort_and_close_stay_on_owner_thread():
+    import threading
 
-    class InputStream:
-        def __init__(self, *, channels, callback, **kwargs):
-            assert channels == 3
-            self.callback = callback
-            self.active = False
+    backend = SoundDeviceBackend(AudioConfig())
+    started = threading.Event()
+    calls: list[tuple[str, int]] = []
+
+    class Stream:
+        active = False
 
         def start(self):
-            data = np.column_stack(
-                [np.full(32, 0.1), np.full(32, 0.2), np.full(32, 0.3)]
-            ).astype(np.float32)
-            self.callback(data, len(data), None, None)
-            self.active = False
+            calls.append(("start", threading.get_ident()))
+            self.active = True
+            started.set()
 
         def abort(self):
+            calls.append(("abort", threading.get_ident()))
             self.active = False
 
         def close(self):
-            pass
+            calls.append(("close", threading.get_ident()))
 
-    fake.InputStream = InputStream
-    monkeypatch.setattr(SoundDeviceBackend, "_module", lambda self: fake)
-    output = tmp_path / "direct.wav"
-    backend = SoundDeviceBackend(
-        AudioConfig(sample_rate=16_000, block_size=32, input_channels=[1, 3])
+    worker = threading.Thread(
+        target=lambda: backend._run_stream(Stream(), 48_000, SimpleNamespace()),
+        name="test-asio-owner",
     )
+    worker.start()
+    assert started.wait(1.0)
+    caller_thread = threading.get_ident()
+    backend.stop()
+    worker.join(2.0)
 
-    status = backend.record_to_file(output, stop_requested=lambda: False)
-
-    data, sample_rate = sf.read(output, always_2d=True, dtype="float32")
-    assert sample_rate == 16_000
-    assert data.shape == (32, 2)
-    assert np.allclose(data[:, 0], 0.1)
-    assert np.allclose(data[:, 1], 0.3)
-    assert status["frames"] == 32
-    assert status["channels"] == 2
+    assert not worker.is_alive()
+    assert [name for name, _ in calls] == ["start", "abort", "close"]
+    owner_ids = {thread_id for _, thread_id in calls}
+    assert len(owner_ids) == 1
+    assert caller_thread not in owner_ids
 
 
 def test_device_argument_converts_numeric_gui_prefix_to_portaudio_index():

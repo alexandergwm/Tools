@@ -15,6 +15,10 @@ Acoustic Capture Portable
    back to the workbook. Close the workbook in Excel before capture completes
    so Windows does not lock it.
 
+For laboratory ASIO capture, prefer this extracted folder build. It runs as one
+application process and keeps the driver DLLs and logs in inspectable paths.
+The single-file EXE remains available for ordinary Windows audio trials.
+
 Manual naming remains available when no checklist row is selected.
 
 RIR capture defaults to an exact take count. Every take is deconvolved, then
@@ -32,6 +36,10 @@ dataset compilation then prefers labels_reviewed.jsonl.
 For supervised speech data, connect microphone input, artificial-mouth output,
 and interferer output to the same RME interface and select the same RME ASIO
 device for both recording and playback.
+
+ASIO safety: stream open/start/stop/close operations stay on one audio-owner
+thread. The GUI only posts a stop request. Monitoring is closed before capture
+and disabled while the ASIO device is in use.
 
 The executable is not code-signed. Windows SmartScreen may show a warning on a
 new computer; use More info > Run anyway only when the file came from your own

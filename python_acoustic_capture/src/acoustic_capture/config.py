@@ -56,7 +56,7 @@ class SweepConfig:
 class RepeatConfig:
     strategy: str = "reconstruct_average"  # reconstruct_average | fixed_count
     fixed_count: int = 5
-    correlation_threshold: float = 0.98
+    correlation_threshold: float = 0.90
     peak_drift_samples: int = 2
     minimum_sweep_snr_db: float = 6.0
     reject_clipped: bool = True
@@ -246,8 +246,8 @@ def load_config(path: str | Path) -> ExperimentConfig:
     sweep_values = dict(raw.get("sweep") or {})
     repeat_values = dict(raw.get("repeats") or {})
     scene_values = dict(raw.get("scene") or {})
-    # Older releases exposed cycle/cartesian.  Folder pairing is now always
-    # bounded and seed-deterministic; silently migrate those YAML files.
+    # Older releases exposed cycle/cartesian. Folder pairing is now bounded by
+    # measurement_count and deterministically randomized by pairing_seed.
     scene_values.pop("pairing_mode", None)
     for legacy_field in (
         "minimum",

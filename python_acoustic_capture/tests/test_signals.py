@@ -4,10 +4,16 @@ from acoustic_capture.quality import normalized_correlation
 from acoustic_capture.rir import (
     RIRTake,
     align_rir_to_reference,
+    detect_direct_arrival,
+    estimate_sweep_clock_drift_ppm,
     estimate_impulse_response,
+    extract_rir,
+    gcc_phat_delay_samples,
+    low_frequency_group_delay_samples,
     normalized_reconstruction_error_db,
     normalized_rir_change_db,
     reconstruction_metrics,
+    rir_timing_metrics,
     select_rir_ensemble,
 )
 from acoustic_capture.signals import exponential_sweep, route_outputs
@@ -65,6 +71,123 @@ def test_rir_residual_alignment_uses_common_shift_and_preserves_microphone_delay
     assert np.allclose(aligned[16:-16], reference[16:-16])
 
 
+def test_direct_arrival_is_not_replaced_by_a_stronger_late_reflection():
+    sample_rate = 48_000
+    impulse = np.zeros(2048, dtype=np.float32)
+    impulse[120] = 0.3
+    impulse[400] = 1.0
+
+    onset, direct_peak, details = detect_direct_arrival(impulse, sample_rate)
+
+    assert onset < 120
+    assert direct_peak == 120
+    assert details["method"] == "first_persistent_energy_rise"
+
+
+def test_relative_delay_estimators_use_target_minus_reference_sign():
+    sample_rate = 48_000
+    rng = np.random.default_rng(91)
+    reference = rng.normal(size=4096)
+    target = np.zeros_like(reference)
+    target[7:] = reference[:-7]
+
+    gcc_delay, gcc_details = gcc_phat_delay_samples(reference, target, sample_rate)
+    group_delay, group_details = low_frequency_group_delay_samples(
+        reference, target, sample_rate
+    )
+
+    assert np.isclose(gcc_delay, 7.0, atol=0.1)
+    assert gcc_details["integer_delay_samples"] == 7
+    assert group_delay is not None
+    assert np.isclose(group_delay, 7.0, atol=0.3)
+    assert group_details["reliable"] is True
+
+
+def test_sweep_segment_timing_detects_independent_clock_drift():
+    sample_rate = 48_000
+    sweep = exponential_sweep(sample_rate, 40, 22_000, 2.0, -12)
+    expected_ppm = 50.0
+    stretch = 1.0 + expected_ppm * 1e-6
+    stretched_count = round(len(sweep) * stretch)
+    stretched = np.interp(
+        np.arange(stretched_count) / stretch,
+        np.arange(len(sweep)),
+        sweep,
+        left=0.0,
+        right=0.0,
+    )
+    pre_silence_s = 0.2
+    delay = 173
+    recording = np.zeros(
+        round(pre_silence_s * sample_rate) + delay + stretched_count + 1000
+    )
+    start = round(pre_silence_s * sample_rate) + delay
+    recording[start : start + stretched_count] = stretched
+
+    metrics = estimate_sweep_clock_drift_ppm(
+        recording,
+        sweep,
+        sample_rate,
+        pre_silence_s,
+        delay,
+    )
+
+    assert metrics["reliable"] is True
+    assert np.isclose(metrics["estimated_drift_ppm"], expected_ppm, atol=5.0)
+
+
+def test_rir_timing_reports_physical_inter_microphone_delay():
+    sample_rate = 48_000
+    rir = np.zeros((4096, 2), dtype=np.float32)
+    rir[120, 0], rir[127, 1] = 1.0, 0.8
+    rir[300, 0], rir[307, 1] = 0.2, 0.16
+
+    timing = rir_timing_metrics(rir, sample_rate)
+    microphone_2 = timing["per_channel"][1]
+
+    assert np.isclose(microphone_2["gcc_phat_delay_samples"], 7.0, atol=0.1)
+    assert np.isclose(
+        microphone_2["low_frequency_group_delay_samples"], 7.0, atol=0.1
+    )
+    assert microphone_2["estimators_agree_within_one_sample"] is True
+
+
+def test_extract_rir_uses_first_arrival_and_one_common_crop_for_all_microphones():
+    sample_rate = 48_000
+    sweep = exponential_sweep(sample_rate, 40, 22_000, 0.25, -12)
+    pre_silence_s = 0.05
+    post_silence_s = 0.12
+    pre = np.zeros(round(pre_silence_s * sample_rate), dtype=np.float32)
+    post_samples = round(post_silence_s * sample_rate)
+    responses = []
+    for direct_delay in (173, 180):
+        impulse = np.zeros(post_samples, dtype=np.float32)
+        impulse[direct_delay] = 0.25
+        impulse[direct_delay + 300] = 1.0
+        convolved = np.convolve(sweep, impulse)
+        responses.append(np.pad(convolved, (0, 1))[: len(sweep) + post_samples])
+    recording = np.vstack(
+        (pre[:, None].repeat(2, axis=1), np.column_stack(responses))
+    )
+
+    cropped, peaks, reference_peak, offsets, _full = extract_rir(
+        recording,
+        sweep,
+        sample_rate,
+        pre_silence_s,
+        post_silence_s,
+        0.08,
+        0.01,
+    )
+
+    assert abs(reference_peak - 173) <= 1
+    assert offsets == [0, 7]
+    assert peaks[1] - peaks[0] == 7
+    assert int(np.argmax(np.abs(cropped[:, 1]))) - int(
+        np.argmax(np.abs(cropped[:, 0]))
+    ) == 7
+
+
 def test_regularized_ess_deconvolution_recovers_known_two_channel_fir():
     sample_rate = 48_000
     sweep = exponential_sweep(sample_rate, 40, 22_000, 0.5, -12)
@@ -83,6 +206,22 @@ def test_regularized_ess_deconvolution_recovers_known_two_channel_fir():
     )
     assert np.argmax(np.abs(estimate), axis=0).tolist() == expected_peaks
     assert np.all(np.isfinite(estimate))
+
+
+def test_regularized_ess_deconvolution_matches_matlab_r2024b_golden_value():
+    """Golden value measured from sweeptone/impzest in MATLAB R2024b."""
+    sample_rate = 48_000
+    sweep = exponential_sweep(sample_rate, 40, 22_000, 0.5, -12)
+    trailing = np.zeros(round(0.2 * sample_rate), dtype=np.float32)
+    excitation = np.concatenate((sweep, trailing))
+    impulse = np.zeros(1200, dtype=np.float32)
+    impulse[173], impulse[294], impulse[540] = 0.8, 0.25, -0.12
+    response = np.convolve(excitation, impulse)[: len(excitation)]
+
+    estimate = estimate_impulse_response(sweep, response, len(trailing))[:, 0]
+
+    assert int(np.argmax(np.abs(estimate))) == 173
+    assert np.isclose(estimate[173], 0.71001269893, atol=3e-7)
 
 
 def test_reconstruction_error_prefers_the_rir_that_generated_real_recording():

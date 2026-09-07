@@ -471,6 +471,12 @@ def compile_completed_rir_runs(
         metadata_errors = _rir_metadata_errors(
             metadata, output_channel=actual_output_channel
         )
+        quality = summary.get("quality") or {}
+        quality_ready = quality.get("recommended_for_training", True) is not False
+        validation_errors = list(metadata_errors)
+        if not quality_ready:
+            quality_issues = quality.get("issues") or ["RIR 声学质量未通过"]
+            validation_errors.extend(map(str, quality_issues))
         recording_channels, microphone_map = _input_channel_map(
             manifest, metadata, microphone_paths
         )
@@ -517,6 +523,16 @@ def compile_completed_rir_runs(
             "average_reconstruction_minimum_correlation": (
                 summary.get("average_rir_reconstruction") or {}
             ).get("minimum_correlation", ""),
+            "rir_quality_status": quality.get("status", "legacy_not_available"),
+            "rir_quality_issues": "; ".join(map(str, quality.get("issues") or [])),
+            "intermicrophone_delay_stability_json": json.dumps(
+                summary.get("intermicrophone_delay_stability") or [],
+                ensure_ascii=False,
+            ),
+            "average_rir_timing_json": json.dumps(
+                summary.get("average_rir_timing") or {},
+                ensure_ascii=False,
+            ),
             "rir_converged": (summary.get("convergence") or {}).get("converged", ""),
             "rir_stop_reason": (summary.get("convergence") or {}).get("stop_reason", ""),
             "sample_rate_hz": sample_rate,
@@ -528,8 +544,8 @@ def compile_completed_rir_runs(
             "rir_condition_sha256": rir_condition_sha256(
                 metadata, output_channel=actual_output_channel
             ),
-            "dataset_validation_error": "; ".join(metadata_errors),
-            "dataset_training_ready": not metadata_errors,
+            "dataset_validation_error": "; ".join(validation_errors),
+            "dataset_training_ready": not validation_errors,
             "mean_ir_multichannel": target.relative_to(dataset_root).as_posix(),
             "mean_ir_files_json": json.dumps(microphone_paths, ensure_ascii=False),
             "source_run": str(run_dir),
@@ -653,6 +669,12 @@ def compile_rir_dataset(path: str | Path) -> Path:
         metadata_errors = _rir_metadata_errors(
             metadata, output_channel=actual_output_channel
         )
+        quality = summary.get("quality") or {}
+        quality_ready = quality.get("recommended_for_training", True) is not False
+        validation_errors = list(metadata_errors)
+        if not quality_ready:
+            quality_issues = quality.get("issues") or ["RIR 声学质量未通过"]
+            validation_errors.extend(map(str, quality_issues))
         recording_channels, microphone_map = _input_channel_map(
             manifest, metadata, microphone_paths
         )
@@ -713,6 +735,20 @@ def compile_rir_dataset(path: str | Path) -> Path:
                 "average_reconstruction_minimum_correlation": (
                     summary.get("average_rir_reconstruction") or {}
                 ).get("minimum_correlation", ""),
+                "rir_quality_status": quality.get(
+                    "status", "legacy_not_available"
+                ),
+                "rir_quality_issues": "; ".join(
+                    map(str, quality.get("issues") or [])
+                ),
+                "intermicrophone_delay_stability_json": json.dumps(
+                    summary.get("intermicrophone_delay_stability") or [],
+                    ensure_ascii=False,
+                ),
+                "average_rir_timing_json": json.dumps(
+                    summary.get("average_rir_timing") or {},
+                    ensure_ascii=False,
+                ),
                 "rir_converged": (summary.get("convergence") or {}).get(
                     "converged", ""
                 ),
@@ -728,8 +764,8 @@ def compile_rir_dataset(path: str | Path) -> Path:
                 "rir_condition_sha256": rir_condition_sha256(
                     metadata, output_channel=actual_output_channel
                 ),
-                "dataset_validation_error": "; ".join(metadata_errors),
-                "dataset_training_ready": not metadata_errors,
+                "dataset_validation_error": "; ".join(validation_errors),
+                "dataset_training_ready": not validation_errors,
                 "mean_ir_multichannel": target.relative_to(dataset_root).as_posix(),
                 "mean_ir_2ch": (
                     target.relative_to(dataset_root).as_posix()

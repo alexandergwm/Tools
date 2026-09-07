@@ -332,10 +332,9 @@ def write_label_files(
         writer.writeheader()
         writer.writerows(normalized)
 
-    # This is a *pairing table*, not a pass-only training export.  Failed rows
-    # must remain visible so an operator can audit why a nominal mixed/target
-    # pair was rejected.  ``supervision_ready`` and ``quality_flag`` carry the
-    # acceptance decision explicitly.
+    # This is a pairing table, not a pass-only training export. Failed rows
+    # remain visible so the operator can audit them; the acceptance decision
+    # is carried by supervision_ready and quality_flag.
     paired = [
         row
         for row in normalized

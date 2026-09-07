@@ -128,6 +128,7 @@ def _seeded_repeat(
     resolved_root = root.resolve()
     epoch = 0
     while len(result) < count:
+
         def stable_key(path: Path) -> bytes:
             try:
                 identity = path.resolve().relative_to(resolved_root).as_posix()
@@ -145,12 +146,7 @@ def _seeded_repeat(
 
 
 def estimate_scene_duration(scene: SceneConfig) -> SceneDurationEstimate:
-    """Return the deterministic playback/countdown duration for one scene run.
-
-    File I/O and driver startup are deliberately excluded.  Folder capture has
-    a fixed task count, so the operator can see an estimate without scanning or
-    decoding thousands of source files.
-    """
+    """Return deterministic playback/countdown time without scanning folders."""
     pair_count = scene.measurement_count if scene.source_mode == "folders" else 1
     audible_items = sum(item in scene.items for item in PAIRED_ITEM_ORDER)
     task_count = pair_count * scene.repetitions if audible_items else 0
@@ -406,9 +402,8 @@ def _finish_scene(
     label_files = write_label_files(store.root, label_rows, metadata)
     for path in label_files.values():
         store.add_artifact(path.name)
-    # Keep the machine-readable labels beside the WAVs that will be copied to
-    # a training server.  Root-level copies remain for backwards compatibility
-    # and the formatted XLSX stays at the run root for human review.
+    # Keep machine-readable labels beside the WAV files copied to a training
+    # server. Root-level copies remain for backwards compatibility.
     raw_label_files = {}
     for key in ("jsonl", "csv", "supervised_jsonl", "supervised_csv"):
         source = label_files[key]
@@ -636,7 +631,11 @@ def capture_scene_block(
                     else (
                         max(0, total_tasks - completed_ordinal)
                         * duration_estimate.per_task_s
-                        + (duration_estimate.ambient_s if completed_ordinal == 0 else 0.0)
+                        + (
+                            duration_estimate.ambient_s
+                            if completed_ordinal == 0
+                            else 0.0
+                        )
                     )
                 ),
             }
