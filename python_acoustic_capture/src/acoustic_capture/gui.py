@@ -47,6 +47,14 @@ def _run_quality_warnings(manifest: dict) -> list[str]:
     messages = list(summary.get("warnings", []))
     messages.extend(quality.get("issues", []))
     messages.extend(quality.get("warnings", []))
+    for capture in summary.get("captures", []):
+        backend = capture.get("backend_status", {})
+        if backend.get("timing_discontinuity"):
+            messages.append("录音存在时间连续性异常，本次数据不能直接用于训练")
+        if backend.get("xrun"):
+            messages.append("音频驱动报告丢帧，请检查质量标签，不要将流程完成视为验收通过")
+    if "mixture" in summary.get("items", []) and summary.get("supervision_ready_rows", 0) < summary.get("label_rows", 0):
+        messages.append("部分配对未通过严格监督训练验收，请检查 supervision_ready 标签")
     if quality.get("status") == "review_required" and not messages:
         messages.append("RIR 质量需要复核，暂不建议直接用于训练")
     return list(dict.fromkeys(messages))
@@ -1231,7 +1239,9 @@ class CaptureGUI(tk.Tk):
         existing_runs = []
         resumable_runs: list[Path] = []
         runs_root = Path(self.variables["storage.root"].get().strip()).expanduser()
-        if runs_root.is_dir():
+        # A simple recording always gets its own timestamped directory. Do not
+        # read every historical manifest before opening the microphone.
+        if kind != "io" and runs_root.is_dir():
             for manifest_path in runs_root.glob("*/manifest.json"):
                 try:
                     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -1965,7 +1975,7 @@ class CaptureGUI(tk.Tk):
             elif isinstance(event, tuple) and event and event[0] == "AUDIO_PROGRESS":
                 _, update = event
                 if (
-                    str(update.get("phase", "")) == "opening_audio_stream"
+                    str(update.get("phase", "")) in {"opening_audio_stream", "preparing_device"}
                     and self.mode_var.get() == "rir"
                     and self.viewer.preview_spec is None
                 ):

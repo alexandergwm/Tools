@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 from typing import Callable
 
 from .audio import AudioBackend
@@ -10,11 +11,13 @@ from .config import ExperimentConfig
 from .quality import channel_metrics
 from .signals import fit_duration, load_audio, route_outputs, scale_dbfs
 from .storage import RunStore, sha256
+from .live_session import capture_session
 
 Log = Callable[[str], None]
 StopRequested = Callable[[], bool]
 
 
+@capture_session
 def capture_general_io(
     config: ExperimentConfig,
     backend: AudioBackend,
@@ -22,6 +25,7 @@ def capture_general_io(
     stop_requested: StopRequested | None = None,
 ) -> RunStore:
     """Run one basic I/O operation and archive exactly what was used."""
+    preparation_started = time.perf_counter()
     io = config.general
     sample_rate = config.audio.sample_rate
     frames = round(io.duration_s * sample_rate)
@@ -36,7 +40,7 @@ def capture_general_io(
         source = scale_dbfs(fit_duration(load_audio(source_path, sample_rate), frames), io.level_dbfs)
         output = route_outputs({io.output_channel: source}, frames)
 
-    store = RunStore.create(config, f"io_{io.action}")
+    store = RunStore.create(config, f"io_{io.action}", defer_provenance=io.action == "record")
     summary: dict = {
         "action": io.action,
         "duration_s": io.duration_s,
@@ -57,6 +61,7 @@ def capture_general_io(
         if io.action == "play":
             summary["backend_status"] = backend.play(output)
         elif io.action == "record":
+            summary["preparation_seconds"] = time.perf_counter() - preparation_started
             result = backend.record(frames)
             store.write_audio("raw/recording.wav", result.microphones, sample_rate)
             summary["channels"] = channel_metrics(result.microphones)
@@ -76,10 +81,11 @@ def capture_general_io(
             warning = "录制信号所有通道均为全零，请检查麦克风权限、输入设备、通道路由或硬件静音状态。"
             summary["warnings"] = [warning]
             log(f"警告：{warning}")
-        if summary.get("backend_status", {}).get("xrun"):
+        if summary.get("backend_status", {}).get("xrun") or summary.get("backend_status", {}).get("timing_discontinuity"):
             warning = "本次音频流发生输入溢出或输出欠载，数据可能包含丢帧，不建议用于正式数据集。"
             summary.setdefault("warnings", []).append(warning)
             log(f"警告：{warning}")
+        summary["quality_passed"] = not bool(summary.get("warnings"))
         store.write_json("metrics/summary.json", summary)
         store.finish(summary)
         log(f"基础播录结果已保存到：{store.root}")

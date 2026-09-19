@@ -55,6 +55,21 @@ class FakeSoundDevice:
         return Status()
 
 
+def test_record_skips_duplicate_format_probe_but_checks_host(monkeypatch):
+    fake = FakeSoundDevice()
+    backend = SoundDeviceBackend(AudioConfig(host_api="Test API"))
+    monkeypatch.setattr(backend, "_module", lambda: fake)
+    monkeypatch.setattr(backend, "_input_stream", lambda frames, sd: (
+        np.zeros((frames, 2), np.float32), {"xrun": False}, False))
+    result = backend.record(16)
+    assert not fake.input_checks
+    assert result.microphones.shape == (16, 2)
+    assert result.status["callback_status"]["device_check_seconds"] >= 0
+    backend.config.host_api = "ASIO"
+    with pytest.raises(RuntimeError, match="不属于所选音频协议"):
+        backend.record(16)
+
+
 def test_hardware_check_uses_highest_configured_rme_channels(monkeypatch):
     fake = FakeSoundDevice()
     monkeypatch.setattr(sys, "platform", "win32")

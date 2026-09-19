@@ -65,6 +65,11 @@ def _wait_for_run(app: CaptureGUI, root: Path, kind: str, timeout_s: float = 15.
 def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
     project = Path(__file__).resolve().parents[1]
     config = load_config(project / "configs" / "simulated.yaml")
+    # The GUI can save user hardware settings into this example file. Tests
+    # must never open real microphones/speakers as a side effect.
+    config.audio.backend = "simulated"
+    config.audio.host_api = None
+    config.scene.source_mode = "single"
     files = generate_demo_audio(tmp_path / "audio", config.audio.sample_rate, 0.05)
     config.general.source_file = str(files["source"])
     config.scene.target_file = str(files["target"])

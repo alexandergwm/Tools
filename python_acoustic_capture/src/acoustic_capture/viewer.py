@@ -418,6 +418,7 @@ class ResultsViewer(ttk.Frame):
         recording_active = active and self._transport_recording_enabled
         labels = {
             "opening_audio_stream": "正在打开声卡…",
+            "preparing_device": "设备准备中：等待麦克风连续稳定，尚未保存录音…",
             "playing": "正在同步播录" if self._transport_recording_enabled else "正在播放",
             "recording": "正在录制",
             "completed": "已完成，正在保存…",
@@ -732,7 +733,7 @@ class ResultsViewer(ttk.Frame):
         """Advance the red cursor for RIR and speech live previews."""
         self._update_transport_progress(frames, total_frames, sample_rate, phase)
         if self.human_prompt_panel.winfo_ismapped():
-            prefix = "正在采集 · " if phase in {"playing", "recording"} else "准备 · " if phase == "opening_audio_stream" else "本阶段已结束 · "
+            prefix = "正在采集 · " if phase in {"playing", "recording"} else "准备 · " if phase in {"opening_audio_stream", "preparing_device"} else "本阶段已结束 · "
             self.human_instruction.set(prefix + self._human_stage_instruction)
         if not self._live_lines and not self._live_source_lines and self.preview_spec is None:
             return
@@ -764,6 +765,7 @@ class ResultsViewer(ttk.Frame):
                 line.set_xdata([time_s, time_s])
         phase_text = {
             "opening_audio_stream": "Opening audio stream…",
+            "preparing_device": "Preparing device: waiting for continuous input; not recording yet…",
             "playing": "Playing and recording…",
             "recording": "Recording…",
             "completed": "Playback finished; saving files…",

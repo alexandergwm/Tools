@@ -337,7 +337,9 @@ def build_paired_sequence(
 
 
 def _quality_flag(metrics_by_item: dict[str, dict]) -> str:
-    if any(bool(metrics.get("backend_status", {}).get("xrun")) for metrics in metrics_by_item.values()):
+    if any(metrics.get("backend_status", {}).get("timing_discontinuity") for metrics in metrics_by_item.values()):
+        return "时间连续性异常"
+    if any(bool(metrics.get("backend_status", {}).get("xrun") or metrics.get("backend_status", {}).get("timing_discontinuity")) for metrics in metrics_by_item.values()):
         return "音频丢帧"
     channels = [
         channel
@@ -422,6 +424,10 @@ def _finish_scene(
     store.finish(summary, status=status)
 
 
+from .live_session import capture_session
+
+
+@capture_session
 def capture_scene_block(
     config: ExperimentConfig,
     backend: AudioBackend,
@@ -509,7 +515,7 @@ def capture_scene_block(
             label_rows = [
                 json.loads(line)
                 for line in label_path.read_text(encoding="utf-8").splitlines()
-                if line.strip()
+                if line.strip() and json.loads(line).get("quality_flag") != "未完成"
             ]
         if len(label_rows) != completed_ordinal:
             raise ValueError(
@@ -777,6 +783,25 @@ def capture_scene_block(
                     log(f"    将在 {scene.countdown_s:g} 秒后开始一次连续播录")
                     _wait_or_cancel(scene.countdown_s, stop_requested)
                 capture = backend.play_record(paired_playback)
+                if (stop_requested is not None and stop_requested()) or capture.status.get("cancelled"):
+                    # Archive the interrupted attempt without advancing the resume checkpoint.
+                    from uuid import uuid4
+                    partial = f"raw/{sequence_stem}_partial_{uuid4().hex[:8]}.wav"
+                    store.write_audio(partial, capture.microphones, fs)
+                    label_rows.append({**metadata_columns, "run_id": store.root.name,
+                        "sample_id": f"{sequence_stem}_partial", "capture_type": "partial",
+                        "automatic_label": automatic_label, "valid": "否", "quality_flag": "未完成",
+                        "supervision_ready": "否", "pair_index": pair_index, "repetition": repetition,
+                        "target_source": str(pair.target or ""), "interferer_source": str(pair.interferer or ""),
+                        "paired_sequence_recording": partial, "sample_rate_hz": fs,
+                        "duration_s": len(capture.microphones) / fs,
+                        "notes": "用户停止；部分序列不用于严格监督训练，续采时重录该配对"})
+                    store.write_json(f"metrics/{Path(partial).stem}.json", {
+                        "backend_status": capture.status, "label": label_rows[-1]})
+                    with store.path("raw/attempts.jsonl").open("a", encoding="utf-8") as handle:
+                        handle.write(json.dumps(label_rows[-1], ensure_ascii=False) + "\n")
+                    store.add_artifact("raw/attempts.jsonl")
+                    raise _CaptureCancelled()
                 _check_cancelled(stop_requested)
                 paired_recording_path = store.write_audio(
                     f"raw/{sequence_stem}_mics.wav", capture.microphones, fs
@@ -942,7 +967,7 @@ def capture_scene_block(
                         "manual_label": "",
                         "automatic_label": automatic_label,
                         "dataset_split": scene.dataset_split,
-                        "valid": "是",
+                        "valid": "是" if quality_flag == "通过" else "否",
                         "quality_flag": quality_flag,
                         "supervision_ready": "是" if supervision_ready else "否",
                         "capture_strategy": "single_stream_paired_sequence",

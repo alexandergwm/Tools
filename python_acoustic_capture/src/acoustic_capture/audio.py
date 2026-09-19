@@ -128,6 +128,25 @@ class SoundDeviceBackend(AudioBackend):
         self._progress_callback = None
         self._last_progress_at = 0.0
         self._last_check_warnings: list[str] = []
+        self._experiment_live = None
+
+    @contextmanager
+    def experiment_session(self, output_channels):
+        from .live_session import LiveSession
+        if self._experiment_live is not None:
+            yield
+            return
+        self._abort_requested.clear()
+        with _audio_com_apartment():
+            live = LiveSession(self, output_channels)
+            self._experiment_live = live
+            try:
+                yield
+            finally:
+                try:
+                    live.close()
+                finally:
+                    self._experiment_live = None
 
     def set_progress_callback(self, callback) -> None:
         self._progress_callback = callback
@@ -328,10 +347,13 @@ class SoundDeviceBackend(AudioBackend):
                 cancelled = True
             else:
                 stream.start()
-                self._emit_progress(active_phase, 0, expected_frames, force=True)
+                if processed_frames is None:
+                    self._emit_progress(active_phase, 0, expected_frames, force=True)
             while bool(getattr(stream, "active", False)):
                 if processed_frames is not None:
-                    self._emit_progress(active_phase, processed_frames(), expected_frames)
+                    processed = processed_frames()
+                    if processed > 0:
+                        self._emit_progress(active_phase, processed, expected_frames)
                 if self._abort_requested.is_set():
                     cancelled = True
                     try:
@@ -467,6 +489,7 @@ class SoundDeviceBackend(AudioBackend):
         return recording[:cursor], callback_status, cancelled
 
     def _input_stream(self, frames: int, sd) -> tuple[np.ndarray, dict[str, Any], bool]:
+        requested_at = time.perf_counter()
         input_count = max(self.config.input_channels)
         recording = np.zeros((frames, input_count), dtype=np.float32)
         callback_status = self._new_callback_status()
@@ -475,6 +498,8 @@ class SoundDeviceBackend(AudioBackend):
 
         def callback(indata, callback_frames, time_info, status):
             nonlocal cursor
+            if cursor == 0:
+                callback_status["first_input_seconds"] = time.perf_counter() - requested_at
             self._merge_callback_status(callback_status, status)
             self._record_callback_time(callback_status, time_info)
             copied = min(callback_frames, max(0, frames - cursor))
@@ -486,6 +511,7 @@ class SoundDeviceBackend(AudioBackend):
 
         input_device, _ = self._devices()
         input_device = self._device_argument(input_device)
+        opening_at = time.perf_counter()
         stream = sd.InputStream(
             samplerate=self.config.sample_rate,
             blocksize=self.config.block_size,
@@ -495,6 +521,7 @@ class SoundDeviceBackend(AudioBackend):
             latency=self.config.latency,
             callback=self._guard_stream_callback(callback, sd, callback_errors),
         )
+        callback_status["stream_open_seconds"] = time.perf_counter() - opening_at
         try:
             callback_status["stream_latency_seconds"] = float(stream.latency)
         except Exception:
@@ -560,20 +587,21 @@ class SoundDeviceBackend(AudioBackend):
         *,
         input_required: bool,
         output_channels: int | None,
+        validate_format: bool = True,
     ) -> dict[str, Any]:
         """Ask PortAudio to validate devices, channels, format and sample rate."""
         sd = self._module()
         input_device, output_device = self._devices()
         input_device = self._device_argument(input_device)
         output_device = self._device_argument(output_device)
-        if input_required:
+        if input_required and validate_format:
             sd.check_input_settings(
                 device=input_device,
                 channels=max(self.config.input_channels),
                 dtype=self.config.dtype,
                 samplerate=self.config.sample_rate,
             )
-        if output_channels is not None:
+        if output_channels is not None and validate_format:
             sd.check_output_settings(
                 device=output_device,
                 channels=output_channels,
@@ -645,6 +673,8 @@ class SoundDeviceBackend(AudioBackend):
 
     @_with_audio_com
     def play_record(self, output: np.ndarray) -> CaptureResult:
+        if self._experiment_live is not None:
+            return self._experiment_live.capture(len(output), output)
         # Clear before validation/opening.  A Stop click received while a slow
         # ASIO driver is opening then remains visible to the owner loop.
         self._abort_requested.clear()
@@ -659,10 +689,20 @@ class SoundDeviceBackend(AudioBackend):
 
     @_with_audio_com
     def record(self, frames: int) -> CaptureResult:
+        if self._experiment_live is not None:
+            return self._experiment_live.capture(frames)
         self._abort_requested.clear()
+        started = time.perf_counter()
         sd = self._module()
-        self.check_settings(input_required=True, output_channels=None)
+        module_ready = time.perf_counter()
+        # InputStream validates format/channels/rate when opening. Probing the
+        # same format first can initialize a Windows driver twice. Keep host
+        # API validation, but let the actual stream perform format validation.
+        self.check_settings(input_required=True, output_channels=None, validate_format=False)
+        checked = time.perf_counter()
         recording, callback_status, _ = self._input_stream(frames, sd)
+        callback_status["module_init_seconds"] = module_ready - started
+        callback_status["device_check_seconds"] = checked - module_ready
         selected = recording[:, np.asarray(self.config.input_channels) - 1]
         return CaptureResult(
             np.asarray(selected, dtype=np.float32),

@@ -882,6 +882,10 @@ def _finalize_average(
     return summary
 
 
+from .live_session import capture_session
+
+
+@capture_session
 def capture_rir(
     config: ExperimentConfig,
     backend: AudioBackend,
@@ -934,6 +938,11 @@ def capture_rir(
                 stop_requested is not None and stop_requested()
             ):
                 cancelled = True
+                store.write_audio(f"raw/take_{take_index:03d}_partial.wav", capture.microphones, fs)
+                store.write_json(f"metrics/take_{take_index:03d}_partial.json", {
+                    "accepted": False, "status": "cancelled", "backend_status": capture.status,
+                    "recorded_frames": len(capture.microphones), "expected_frames": len(output),
+                })
                 log("已停止：当前未完成的扫频不会加入平均")
                 break
             raw = capture.microphones
@@ -973,7 +982,7 @@ def capture_rir(
                 reference_peak,
             )
             clipped = any(bool(item["clipped"]) for item in raw_metrics)
-            xrun = bool(capture.status.get("xrun"))
+            xrun = bool(capture.status.get("xrun") or capture.status.get("timing_discontinuity"))
             low_sweep_snr = min(sweep_snr) < repeat_cfg.minimum_sweep_snr_db
             rejection_reasons = list(crop_issues)
             warnings = []

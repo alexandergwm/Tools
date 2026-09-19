@@ -22,7 +22,7 @@ LABEL_COLUMNS = [
     ("manual_label", "人工标签", "留给人工填写或修订的标签"),
     ("automatic_label", "自动标签", "由标签前缀和源文件名自动生成"),
     ("dataset_split", "数据集划分", "train、valid 或 test"),
-    ("valid", "是否有效", "人工质检开关：是或否"),
+    ("valid", "是否有效", "人工质检开关；自动发现异常时默认否。严格监督训练还必须检查 supervision_ready"),
     ("quality_flag", "质量标记", "自动质检结果"),
     ("quality_gate_enabled", "是否启用自动质量门限", "由项目模板统一设置，不要求现场人工评分"),
     ("quality_gate_passed", "自动质量门限是否通过", "仅在启用门限时影响监督可用状态"),

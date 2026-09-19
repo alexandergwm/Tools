@@ -5,6 +5,7 @@ import time
 import numpy as np
 from .signals import load_audio, fit_duration, scale_dbfs, route_outputs
 from .storage import RunStore
+from .live_session import capture_session
 
 DEFAULT_CORPUS = """从这到百货大楼有多远？十三四公里。怎么坐车？过马路先坐二路公共汽车，然后换地铁。他是一个略显瘦小的男孩。
 主楼位于校园的东北侧
@@ -35,6 +36,7 @@ def read_corpus(path=""):
     return lines
 
 
+@capture_session
 def capture_human(config, backend, log=print, stop_requested=None, progress=None):
     stop = stop_requested or (lambda: False)
     emit = progress or (lambda update: None)
@@ -52,7 +54,7 @@ def capture_human(config, backend, log=print, stop_requested=None, progress=None
     warning = "真人 target-only 与 mixed 是独立朗读，非严格配对监督参考；朗读提示不是已核验转写。"
     summary = {"warnings": [warning], "strict_supervised_pair": False, "completed_stages": 0}
     store.write_json("references/reading_corpus.json", {"lines": corpus})
-    fields = ["round", "stage", "recording", "clip", "start_sample", "end_sample", "prompt_text", "interferer_source", "strict_supervised_pair", "status"]
+    fields = ["round", "stage", "recording", "clip", "start_sample", "end_sample", "prompt_text", "interferer_source", "strict_supervised_pair", "status", "quality_passed", "timing_discontinuity"]
 
     def save_labels():
         path = store.root / "raw" / "labels.csv"
@@ -95,11 +97,12 @@ def capture_human(config, backend, log=print, stop_requested=None, progress=None
                 store.write_audio(raw, result.microphones, fs)
                 store.write_json(f"metrics/round_{ordinal + 1:03d}_{stage}.json", result.status)
                 actual = len(result.microphones)
-                bad = bool(result.status.get("xrun"))
-                status = "xrun" if bad else "partial" if actual < frames else "complete"
+                bad = bool(result.status.get("xrun") or result.status.get("timing_discontinuity"))
+                status = "timing_discontinuity" if result.status.get("timing_discontinuity") else "xrun" if bad else "partial" if actual < frames else "complete"
                 base = dict(round=ordinal + 1, stage=stage, recording=raw, prompt_text=prompt if stage != "interferer_only" else "",
                             interferer_source=str(source_path) if stage != "target_only" else "",
-                            strict_supervised_pair=False, status=status)
+                            strict_supervised_pair=False, status=status, quality_passed=status == "complete",
+                            timing_discontinuity=bool(result.status.get("timing_discontinuity")))
                 # Always index raw audio, including a cancelled stage shorter than 4 s.
                 rows.append(dict(base, clip="", start_sample=0, end_sample=actual))
                 chunk = 4 * fs

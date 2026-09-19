@@ -70,7 +70,7 @@ class RunStore:
         }
 
     @classmethod
-    def create(cls, config: ExperimentConfig, kind: str) -> "RunStore":
+    def create(cls, config: ExperimentConfig, kind: str, *, defer_provenance: bool = False) -> "RunStore":
         config = deepcopy(config)
         stamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
         root = Path(config.storage.root) / f"{stamp}_{_safe_name(config.storage.session_name)}_{kind}"
@@ -90,9 +90,10 @@ class RunStore:
             "kind": kind,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "host": socket.gethostname(),
-            "platform": platform.platform(),
+            "platform": None if defer_provenance else platform.platform(),
             "python": platform.python_version(),
-            "git_commit": _git_commit(),
+            "git_commit": None if defer_provenance else _git_commit(),
+            "provenance_pending": defer_provenance,
             "config_sha256": canonical_sha256(config.to_dict()),
             "array_geometry_sha256": array_geometry_sha256(config.metadata),
             "audio_backend": config.audio.backend,
@@ -183,6 +184,12 @@ class RunStore:
         self._flush()
 
     def finish(self, summary: dict[str, Any], status: str = "completed") -> None:
+        # System/WMI and git discovery are unrelated to opening a microphone.
+        # Simple recording defers these until the raw audio is safely saved.
+        if self.manifest.get("provenance_pending"):
+            self.manifest["platform"] = platform.platform()
+            self.manifest["git_commit"] = _git_commit()
+            self.manifest["provenance_pending"] = False
         report = [
             f"# Acoustic capture report: {self.config.storage.session_name}",
             "",
@@ -224,7 +231,7 @@ class RunStore:
 def _git_commit() -> str | None:
     try:
         return subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL, text=True
+            ["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL, text=True, timeout=2
         ).strip()
     except Exception:
         return None
