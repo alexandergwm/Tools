@@ -49,6 +49,7 @@ def main() -> int:
         config.sweep.end_hz = 3_500
         config.scene.items = ["target_only", "interferer_only", "mixture"]
         config.scene.source_mode = "folders"
+        config.scene.measurement_count = PAIR_COUNT
         config.scene.target_folder = str(targets)
         config.scene.interferer_folder = str(interferers)
         config.scene.duration_s = FRAMES / SAMPLE_RATE

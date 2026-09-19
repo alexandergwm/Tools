@@ -7,6 +7,9 @@ configuration. SimulatedBackend is deterministic enough for tests and demos.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from copy import deepcopy
+from contextlib import contextmanager
+from functools import wraps
 from dataclasses import dataclass
 import os
 from pathlib import Path
@@ -23,6 +26,35 @@ from scipy.signal import fftconvolve
 from .config import AudioConfig
 
 
+@contextmanager
+def _audio_com_apartment():
+    """Keep COM initialized on the owner thread until its audio operation ends."""
+    if os.name != "nt":
+        yield
+        return
+    import ctypes
+    ole32 = ctypes.WinDLL("ole32")
+    ole32.CoInitializeEx.argtypes = (ctypes.c_void_p, ctypes.c_uint32)
+    ole32.CoInitializeEx.restype = ctypes.c_long
+    result = int(ole32.CoInitializeEx(None, 2)) & 0xFFFFFFFF
+    # An existing MTA is valid; do not uninitialize an apartment we don't own.
+    if result not in (0, 1, 0x80010106):
+        raise RuntimeError(f"Windows COM initialization failed: 0x{result:08X}")
+    try:
+        yield
+    finally:
+        if result in (0, 1):
+            ole32.CoUninitialize()
+
+
+def _with_audio_com(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        with _audio_com_apartment():
+            return function(*args, **kwargs)
+    return wrapped
+
+
 @dataclass
 class CaptureResult:
     microphones: np.ndarray
@@ -31,7 +63,8 @@ class CaptureResult:
 
 class AudioBackend(ABC):
     def __init__(self, config: AudioConfig):
-        self.config = config
+        # A running stream must not observe edits made by a configuration UI.
+        self.config = deepcopy(config)
 
     @abstractmethod
     def play_record(self, output: np.ndarray) -> CaptureResult:
@@ -86,6 +119,8 @@ class SoundDeviceBackend(AudioBackend):
 
     def __init__(self, config: AudioConfig):
         super().__init__(config)
+        if self.config.dtype != "float32":
+            raise ValueError("audio.dtype must be float32: audio samples use normalized floating-point values")
         self._stream_lock = threading.Lock()
         self._active_stream: Any | None = None
         self._stream_owner_thread_id: int | None = None
@@ -263,7 +298,9 @@ class SoundDeviceBackend(AudioBackend):
             )
 
     def _run_stream(
-        self, stream: Any, expected_frames: int, sd, *, active_phase: str = "playing"
+        self, stream: Any, expected_frames: int, sd, *, active_phase: str = "playing",
+        processed_frames: Callable[[], int] | None = None,
+        callback_errors: list[Exception] | None = None,
     ) -> tuple[bool, bool]:
         """Start, observe and close a stream.
 
@@ -314,13 +351,53 @@ class SoundDeviceBackend(AudioBackend):
             except Exception:
                 pass
             self._set_active_stream(None)
+            actual_frames = processed_frames() if processed_frames is not None else expected_frames
+            failed = bool(callback_errors) or (
+                actual_frames != expected_frames and not cancelled and not timed_out
+            )
             self._emit_progress(
-                "cancelled" if cancelled else "timed_out" if timed_out else "completed",
-                expected_frames if not cancelled and not timed_out else 0,
+                "cancelled" if cancelled else "timed_out" if timed_out else "failed" if failed else "completed",
+                actual_frames,
                 expected_frames,
                 force=True,
             )
         return cancelled, timed_out
+
+    @staticmethod
+    def _guard_stream_callback(callback, sd, errors: list[Exception], *, output_index=None):
+        """Transfer callback failures to the stream owner (PortAudio only logs them)."""
+        abort = getattr(sd, "CallbackAbort", sd.CallbackStop)
+
+        def guarded(*args):
+            try:
+                callback(*args)
+            except (sd.CallbackStop, abort):
+                raise
+            except Exception as exc:
+                errors.append(exc)
+                if output_index is not None:
+                    try:
+                        args[output_index].fill(0)
+                    except Exception:
+                        pass
+                raise abort() from exc
+
+        return guarded
+
+    @staticmethod
+    def _validate_stream_completion(status, actual_frames, expected_frames, cancelled, errors):
+        status.update({
+            "processed_frames": int(actual_frames),
+            "expected_frames": int(expected_frames),
+            "complete": actual_frames == expected_frames and not cancelled and not errors,
+            "cancelled": cancelled,
+        })
+        if errors:
+            raise RuntimeError(f"音频回调失败：{errors[0]}") from errors[0]
+        if not cancelled and actual_frames != expected_frames:
+            raise RuntimeError(
+                f"音频流提前结束：只完成 {actual_frames}/{expected_frames} 帧；本次采集不可使用"
+            )
 
     def _duplex_stream(self, output: np.ndarray, sd) -> tuple[np.ndarray, dict[str, Any], bool]:
         """Return a fixed-length recording from one cancellable full-duplex stream."""
@@ -328,6 +405,7 @@ class SoundDeviceBackend(AudioBackend):
         frames = len(output)
         recording = np.zeros((frames, input_count), dtype=np.float32)
         callback_status = self._new_callback_status()
+        callback_errors: list[Exception] = []
         cursor = 0
 
         def callback(indata, outdata, callback_frames, time_info, status):
@@ -355,7 +433,7 @@ class SoundDeviceBackend(AudioBackend):
             channels=(input_count, output.shape[1]),
             dtype=(self.config.dtype, self.config.dtype),
             latency=self.config.latency,
-            callback=callback,
+            callback=self._guard_stream_callback(callback, sd, callback_errors, output_index=1),
             never_drop_input=False,
             prime_output_buffers_using_stream_callback=False,
         )
@@ -364,20 +442,23 @@ class SoundDeviceBackend(AudioBackend):
             callback_status["stream_latency_seconds"] = [float(value) for value in latency]
         except Exception:
             callback_status["stream_latency_seconds"] = None
-        cancelled, timed_out = self._run_stream(stream, frames, sd)
+        cancelled, timed_out = self._run_stream(
+            stream, frames, sd, processed_frames=lambda: cursor, callback_errors=callback_errors
+        )
         if timed_out:
             raise TimeoutError(
                 "同步播录超时：音频驱动没有在预期时间内完成。"
                 "请改选 MME 或 Windows WASAPI 的实际麦克风/扬声器，"
                 "并先点击“检查声卡”。"
             )
-        callback_status["cancelled"] = cancelled
-        return recording, callback_status, cancelled
+        self._validate_stream_completion(callback_status, cursor, frames, cancelled, callback_errors)
+        return recording[:cursor], callback_status, cancelled
 
     def _input_stream(self, frames: int, sd) -> tuple[np.ndarray, dict[str, Any], bool]:
         input_count = max(self.config.input_channels)
         recording = np.zeros((frames, input_count), dtype=np.float32)
         callback_status = self._new_callback_status()
+        callback_errors: list[Exception] = []
         cursor = 0
 
         def callback(indata, callback_frames, time_info, status):
@@ -401,25 +482,27 @@ class SoundDeviceBackend(AudioBackend):
             channels=input_count,
             dtype=self.config.dtype,
             latency=self.config.latency,
-            callback=callback,
+            callback=self._guard_stream_callback(callback, sd, callback_errors),
         )
         try:
             callback_status["stream_latency_seconds"] = float(stream.latency)
         except Exception:
             callback_status["stream_latency_seconds"] = None
         cancelled, timed_out = self._run_stream(
-            stream, frames, sd, active_phase="recording"
+            stream, frames, sd, active_phase="recording",
+            processed_frames=lambda: cursor, callback_errors=callback_errors,
         )
         if timed_out:
             raise TimeoutError(
                 "录制超时：麦克风驱动没有返回音频。请检查 Windows 麦克风权限和所选设备。"
             )
-        callback_status["cancelled"] = cancelled
-        return recording, callback_status, cancelled
+        self._validate_stream_completion(callback_status, cursor, frames, cancelled, callback_errors)
+        return recording[:cursor], callback_status, cancelled
 
     def _output_stream(self, output: np.ndarray, sd) -> tuple[dict[str, Any], bool]:
         frames = len(output)
         callback_status = self._new_callback_status()
+        callback_errors: list[Exception] = []
         cursor = 0
 
         def callback(outdata, callback_frames, time_info, status):
@@ -444,21 +527,24 @@ class SoundDeviceBackend(AudioBackend):
             channels=output.shape[1],
             dtype=self.config.dtype,
             latency=self.config.latency,
-            callback=callback,
+            callback=self._guard_stream_callback(callback, sd, callback_errors, output_index=0),
             prime_output_buffers_using_stream_callback=False,
         )
         try:
             callback_status["stream_latency_seconds"] = float(stream.latency)
         except Exception:
             callback_status["stream_latency_seconds"] = None
-        cancelled, timed_out = self._run_stream(stream, frames, sd)
+        cancelled, timed_out = self._run_stream(
+            stream, frames, sd, processed_frames=lambda: cursor, callback_errors=callback_errors
+        )
         if timed_out:
             raise TimeoutError(
                 "播放超时：扬声器驱动没有在预期时间内完成。请检查所选播放设备。"
             )
-        callback_status["cancelled"] = cancelled
+        self._validate_stream_completion(callback_status, cursor, frames, cancelled, callback_errors)
         return callback_status, cancelled
 
+    @_with_audio_com
     def check_settings(
         self,
         *,
@@ -547,6 +633,7 @@ class SoundDeviceBackend(AudioBackend):
         self._last_check_warnings = list(warnings)
         return status
 
+    @_with_audio_com
     def play_record(self, output: np.ndarray) -> CaptureResult:
         # Clear before validation/opening.  A Stop click received while a slow
         # ASIO driver is opening then remains visible to the owner loop.
@@ -560,6 +647,7 @@ class SoundDeviceBackend(AudioBackend):
             self._operation_status(sd, callback_status),
         )
 
+    @_with_audio_com
     def record(self, frames: int) -> CaptureResult:
         self._abort_requested.clear()
         sd = self._module()
@@ -571,6 +659,7 @@ class SoundDeviceBackend(AudioBackend):
             self._operation_status(sd, callback_status),
         )
 
+    @_with_audio_com
     def play(self, output: np.ndarray) -> dict[str, Any]:
         self._abort_requested.clear()
         sd = self._module()
@@ -578,6 +667,7 @@ class SoundDeviceBackend(AudioBackend):
         callback_status, _ = self._output_stream(output, sd)
         return self._operation_status(sd, callback_status)
 
+    @_with_audio_com
     def record_to_file(
         self,
         path: str | Path,
@@ -596,6 +686,7 @@ class SoundDeviceBackend(AudioBackend):
         block_queue: queue.Queue[np.ndarray] = queue.Queue(maxsize=128)
         callback_status = self._new_callback_status()
         callback_errors: list[str] = []
+        stream_callback_errors: list[Exception] = []
         captured_frames = 0
         written_frames = 0
 
@@ -627,7 +718,7 @@ class SoundDeviceBackend(AudioBackend):
             channels=input_count,
             dtype=self.config.dtype,
             latency=self.config.latency,
-            callback=callback,
+            callback=self._guard_stream_callback(callback, sd, stream_callback_errors),
         )
         try:
             callback_status["stream_latency_seconds"] = float(stream.latency)
@@ -678,6 +769,10 @@ class SoundDeviceBackend(AudioBackend):
             self._set_active_stream(None)
         if callback_errors:
             raise RuntimeError(callback_errors[0])
+        if stream_callback_errors:
+            raise RuntimeError(f"音频回调失败：{stream_callback_errors[0]}") from stream_callback_errors[0]
+        if not (self._abort_requested.is_set() or stop_requested()):
+            raise RuntimeError(f"录音流意外结束：已保存 {written_frames} 帧，请检查音频设备")
         self._emit_progress("completed", written_frames, written_frames, force=True)
         result = self._operation_status(sd, callback_status)
         result.update(

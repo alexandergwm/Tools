@@ -3,15 +3,23 @@
 from __future__ import annotations
 
 import time
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
 import numpy as np
-from scipy.fft import next_fast_len
 from scipy.signal import fftconvolve
 
 from .audio import AudioBackend
+from .deconvolution import (
+    RIRWindowError, estimate_impulse_response, extract_rir, kirkeby_inverse_spectrum,
+)
+from .timing import (
+    detect_direct_arrival, gcc_phat_delay_samples, low_frequency_group_delay_samples,
+    rir_timing_metrics, estimate_sweep_clock_drift_ppm,
+)
+from .rir_quality import quality_summary, reconstruction_issues, timing_issues
 from .config import ExperimentConfig, RepeatConfig
 from .quality import channel_metrics, multichannel_health_metrics, normalized_correlation
 from .signals import exponential_sweep, measurement_signal, route_outputs
@@ -30,406 +38,6 @@ class RIRTake:
     accepted: bool
     metrics: dict
     validation_response: np.ndarray | None = None
-
-
-def _moving_mean_asymmetric(values: np.ndarray, before: int, after: int) -> np.ndarray:
-    """Match MATLAB ``movmean(x, [before, after])`` endpoint behaviour."""
-    values = np.asarray(values, dtype=np.float64)
-    indices = np.arange(len(values))
-    starts = np.maximum(0, indices - before)
-    stops = np.minimum(len(values), indices + after + 1)
-    cumulative = np.concatenate(([0.0], np.cumsum(values, dtype=np.float64)))
-    return (cumulative[stops] - cumulative[starts]) / (stops - starts)
-
-
-def kirkeby_inverse_spectrum(excitation: np.ndarray, response_samples: int) -> np.ndarray:
-    """Build the regularised inverse used by MATLAB R2024b ``impzest`` for ESS.
-
-    The frequency-dependent Kirkeby regularisation suppresses inverse-filter
-    gain outside the useful sweep band.  It is substantially more robust than
-    a plain time-reversed sweep when the recording contains noise.
-    """
-    excitation = np.asarray(excitation, dtype=np.float64).reshape(-1)
-    if len(excitation) < 2 or response_samples < len(excitation):
-        raise ValueError("response must contain the complete ESS excitation")
-    fft_length = next_fast_len(2 * response_samples)
-    if fft_length % 2:
-        fft_length = next_fast_len(fft_length + 1)
-    spectrum = np.fft.fft(excitation, fft_length)
-    half = fft_length // 2
-    frequency_index = np.arange(half + 1, dtype=np.float64)
-    flattened = np.abs(spectrum[: half + 1]) * np.sqrt(frequency_index)
-    flattened = np.minimum(
-        _moving_mean_asymmetric(flattened, 1000, 10),
-        _moving_mean_asymmetric(flattened, 10, 1000),
-    )
-    maximum = max(float(np.max(flattened)), np.finfo(np.float64).eps)
-    regularisation = np.maximum(1e-4 * maximum, 0.38 * maximum - flattened)
-    positive = np.conj(spectrum[: half + 1]) / (
-        np.abs(spectrum[: half + 1]) ** 2 + regularisation
-    )
-    inverse = np.empty(fft_length, dtype=np.complex128)
-    inverse[: half + 1] = positive
-    inverse[half + 1 :] = np.conj(positive[1:half][::-1])
-    return inverse
-
-
-def estimate_impulse_response(
-    excitation: np.ndarray,
-    response: np.ndarray,
-    output_samples: int,
-) -> np.ndarray:
-    """Estimate a multi-channel IR matching MATLAB R2024b ESS deconvolution."""
-    response = np.asarray(response, dtype=np.float64)
-    if response.ndim == 1:
-        response = response[:, None]
-    if output_samples < 1:
-        raise ValueError("output_samples must be positive")
-    if output_samples > len(response) - len(excitation):
-        raise ValueError("the response does not contain enough trailing silence")
-    inverse = kirkeby_inverse_spectrum(excitation, len(response))
-    fft_length = len(inverse)
-    estimate = np.fft.ifft(
-        np.fft.fft(response, fft_length, axis=0) * inverse[:, None], axis=0
-    ).real
-    estimate = np.fft.ifftshift(estimate, axes=0)
-    center = fft_length // 2
-    return estimate[center : center + output_samples].astype(np.float32)
-
-
-def detect_direct_arrival(
-    impulse_response: np.ndarray,
-    sample_rate: int,
-    *,
-    search_duration_s: float = 0.5,
-    direct_peak_window_s: float = 0.0025,
-    relative_threshold_db: float = -30.0,
-) -> tuple[int, int, dict]:
-    """Locate the first significant arrival and its nearby direct-path peak.
-
-    The largest value in an RIR is not necessarily the direct sound.  Headset
-    structures and nearby surfaces can create a stronger early reflection.
-    We therefore detect the first persistent rise above both the deconvolution
-    noise floor and a level relative to the strongest early response, then
-    search only a short window after that onset for the direct-path peak.
-    """
-    values = np.asarray(impulse_response, dtype=np.float64).reshape(-1)
-    if sample_rate <= 0 or len(values) == 0:
-        raise ValueError("impulse response and sample rate must be non-empty and positive")
-    search_samples = min(len(values), max(1, round(search_duration_s * sample_rate)))
-    magnitude = np.abs(values[:search_samples])
-    smoothing_samples = min(
-        search_samples,
-        max(1, round(0.00025 * sample_rate)),
-    )
-    kernel = np.full(smoothing_samples, 1.0 / smoothing_samples)
-    envelope = np.sqrt(np.convolve(magnitude * magnitude, kernel, mode="same"))
-    envelope_peak = max(float(np.max(envelope)), np.finfo(np.float64).eps)
-    median = float(np.median(envelope))
-    mad = float(np.median(np.abs(envelope - median)))
-    robust_sigma = 1.4826 * mad
-    noise_threshold = median + 8.0 * robust_sigma
-    relative_threshold = envelope_peak * 10.0 ** (relative_threshold_db / 20.0)
-    threshold = max(noise_threshold, relative_threshold)
-
-    minimum_run = min(search_samples, max(1, round(0.0001 * sample_rate)))
-    above = envelope >= threshold
-    persistent = np.convolve(
-        above.astype(np.int16), np.ones(minimum_run, dtype=np.int16), mode="valid"
-    )
-    starts = np.flatnonzero(persistent >= minimum_run)
-    if len(starts):
-        onset = max(0, int(starts[0]) - smoothing_samples // 2)
-        method = "first_persistent_energy_rise"
-    else:
-        onset = int(np.argmax(magnitude))
-        method = "fallback_early_global_peak"
-
-    peak_end = min(
-        search_samples,
-        onset + max(1, round(direct_peak_window_s * sample_rate)),
-    )
-    if peak_end <= onset:
-        direct_peak = onset
-    else:
-        direct_peak = onset + int(np.argmax(magnitude[onset:peak_end]))
-    noise_floor = max(median + robust_sigma, np.finfo(np.float64).eps)
-    diagnostics = {
-        "method": method,
-        "onset_sample": onset,
-        "direct_peak_sample": direct_peak,
-        "search_samples": search_samples,
-        "smoothing_samples": smoothing_samples,
-        "threshold": threshold,
-        "relative_threshold_db": relative_threshold_db,
-        "onset_confidence_db": float(
-            20.0 * np.log10(max(float(envelope[direct_peak]), noise_floor) / noise_floor)
-        ),
-    }
-    return onset, direct_peak, diagnostics
-
-
-def gcc_phat_delay_samples(
-    reference: np.ndarray,
-    target: np.ndarray,
-    sample_rate: int,
-    *,
-    max_delay_s: float = 0.002,
-    frequency_band_hz: tuple[float, float] = (300.0, 8_000.0),
-) -> tuple[float, dict]:
-    """Estimate target-minus-reference delay with band-limited GCC-PHAT.
-
-    Positive delay means that ``target`` arrives later than ``reference``.
-    A parabolic interpolation around the correlation maximum provides a
-    fractional-sample diagnostic while the integer peak remains available in
-    the returned metadata.
-    """
-    reference = np.asarray(reference, dtype=np.float64).reshape(-1)
-    target = np.asarray(target, dtype=np.float64).reshape(-1)
-    count = min(len(reference), len(target))
-    if sample_rate <= 0 or count < 4:
-        raise ValueError("GCC-PHAT requires two non-empty signals and a positive sample rate")
-    reference = reference[:count] - np.mean(reference[:count])
-    target = target[:count] - np.mean(target[:count])
-    window = np.hanning(count)
-    fft_length = next_fast_len(max(2 * count, 32))
-    reference_spectrum = np.fft.rfft(reference * window, fft_length)
-    target_spectrum = np.fft.rfft(target * window, fft_length)
-    cross = target_spectrum * np.conj(reference_spectrum)
-    frequencies = np.fft.rfftfreq(fft_length, 1.0 / sample_rate)
-    low_hz = max(0.0, float(frequency_band_hz[0]))
-    high_hz = min(float(frequency_band_hz[1]), sample_rate / 2.0)
-    usable = (frequencies >= low_hz) & (frequencies <= high_hz)
-    phat = np.zeros_like(cross)
-    phat[usable] = cross[usable] / np.maximum(np.abs(cross[usable]), 1e-15)
-    correlation = np.fft.irfft(phat, fft_length)
-    max_delay_samples = min(
-        fft_length // 2 - 1,
-        max(1, round(max_delay_s * sample_rate)),
-    )
-    correlation = np.concatenate(
-        (correlation[-max_delay_samples:], correlation[: max_delay_samples + 1])
-    )
-    lags = np.arange(-max_delay_samples, max_delay_samples + 1)
-    magnitudes = np.abs(correlation)
-    index = int(np.argmax(magnitudes))
-    integer_delay = int(lags[index])
-    fractional_offset = 0.0
-    if 0 < index < len(magnitudes) - 1:
-        left, center, right = magnitudes[index - 1 : index + 2]
-        denominator = left - 2.0 * center + right
-        if abs(denominator) > 1e-15:
-            fractional_offset = float(0.5 * (left - right) / denominator)
-            fractional_offset = float(np.clip(fractional_offset, -0.5, 0.5))
-    delay = float(integer_delay + fractional_offset)
-    competing = magnitudes.copy()
-    competing[max(0, index - 2) : min(len(competing), index + 3)] = 0.0
-    second_peak = float(np.max(competing)) if len(competing) > 1 else 0.0
-    diagnostics = {
-        "integer_delay_samples": integer_delay,
-        "fractional_delay_samples": delay,
-        "delay_seconds": delay / sample_rate,
-        "frequency_band_hz": [low_hz, high_hz],
-        "maximum_delay_samples": max_delay_samples,
-        "peak_to_second_peak_ratio": float(
-            magnitudes[index] / max(second_peak, np.finfo(np.float64).eps)
-        ),
-    }
-    return delay, diagnostics
-
-
-def low_frequency_group_delay_samples(
-    reference: np.ndarray,
-    target: np.ndarray,
-    sample_rate: int,
-    *,
-    frequency_band_hz: tuple[float, float] = (100.0, 800.0),
-) -> tuple[float | None, dict]:
-    """Estimate relative low-frequency delay from cross-spectrum phase slope.
-
-    This estimator is intentionally diagnostic: room reflections and unequal
-    microphone phase responses can make a single group-delay value unreliable.
-    The weighted fit quality is returned so callers can compare it with
-    GCC-PHAT instead of treating it as ground truth.
-    """
-    reference = np.asarray(reference, dtype=np.float64).reshape(-1)
-    target = np.asarray(target, dtype=np.float64).reshape(-1)
-    count = min(len(reference), len(target))
-    if sample_rate <= 0 or count < 8:
-        raise ValueError("group delay requires two non-empty signals and a positive sample rate")
-    reference = reference[:count]
-    target = target[:count]
-    fft_length = next_fast_len(max(8 * count, 4096))
-    reference_spectrum = np.fft.rfft(reference, fft_length)
-    target_spectrum = np.fft.rfft(target, fft_length)
-    cross = target_spectrum * np.conj(reference_spectrum)
-    frequencies = np.fft.rfftfreq(fft_length, 1.0 / sample_rate)
-    low_hz = max(0.0, float(frequency_band_hz[0]))
-    high_hz = min(float(frequency_band_hz[1]), sample_rate / 2.0)
-    in_band = (frequencies >= low_hz) & (frequencies <= high_hz)
-    band_magnitude = np.abs(cross[in_band])
-    if np.count_nonzero(in_band) < 3 or not np.any(band_magnitude > 0):
-        return None, {
-            "frequency_band_hz": [low_hz, high_hz],
-            "fit_r_squared": 0.0,
-            "reliable": False,
-        }
-    magnitude_floor = float(np.percentile(band_magnitude, 25.0))
-    usable = in_band & (np.abs(cross) >= magnitude_floor)
-    selected_frequencies = frequencies[usable]
-    phase = np.unwrap(np.angle(cross[usable]))
-    weights = np.sqrt(np.abs(cross[usable]))
-    weights /= max(float(np.max(weights)), np.finfo(np.float64).eps)
-    design = np.column_stack((selected_frequencies, np.ones_like(selected_frequencies)))
-    weighted_design = design * weights[:, None]
-    weighted_phase = phase * weights
-    slope, intercept = np.linalg.lstsq(weighted_design, weighted_phase, rcond=None)[0]
-    fitted = slope * selected_frequencies + intercept
-    weighted_mean = float(np.average(phase, weights=np.maximum(weights, 1e-12)))
-    residual_energy = float(np.sum(weights * (phase - fitted) ** 2))
-    total_energy = float(np.sum(weights * (phase - weighted_mean) ** 2))
-    fit_r_squared = 1.0 - residual_energy / max(total_energy, 1e-24)
-    delay_samples = float(-slope * sample_rate / (2.0 * np.pi))
-    reliable = bool(fit_r_squared >= 0.8 and np.isfinite(delay_samples))
-    return delay_samples, {
-        "frequency_band_hz": [low_hz, high_hz],
-        "fit_r_squared": fit_r_squared,
-        "bins_used": int(np.count_nonzero(usable)),
-        "reliable": reliable,
-    }
-
-
-def rir_timing_metrics(
-    full_rir: np.ndarray,
-    sample_rate: int,
-    reference_channel: int = 0,
-) -> dict:
-    """Return direct-arrival and inter-microphone delay diagnostics."""
-    full_rir = np.asarray(full_rir, dtype=np.float64)
-    if full_rir.ndim == 1:
-        full_rir = full_rir[:, None]
-    if not 0 <= reference_channel < full_rir.shape[1]:
-        raise ValueError("reference channel is outside the RIR")
-    onset, direct_peak, arrival = detect_direct_arrival(
-        full_rir[:, reference_channel], sample_rate
-    )
-    before = max(1, round(0.002 * sample_rate))
-    after = max(1, round(0.012 * sample_rate))
-    start = max(0, onset - before)
-    stop = min(len(full_rir), onset + after)
-    direct_window = full_rir[start:stop]
-    group_stop = min(len(full_rir), onset + max(after, round(0.08 * sample_rate)))
-    group_window = full_rir[start:group_stop]
-    per_channel = []
-    speed_of_sound_m_s = 343.0
-    for channel in range(full_rir.shape[1]):
-        if channel == reference_channel:
-            gcc_delay = 0.0
-            gcc_details = {
-                "integer_delay_samples": 0,
-                "fractional_delay_samples": 0.0,
-                "delay_seconds": 0.0,
-                "frequency_band_hz": [300.0, min(8_000.0, sample_rate / 2.0)],
-                "maximum_delay_samples": round(0.002 * sample_rate),
-                "peak_to_second_peak_ratio": None,
-            }
-            group_delay = 0.0
-            group_details = {
-                "frequency_band_hz": [100.0, min(800.0, sample_rate / 2.0)],
-                "fit_r_squared": 1.0,
-                "bins_used": None,
-                "reliable": True,
-            }
-        else:
-            gcc_delay, gcc_details = gcc_phat_delay_samples(
-                direct_window[:, reference_channel],
-                direct_window[:, channel],
-                sample_rate,
-            )
-            group_delay, group_details = low_frequency_group_delay_samples(
-                group_window[:, reference_channel],
-                group_window[:, channel],
-                sample_rate,
-            )
-        agreement = (
-            abs(float(gcc_delay) - float(group_delay))
-            if group_delay is not None
-            else None
-        )
-        per_channel.append(
-            {
-                "microphone_channel": channel + 1,
-                "gcc_phat_delay_samples": float(gcc_delay),
-                "gcc_phat_delay_microseconds": float(gcc_delay) / sample_rate * 1e6,
-                "equivalent_path_difference_m": (
-                    float(gcc_delay) / sample_rate * speed_of_sound_m_s
-                ),
-                "low_frequency_group_delay_samples": (
-                    float(group_delay) if group_delay is not None else None
-                ),
-                "estimator_agreement_samples": agreement,
-                "estimators_agree_within_one_sample": (
-                    bool(agreement <= 1.0) if agreement is not None else False
-                ),
-                "gcc_phat": gcc_details,
-                "low_frequency_group_delay": group_details,
-            }
-        )
-    return {
-        "reference_microphone_channel": reference_channel + 1,
-        "reference_arrival": arrival,
-        "direct_analysis_window_samples": [start, stop],
-        "per_channel": per_channel,
-    }
-
-
-def extract_rir(
-    recording: np.ndarray,
-    excitation: np.ndarray,
-    sample_rate: int,
-    pre_silence_s: float,
-    post_silence_s: float,
-    duration_s: float,
-    pre_peak_s: float,
-) -> tuple[np.ndarray, list[int], int, list[int], np.ndarray]:
-    """Deconvolve and crop every microphone on one common time grid.
-
-    Microphone 1 supplies the common direct-arrival reference.  All microphone
-    channels receive the same crop, so real inter-microphone time differences
-    remain present in the saved RIR.
-    """
-    recording = np.asarray(recording)
-    if recording.ndim != 2 or recording.shape[1] < 1:
-        raise ValueError("recording must have at least one microphone channel")
-    pre_samples = round(pre_silence_s * sample_rate)
-    response = recording[pre_samples:]
-    full_samples = round(post_silence_s * sample_rate)
-    full_rir = estimate_impulse_response(excitation, response, full_samples)
-
-    _reference_onset, reference_peak, _arrival = detect_direct_arrival(
-        full_rir[:, 0], sample_rate
-    )
-    local_radius = max(1, round(0.002 * sample_rate))
-    low = max(0, reference_peak - local_radius)
-    high = min(len(full_rir), reference_peak + local_radius + 1)
-    peaks = [
-        low + int(np.argmax(np.abs(full_rir[low:high, channel])))
-        for channel in range(full_rir.shape[1])
-    ]
-    offsets = [peak - reference_peak for peak in peaks]
-
-    output_samples = round(duration_s * sample_rate)
-    before_peak = round(pre_peak_s * sample_rate)
-    start = reference_peak - before_peak
-    cropped = np.zeros((output_samples, full_rir.shape[1]), dtype=np.float32)
-    source_start = max(start, 0)
-    destination_start = max(-start, 0)
-    count = min(len(full_rir) - source_start, output_samples - destination_start)
-    if count > 0:
-        cropped[destination_start : destination_start + count] = full_rir[
-            source_start : source_start + count
-        ]
-    return cropped, peaks, reference_peak, offsets, full_rir
 
 
 def align_rir_to_reference(
@@ -514,107 +122,6 @@ def sweep_snr_db(
             float(20 * np.log10(max(active_rms, 1e-12) / max(noise_rms, 1e-12)))
         )
     return values
-
-
-def estimate_sweep_clock_drift_ppm(
-    recording: np.ndarray,
-    excitation: np.ndarray,
-    sample_rate: int,
-    pre_silence_s: float,
-    approximate_delay_samples: int,
-) -> dict:
-    """Estimate relative playback/record clock drift from ESS segment timing.
-
-    A fixed driver/acoustic latency moves every segment equally.  Independent
-    playback and capture clocks instead make later sweep segments arrive
-    progressively earlier or later.  This diagnostic fits that timing slope;
-    it does not resample or otherwise alter the recorded data.
-    """
-    recording = np.asarray(recording, dtype=np.float64).reshape(-1)
-    excitation = np.asarray(excitation, dtype=np.float64).reshape(-1)
-    if sample_rate <= 0 or len(excitation) < round(0.5 * sample_rate):
-        return {
-            "estimated_drift_ppm": None,
-            "accumulated_drift_samples_over_sweep": None,
-            "fit_r_squared": 0.0,
-            "reliable": False,
-            "reason": "sweep_too_short",
-        }
-    pre_samples = round(pre_silence_s * sample_rate)
-    segment_samples = min(round(0.35 * sample_rate), len(excitation) // 5)
-    margin_samples = max(round(0.015 * sample_rate), 64)
-    observations = []
-    for fraction in (0.15, 0.325, 0.5, 0.675, 0.85):
-        center = round(fraction * (len(excitation) - 1))
-        segment_start = max(0, min(len(excitation) - segment_samples, center - segment_samples // 2))
-        segment = excitation[segment_start : segment_start + segment_samples]
-        predicted = pre_samples + approximate_delay_samples + segment_start
-        search_start = predicted - margin_samples
-        search_stop = predicted + segment_samples + margin_samples
-        if search_start < 0 or search_stop > len(recording):
-            continue
-        search = recording[search_start:search_stop]
-        correlation = fftconvolve(search, segment[::-1], mode="valid")
-        magnitude = np.abs(correlation)
-        peak_index = int(np.argmax(magnitude))
-        fractional_offset = 0.0
-        if 0 < peak_index < len(magnitude) - 1:
-            left, center_value, right = magnitude[peak_index - 1 : peak_index + 2]
-            denominator = left - 2.0 * center_value + right
-            if abs(denominator) > 1e-15:
-                fractional_offset = float(
-                    np.clip(0.5 * (left - right) / denominator, -0.5, 0.5)
-                )
-        observed_start = search_start + peak_index + fractional_offset
-        baseline = float(np.median(magnitude))
-        confidence = float(
-            magnitude[peak_index] / max(baseline, np.finfo(np.float64).eps)
-        )
-        observations.append(
-            {
-                "sweep_sample": segment_start + segment_samples // 2,
-                "residual_delay_samples": observed_start - predicted,
-                "peak_to_median_ratio": confidence,
-            }
-        )
-    if len(observations) < 3:
-        return {
-            "estimated_drift_ppm": None,
-            "accumulated_drift_samples_over_sweep": None,
-            "fit_r_squared": 0.0,
-            "reliable": False,
-            "reason": "insufficient_segments",
-            "segments": observations,
-        }
-    positions = np.asarray([item["sweep_sample"] for item in observations], dtype=np.float64)
-    delays = np.asarray(
-        [item["residual_delay_samples"] for item in observations], dtype=np.float64
-    )
-    slope, intercept = np.polyfit(positions, delays, 1)
-    fitted = slope * positions + intercept
-    residual_energy = float(np.sum((delays - fitted) ** 2))
-    total_energy = float(np.sum((delays - np.mean(delays)) ** 2))
-    fit_r_squared = (
-        1.0 - residual_energy / total_energy if total_energy > 1e-12 else 1.0
-    )
-    drift_ppm = float(slope * 1e6)
-    accumulated = float(slope * len(excitation))
-    minimum_confidence = min(item["peak_to_median_ratio"] for item in observations)
-    near_constant_delay = float(np.ptp(delays)) <= 0.5
-    reliable = bool(
-        np.isfinite(drift_ppm)
-        and (fit_r_squared >= 0.8 or near_constant_delay)
-        and minimum_confidence >= 3.0
-    )
-    return {
-        "estimated_drift_ppm": drift_ppm,
-        "accumulated_drift_samples_over_sweep": accumulated,
-        "fit_r_squared": fit_r_squared,
-        "minimum_peak_to_median_ratio": minimum_confidence,
-        "reliable": reliable,
-        "sign_convention": "positive_means_later_segments_arrive_progressively_later",
-        "segments": observations,
-    }
 
 
 def _validation_response(
@@ -1013,6 +520,10 @@ def _align_and_filter_repeat_consensus(
         ),
     )
     reference = candidates[medoid_index]
+    ambiguous_pair = (
+        len(candidates) == 2
+        and similarities[0, 1] < repeat_config.correlation_threshold
+    )
     retained: list[RIRTake] = []
     for candidate in candidates:
         aligned, shifts, correlations = align_rir_to_reference(
@@ -1028,9 +539,8 @@ def _align_and_filter_repeat_consensus(
                 candidate.validation_response,
                 common_shift,
             )
-        consistent = (
-            len(candidates) <= 2
-            or candidate is reference
+        consistent = not ambiguous_pair and (
+            candidate is reference
             or min(correlations) >= repeat_config.correlation_threshold
         )
         metrics = candidate.metrics
@@ -1044,7 +554,8 @@ def _align_and_filter_repeat_consensus(
         if not consistent:
             metrics["accepted"] = False
             metrics.setdefault("rejection_reasons", []).append(
-                "早期脉冲响应与重复测量共识不一致"
+                "仅有两次且彼此不一致，无法确定有效成员，请补采"
+                if ambiguous_pair else "早期脉冲响应与重复测量共识不一致"
             )
         else:
             metrics["accepted"] = True
@@ -1057,12 +568,12 @@ def _align_and_filter_repeat_consensus(
                 candidate.validation_response,
             )
             metrics["self_reconstruction"] = reconstruction
-            store.write_audio(
+            store.write_float_audio(
                 f"processed/recon_{candidate.index:03d}.wav",
                 reconstructed,
                 sample_rate,
             )
-        store.write_audio(
+        store.write_float_audio(
             f"processed/take_{candidate.index:03d}_rir.wav",
             candidate.rir,
             sample_rate,
@@ -1133,15 +644,16 @@ def _finalize_average(
         if abs(float(item["estimated_drift_ppm"])) >= 30.0
     ]
     if high_clock_drift:
-        quality_issues.append(
-            "检测到输入/输出采样时钟偏差，RIR 可能发生时间拉伸"
+        quality_warnings.append(
+            "扫频片段存在时序趋势；固定频响相位也可能造成该趋势，"
+            "没有独立参考时不能确认硬件时钟漂移"
         )
     if len(accepted) < min(2, max(1, repeat_config.fixed_count)):
-        quality_issues.append("最终只有一次有效 RIR，无法验证重复性")
+        quality_issues.append("最终有效 RIR 数量不足，无法验证重复性")
     repeat_rejected = [
         item["take"]
         for item in all_metrics
-        if item.get("accepted_by_recording_qc") and not item.get("accepted")
+        if item.get("repeat_consensus_reference_take") is not None and not item.get("accepted")
     ]
     if repeat_rejected:
         quality_warnings.append(
@@ -1149,6 +661,8 @@ def _finalize_average(
             + ", ".join(map(str, repeat_rejected))
         )
     accepted_metric_rows = [item for item in all_metrics if item.get("accepted")]
+    for item in accepted_metric_rows:
+        quality_issues.extend(timing_issues(item.get("rir_timing") or {}))
     delay_stability = []
     if accepted_metric_rows:
         timing_rows = [
@@ -1175,9 +689,13 @@ def _finalize_average(
                     "maximum_gcc_phat_delay_samples": float(np.max(values)),
                     "peak_to_peak_samples": peak_to_peak,
                     "stable_within_two_samples": peak_to_peak <= 2.0,
+                    "stability_threshold_samples": repeat_config.delay_agreement_samples,
+                    "stable_within_configured_tolerance": (
+                        peak_to_peak <= repeat_config.delay_agreement_samples
+                    ),
                 }
             )
-            if len(values) >= 3 and peak_to_peak > 2.0:
+            if len(values) >= 2 and peak_to_peak > repeat_config.delay_agreement_samples:
                 quality_issues.append(
                     f"麦克风 {channel_index + 1} 相对麦克风 1 的 GCC-PHAT "
                     f"延迟跨 take 波动 {peak_to_peak:.2f} 个采样点"
@@ -1193,7 +711,7 @@ def _finalize_average(
         "deconvolution": "regularized_inverse_matched_to_matlab_r2024b_impzest",
         "matlab_compatibility": {
             "reference_release": "R2024b",
-            "sweeptone_and_impzest_numeric_comparison": "passed",
+            "sweeptone_and_impzest_numeric_comparison": "implementation_reference_test_not_per_capture_validation",
             "note": (
                 "The regularized result is intentionally not an amplitude-perfect "
                 "least-squares inverse; this matches MATLAB impzest and suppresses "
@@ -1205,12 +723,8 @@ def _finalize_average(
         "sweep_clock_drift": {
             "reliable_estimates": reliable_clock_drifts,
             "warning_threshold_ppm": 30.0,
-        },
-        "quality": {
-            "status": "pass" if not quality_issues else "review_required",
-            "recommended_for_training": not quality_issues,
-            "issues": quality_issues,
-            "warnings": quality_warnings,
+            "clock_drift_confirmed": False,
+            "interpretation": "acoustic_segment_timing_trend_not_hardware_clock_measurement",
         },
         "intermicrophone_delay_stability": delay_stability,
         "offline_reselection": {
@@ -1255,12 +769,12 @@ def _finalize_average(
         stack = np.stack([take.rir for take in accepted])
         average = np.mean(stack, axis=0).astype(np.float32)
         median = np.median(stack, axis=0).astype(np.float32)
-        store.write_audio("processed/average_rir.wav", average, sample_rate)
-        store.write_audio("processed/selected_rir.wav", average, sample_rate)
-        store.write_audio(
+        store.write_float_audio("processed/average_rir.wav", average, sample_rate)
+        store.write_float_audio("processed/selected_rir.wav", average, sample_rate)
+        store.write_float_audio(
             "processed/all_accepted_mean_rir.wav", average, sample_rate
         )
-        store.write_audio("processed/median_rir.wav", median, sample_rate)
+        store.write_float_audio("processed/median_rir.wav", median, sample_rate)
         average_reconstruction_per_take = []
         reconstructed_average = None
         for take in accepted:
@@ -1270,10 +784,14 @@ def _finalize_average(
             average_reconstruction_per_take.append(
                 {"take": take.index, **reconstruction}
             )
+            quality_issues.extend(
+                f"平均 RIR 对 take {take.index}：{issue}"
+                for issue in reconstruction_issues(reconstruction, repeat_config)
+            )
             if reconstructed_average is None:
                 reconstructed_average = reconstructed
         if reconstructed_average is not None:
-            store.write_audio(
+            store.write_float_audio(
                 "processed/mean_recon.wav",
                 reconstructed_average,
                 sample_rate,
@@ -1307,7 +825,7 @@ def _finalize_average(
         mean_rir_files = []
         for channel in range(average.shape[1]):
             relative = f"processed/average_rir_mic_{channel + 1:02d}.wav"
-            store.write_audio(relative, average[:, channel], sample_rate)
+            store.write_float_audio(relative, average[:, channel], sample_rate)
             mean_rir_files.append(relative)
         summary.update(
             {
@@ -1317,9 +835,12 @@ def _finalize_average(
                     "processed/average_rir.wav" if average.shape[1] == 2 else None
                 ),
                 "mean_rir_per_microphone": mean_rir_files,
-                "average_rir_timing": rir_timing_metrics(average, sample_rate),
+                "average_rir_timing": rir_timing_metrics(
+                    average, sample_rate, repeat_config=repeat_config
+                ),
                 "timing_interpretation": (
-                    "Inter-microphone delays are physical relative delays. The absolute "
+                    "Inter-microphone delays are estimates affected by reflections and "
+                    "channel phase response, not guaranteed geometric direct-path delays. The absolute "
                     "reference peak also contains playback, driver, converter and acoustic "
                     "latency and is not a propagation-time measurement without a wired "
                     "loopback/reference channel."
@@ -1354,6 +875,8 @@ def _finalize_average(
                 ),
             }
         )
+        quality_issues.extend(timing_issues(summary["average_rir_timing"]))
+    summary["quality"] = quality_summary(quality_issues, quality_warnings, repeat_config)
     store.write_json("metrics/summary.json", summary)
     store.finish(summary, status=status)
     return summary
@@ -1367,6 +890,8 @@ def capture_rir(
     progress: Progress | None = None,
     stop_requested: StopRequested | None = None,
 ) -> RunStore:
+    config = deepcopy(config)
+    config.validate()
     fs, sweep_cfg, repeat_cfg = config.audio.sample_rate, config.sweep, config.repeats
     output_channel = output_channel or config.audio.target_output_channel
     sweep = exponential_sweep(
@@ -1387,7 +912,7 @@ def capture_rir(
     inverse_spectrum = kirkeby_inverse_spectrum(
         sweep, len(sweep) + round(sweep_cfg.post_silence_s * fs)
     )
-    store.write_audio(
+    store.write_float_audio(
         "references/regularized_inverse_filter.wav",
         np.fft.ifft(inverse_spectrum).real.astype(np.float32),
         fs,
@@ -1405,7 +930,9 @@ def capture_rir(
                 break
             log(f"脉冲响应采集 {take_index}/{attempt_limit}：正在播放扫频信号")
             capture = backend.play_record(output)
-            if stop_requested is not None and stop_requested():
+            if capture.status.get("cancelled") or (
+                stop_requested is not None and stop_requested()
+            ):
                 cancelled = True
                 log("已停止：当前未完成的扫频不会加入平均")
                 break
@@ -1413,15 +940,22 @@ def capture_rir(
             raw_metrics = channel_metrics(raw, repeat_cfg.clip_threshold)
             array_health = multichannel_health_metrics(raw)
             sweep_snr = sweep_snr_db(raw, fs, sweep_cfg.pre_silence_s, len(sweep))
-            rir, peaks, reference_peak, microphone_offsets, full_rir = extract_rir(
-                raw,
-                sweep,
-                fs,
-                sweep_cfg.pre_silence_s,
-                sweep_cfg.post_silence_s,
-                sweep_cfg.rir_duration_s,
-                sweep_cfg.pre_peak_s,
-            )
+            crop_issues = []
+            crop_details = {"valid": True}
+            try:
+                rir, peaks, reference_peak, microphone_offsets, full_rir = extract_rir(
+                    raw,
+                    sweep,
+                    fs,
+                    sweep_cfg.pre_silence_s,
+                    sweep_cfg.post_silence_s,
+                    sweep_cfg.rir_duration_s,
+                    sweep_cfg.pre_peak_s,
+                )
+            except RIRWindowError as exc:
+                rir, peaks, reference_peak, microphone_offsets, full_rir = exc.result
+                crop_issues = exc.issues
+                crop_details = exc.details
             channel_count = rir.shape[1]
             residual_alignment = [0] * channel_count
             aligned = rir
@@ -1430,7 +964,7 @@ def capture_rir(
                 if reference_peak_baseline is not None
                 else None
             )
-            timing = rir_timing_metrics(full_rir, fs)
+            timing = rir_timing_metrics(full_rir, fs, repeat_config=repeat_cfg)
             clock_drift = estimate_sweep_clock_drift_ppm(
                 raw[:, 0],
                 sweep,
@@ -1441,7 +975,7 @@ def capture_rir(
             clipped = any(bool(item["clipped"]) for item in raw_metrics)
             xrun = bool(capture.status.get("xrun"))
             low_sweep_snr = min(sweep_snr) < repeat_cfg.minimum_sweep_snr_db
-            rejection_reasons = []
+            rejection_reasons = list(crop_issues)
             warnings = []
             if xrun:
                 rejection_reasons.append("音频丢帧")
@@ -1465,14 +999,9 @@ def capture_rir(
                 and abs(float(clock_drift["estimated_drift_ppm"])) >= 30.0
             ):
                 warnings.append(
-                    f"扫频段时序估计到约 {clock_drift['estimated_drift_ppm']:.1f} ppm "
-                    "的输入/输出采样时钟偏差；本次 RIR 可能被时间拉伸，"
-                    "不建议与其他 take 平均"
+                    f"扫频片段时序趋势约 {clock_drift['estimated_drift_ppm']:.1f} ppm；"
+                    "可能含固定频响相位影响，不能据此确认硬件时钟漂移"
                 )
-            accepted_now = not rejection_reasons
-            if accepted_now and reference_peak_baseline is None:
-                reference_peak_baseline = reference_peak
-                drift = 0
             validation_response = _validation_response(
                 raw,
                 len(sweep),
@@ -1489,6 +1018,12 @@ def capture_rir(
                 reconstruction, reconstructed = reconstruction_metrics(
                     aligned, sweep, validation_response
                 )
+            accepted_by_recording_qc = not rejection_reasons
+            rejection_reasons.extend(reconstruction_issues(reconstruction, repeat_cfg))
+            accepted_now = not rejection_reasons
+            if accepted_now and reference_peak_baseline is None:
+                reference_peak_baseline = reference_peak
+                drift = 0
             metrics = {
                 "take": take_index,
                 "accepted": accepted_now,
@@ -1508,14 +1043,16 @@ def capture_rir(
                 "audio_xrun": xrun,
                 "rejection_reasons": rejection_reasons,
                 "warnings": warnings,
-                "accepted_by_recording_qc": accepted_now,
+                "accepted_by_recording_qc": accepted_by_recording_qc,
+                "crop_validation": crop_details,
+                "reconstruction_policy": repeat_cfg.reconstruction_policy,
                 "self_reconstruction": reconstruction,
             }
             store.write_audio(f"raw/take_{take_index:03d}.wav", raw, fs)
-            store.write_audio(f"processed/take_{take_index:03d}_full_ir.wav", full_rir, fs)
-            store.write_audio(f"processed/take_{take_index:03d}_rir.wav", aligned, fs)
+            store.write_float_audio(f"processed/take_{take_index:03d}_full_ir.wav", full_rir, fs)
+            store.write_float_audio(f"processed/take_{take_index:03d}_rir.wav", aligned, fs)
             if reconstructed is not None:
-                store.write_audio(
+                store.write_float_audio(
                     f"processed/recon_{take_index:03d}.wav",
                     reconstructed,
                     fs,

@@ -7,6 +7,7 @@ the configuration rules remain easy to read and modify.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+import math
 from pathlib import Path
 from typing import Any
 
@@ -66,6 +67,9 @@ class RepeatConfig:
     delay_high_hz: float = 1_000.0
     delay_max_ms: float = 3.0
     delay_agreement_samples: float = 2.0
+    reconstruction_policy: str = "full_response"  # diagnostic | full_response
+    minimum_reconstruction_correlation: float = 0.90
+    maximum_reconstruction_nmse_db: float = -10.0
 
 
 @dataclass
@@ -135,6 +139,8 @@ class ExperimentConfig:
 
     def validate(self) -> None:
         a, s, r = self.audio, self.sweep, self.repeats
+        if a.dtype != "float32":
+            raise ValueError("audio.dtype must be float32 (normalized audio samples)")
         if not a.input_channels:
             raise ValueError("audio.input_channels must contain at least one microphone channel")
         if len(set(a.input_channels)) != len(a.input_channels):
@@ -181,8 +187,19 @@ class ExperimentConfig:
             raise ValueError("repeats.pause_s must be non-negative")
         if not 0 < r.delay_low_hz < r.delay_high_hz < a.sample_rate / 2:
             raise ValueError("RIR delay frequency band must be within Nyquist")
-        if r.delay_max_ms <= 0 or r.delay_agreement_samples < 0:
+        if (
+            not math.isfinite(r.delay_max_ms)
+            or not math.isfinite(r.delay_agreement_samples)
+            or r.delay_max_ms <= 0
+            or r.delay_agreement_samples < 0
+        ):
             raise ValueError("RIR delay limits must be positive")
+        if r.reconstruction_policy not in {"diagnostic", "full_response"}:
+            raise ValueError("reconstruction_policy must be diagnostic or full_response")
+        if not 0 <= r.minimum_reconstruction_correlation <= 1:
+            raise ValueError("minimum_reconstruction_correlation must be between 0 and 1")
+        if not math.isfinite(r.maximum_reconstruction_nmse_db):
+            raise ValueError("maximum_reconstruction_nmse_db must be finite")
         q = self.acqua
         if q.segment_duration_s <= 0 or q.gap_s < 0 or q.recording_margin_s < 0:
             raise ValueError("ACQUA segment/gap/margin durations are invalid")

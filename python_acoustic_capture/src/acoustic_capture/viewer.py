@@ -964,7 +964,10 @@ class ResultsViewer(ttk.Frame):
                     issues = "；".join(map(str, quality.get("issues") or []))
                     summaries.append(f"RIR 质量：需要复核（{issues or '请查看指标'}）")
                 elif quality.get("status") == "pass":
-                    summaries.append("RIR 质量：通过，可用于聚合/训练")
+                    if quality.get("reconstruction_policy") == "full_response":
+                        summaries.append("RIR 质量：录音、重复性和完整响应重构验收通过")
+                    else:
+                        summaries.append("RIR 质量：录音与重复性通过；重构指标仅供诊断")
                 method = result.get("selection_method")
                 if method:
                     if method == "all_accepted_aligned_mean":

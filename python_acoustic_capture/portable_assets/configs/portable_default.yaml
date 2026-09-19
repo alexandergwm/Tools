@@ -33,6 +33,7 @@ sweep:
 
 repeats:
   strategy: reconstruct_average
+  reconstruction_policy: full_response
   fixed_count: 5
   correlation_threshold: 0.90
   peak_drift_samples: 2
@@ -54,7 +55,8 @@ scene:
   # 可选逐文件元数据；relative_path 相对于上面的素材文件夹。
   target_index_csv: ''
   interferer_index_csv: ''
-  pairing_mode: cycle
+  measurement_count: 10
+  pairing_seed: 0
   file_extensions: [.wav, .flac]
   label_prefix: speech
   dataset_split: train

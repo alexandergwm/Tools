@@ -40,12 +40,9 @@ def _write_plan(tmp_path: Path) -> Path:
     base.audio.backend = "simulated"
     base.sweep.duration_s = 0.08
     base.sweep.pre_silence_s = 0.02
-    base.sweep.post_silence_s = 0.03
+    base.sweep.post_silence_s = 0.05  # Include the simulator's common playback delay.
     base.sweep.rir_duration_s = 0.04
     base.repeats.fixed_count = 1
-    base.repeats.minimum = 1
-    base.repeats.maximum = 1
-    base.repeats.required_stable_takes = 1
     base.repeats.pause_s = 0
     base.storage.compute_sha256 = False
     save_config(base, tmp_path / "base.yaml")
@@ -187,12 +184,9 @@ def test_compile_manual_rir_runs_keeps_runs_independent_and_all_microphones(tmp_
     cfg.audio.input_channels = [1, 3, 5]
     cfg.sweep.duration_s = 0.08
     cfg.sweep.pre_silence_s = 0.02
-    cfg.sweep.post_silence_s = 0.03
+    cfg.sweep.post_silence_s = 0.05  # Include the simulator's common playback delay.
     cfg.sweep.rir_duration_s = 0.04
     cfg.repeats.fixed_count = 1
-    cfg.repeats.minimum = 1
-    cfg.repeats.maximum = 1
-    cfg.repeats.required_stable_takes = 1
     cfg.repeats.pause_s = 0
     cfg.storage.root = str(tmp_path / "runs")
     cfg.storage.compute_sha256 = False

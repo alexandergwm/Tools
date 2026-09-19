@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import csv
 import json
-import shutil
+import argparse
 import sys
 from pathlib import Path
 
@@ -19,7 +19,7 @@ import soundfile as sf
 
 from acoustic_capture.audio import SimulatedBackend
 from acoustic_capture.config import ExperimentConfig
-from acoustic_capture.scene import capture_scene_block
+from acoustic_capture.scene import capture_scene_block, discover_source_pairs
 from acoustic_capture.speech_dataset import compile_speech_dataset
 
 
@@ -64,10 +64,10 @@ def _read_rows(path: Path) -> list[dict[str, str]]:
 
 
 def main() -> int:
-    root = Path(__file__).resolve().parents[1] / "verification_10_pairs"
-    if root.exists():
-        shutil.rmtree(root)
-    root.mkdir()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output-dir", type=Path, default=Path("outputs/verification_10_pairs"))
+    root = parser.parse_args().output_dir.resolve()
+    root.mkdir(parents=True, exist_ok=False)
     target_folder, interferer_folder = _write_sources(root / "sources")
 
     config = ExperimentConfig()
@@ -83,7 +83,8 @@ def main() -> int:
     config.scene.source_mode = "folders"
     config.scene.target_folder = str(target_folder)
     config.scene.interferer_folder = str(interferer_folder)
-    config.scene.pairing_mode = "cycle"
+    config.scene.measurement_count = PAIR_COUNT
+    config.scene.pairing_seed = 42
     config.scene.duration_s = DURATION_S
     config.scene.target_level_dbfs = -18.0
     config.scene.interferer_level_dbfs = -18.0
@@ -132,9 +133,9 @@ def main() -> int:
     assert all(row["supervision_ready"] == "是" for row in labels)
     assert all(row["target_mixture_sample_aligned"] == "是" for row in labels)
 
-    for index, row in enumerate(labels, 1):
-        assert Path(row["target_source"]).name == f"target_{index:02d}.wav"
-        assert Path(row["interferer_source"]).name == f"interferer_{index:02d}.wav"
+    for pair, row in zip(discover_source_pairs(config.scene), labels, strict=True):
+        assert Path(row["target_source"]) == pair.target
+        assert Path(row["interferer_source"]) == pair.interferer
         target, target_fs = sf.read(store.path(row["target_recording"]), always_2d=True)
         interferer, interferer_fs = sf.read(
             store.path(row["interferer_recording"]), always_2d=True

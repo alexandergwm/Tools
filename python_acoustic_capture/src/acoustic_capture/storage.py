@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from copy import deepcopy
 import json
 import platform
 import re
@@ -70,6 +71,7 @@ class RunStore:
 
     @classmethod
     def create(cls, config: ExperimentConfig, kind: str) -> "RunStore":
+        config = deepcopy(config)
         stamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
         root = Path(config.storage.root) / f"{stamp}_{_safe_name(config.storage.session_name)}_{kind}"
         suffix = 1
@@ -115,6 +117,7 @@ class RunStore:
     @classmethod
     def resume(cls, root: str | Path, config: ExperimentConfig, kind: str) -> "RunStore":
         """Re-open an interrupted run without discarding completed artifacts."""
+        config = deepcopy(config)
         run_root = Path(root).resolve()
         manifest_path = run_root / "manifest.json"
         if not manifest_path.is_file():
@@ -136,12 +139,18 @@ class RunStore:
     def path(self, relative: str) -> Path:
         return self.root / relative
 
-    def write_audio(self, relative: str, data, sample_rate: int) -> Path:
+    def write_audio(
+        self, relative: str, data, sample_rate: int, *, subtype: str | None = None
+    ) -> Path:
         path = self.path(relative)
         path.parent.mkdir(parents=True, exist_ok=True)
-        sf.write(path, data, sample_rate, subtype=self.config.storage.wav_subtype)
+        sf.write(path, data, sample_rate, subtype=subtype or self.config.storage.wav_subtype)
         self.add_artifact(relative)
         return path
+
+    def write_float_audio(self, relative: str, data, sample_rate: int) -> Path:
+        """Preserve unbounded transfer gains independently of recording format."""
+        return self.write_audio(relative, data, sample_rate, subtype="FLOAT")
 
     def write_json(self, relative: str, data: Any) -> Path:
         path = self.path(relative)

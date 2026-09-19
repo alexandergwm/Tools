@@ -12,7 +12,7 @@ from acoustic_capture.config import ExperimentConfig, load_config
 from acoustic_capture.general import capture_general_io
 from acoustic_capture.rir import capture_rir
 from acoustic_capture.scene import (
-    MAX_CARTESIAN_PAIRS,
+    PAIRING_STRATEGY,
     _safe_label,
     _shared_hardware_clock,
     build_paired_sequence,
@@ -60,9 +60,6 @@ def test_rir_end_to_end(tmp_path: Path):
     cfg.sweep.post_silence_s = 0.1
     cfg.sweep.rir_duration_s = 0.1
     cfg.repeats.fixed_count = 5
-    cfg.repeats.minimum = 5
-    cfg.repeats.maximum = 10
-    cfg.repeats.required_stable_takes = 1
     cfg.repeats.correlation_threshold = 0.9
     cfg.repeats.pause_s = 0
     cfg.storage.root = str(tmp_path)
@@ -194,9 +191,6 @@ def test_rir_stop_keeps_completed_takes_as_a_partial_average(tmp_path: Path):
     cfg.sweep.post_silence_s = 0.05
     cfg.sweep.rir_duration_s = 0.05
     cfg.repeats.fixed_count = 4
-    cfg.repeats.minimum = 2
-    cfg.repeats.maximum = 4
-    cfg.repeats.required_stable_takes = 2
     cfg.repeats.pause_s = 0
     cfg.storage.root = str(tmp_path)
     cfg.storage.compute_sha256 = False
@@ -242,9 +236,6 @@ def test_rir_fixed_count_records_exact_attempts_and_defers_selection(tmp_path: P
     cfg.repeats.fixed_count = 3
     # Raw-selection mode still records the exact requested number and keeps a
     # reference mean without choosing a best-single take.
-    cfg.repeats.minimum = 5
-    cfg.repeats.maximum = 8
-    cfg.repeats.required_stable_takes = 1
     cfg.repeats.pause_s = 0
     cfg.storage.root = str(tmp_path)
     cfg.storage.compute_sha256 = False
@@ -276,9 +267,6 @@ def test_rir_supports_more_than_two_microphones(tmp_path: Path):
     cfg.sweep.post_silence_s = 0.1
     cfg.sweep.rir_duration_s = 0.08
     cfg.repeats.fixed_count = 2
-    cfg.repeats.minimum = 2
-    cfg.repeats.maximum = 2
-    cfg.repeats.required_stable_takes = 1
     cfg.repeats.correlation_threshold = 0.85
     cfg.repeats.pause_s = 0
     cfg.storage.root = str(tmp_path)
@@ -308,9 +296,6 @@ def test_rir_rejects_take_with_audio_xrun(tmp_path: Path):
     cfg.sweep.post_silence_s = 0.1
     cfg.sweep.rir_duration_s = 0.08
     cfg.repeats.fixed_count = 3
-    cfg.repeats.minimum = 2
-    cfg.repeats.maximum = 3
-    cfg.repeats.required_stable_takes = 1
     cfg.repeats.correlation_threshold = 0.85
     cfg.repeats.pause_s = 0
     cfg.storage.root = str(tmp_path)
@@ -331,12 +316,11 @@ def test_rir_rejects_silent_microphones_instead_of_averaging_zero_ir(tmp_path: P
     cfg = ExperimentConfig()
     cfg.audio.backend = "simulated"
     cfg.sweep.duration_s = 0.05
+    cfg.sweep.fade_in_s = 0.01
     cfg.sweep.pre_silence_s = 0.02
     cfg.sweep.post_silence_s = 0.03
     cfg.sweep.rir_duration_s = 0.03
     cfg.repeats.fixed_count = 1
-    cfg.repeats.minimum = 1
-    cfg.repeats.maximum = 1
     cfg.repeats.pause_s = 0
     cfg.storage.root = str(tmp_path)
     cfg.storage.compute_sha256 = False
@@ -585,210 +569,13 @@ def test_source_indexes_and_reviewed_excel_feed_training_labels(tmp_path: Path):
     cfg.audio.backend = "simulated"
     cfg.audio.sample_rate = fs
     cfg.scene.source_mode = "folders"
+    cfg.scene.measurement_count = 3
     cfg.scene.target_folder = str(target_folder)
     cfg.scene.interferer_folder = str(interferer_folder)
     cfg.scene.target_index_csv = str(target_index)
     cfg.scene.interferer_index_csv = str(interferer_index)
     cfg.scene.items = ["target_only", "mixture"]
     cfg.scene.measurement_count = 1
-    cfg.scene.duration_s = 0.02
-    cfg.scene.countdown_s = 0
-    cfg.scene.gap_s = 0
-    cfg.storage.root = str(tmp_path / "runs")
-    cfg.storage.compute_sha256 = False
-    store = capture_scene_block(cfg, SimulatedBackend(cfg.audio), log=lambda _: None)
-
-    with store.path("labels.csv").open(encoding="utf-8-sig", newline="") as handle:
-        row = next(csv.DictReader(handle))
-    assert (row["speaker_id"], row["utterance_id"]) == ("spk007", "utt042")
-    assert (row["noise_id"], row["noise_class"]) == ("n008", "cafe")
-    from openpyxl import load_workbook
-
-    workbook = load_workbook(store.path("labels.xlsx"))
-    sheet = workbook["标签"]
-    headers = [cell.value for cell in sheet[1]]
-    sheet.cell(2, headers.index("人工标签") + 1, "人工通过")
-    sheet.cell(2, headers.index("数据集划分") + 1, "test")
-    workbook.save(store.path("labels.xlsx"))
-    import_reviewed_labels(store.root)
-    dataset = compile_speech_dataset(tmp_path / "runs", tmp_path / "dataset", copy_audio=False)
-    reviewed = json.loads(
-        (dataset / "indexes" / "speech_samples.jsonl").read_text(encoding="utf-8").splitlines()[0]
-    )
-    assert reviewed["manual_label"] == "人工通过"
-    assert reviewed["dataset_split"] == "test"
-
-
-def test_target_and_mixed_pair_does_not_require_interferer_only(tmp_path: Path):
-    fs = 16_000
-    tone = np.sin(2 * np.pi * 440 * np.arange(800) / fs).astype(np.float32)
-    target, interferer = tmp_path / "target.wav", tmp_path / "interferer.wav"
-    sf.write(target, tone, fs)
-    sf.write(interferer, tone, fs)
-    cfg = ExperimentConfig()
-    cfg.audio.backend = "simulated"
-    cfg.audio.sample_rate = fs
-    cfg.scene.items = ["target_only", "mixture"]
-    cfg.scene.duration_s = 0.05
-    cfg.scene.target_file = str(target)
-    cfg.scene.interferer_file = str(interferer)
-    cfg.scene.countdown_s = 0
-    cfg.scene.gap_s = 0
-    cfg.storage.root = str(tmp_path / "runs")
-    cfg.storage.compute_sha256 = False
-
-    store = capture_scene_block(cfg, SimulatedBackend(cfg.audio), log=lambda _: None)
-    assert store.path("raw/rep_001_target_only_mics.wav").is_file()
-    assert store.path("raw/rep_001_mixture_mics.wav").is_file()
-    assert not store.path("raw/rep_001_interferer_only_mics.wav").exists()
-    with store.path("labels.csv").open(encoding="utf-8-sig", newline="") as handle:
-        row = next(csv.DictReader(handle))
-    assert row["capture_type"] == "supervised_pair"
-    assert row["target_mixture_sample_aligned"] == "是"
-    assert row["interferer_mixture_sample_aligned"] == "否"
-    assert row["supervision_ready"] == "是"
-
-
-def test_scene_rejects_one_silent_microphone_for_supervision(tmp_path: Path):
-    class OneSilentChannelBackend(SimulatedBackend):
-        def play_record(self, output: np.ndarray) -> CaptureResult:
-            result = super().play_record(output)
-            result.microphones[:, 1] = 0
-            return result
-
-    fs = 16_000
-    signal = np.sin(2 * np.pi * 440 * np.arange(800) / fs).astype(np.float32)
-    target, interferer = tmp_path / "target.wav", tmp_path / "interferer.wav"
-    sf.write(target, signal, fs)
-    sf.write(interferer, signal, fs)
-    cfg = ExperimentConfig()
-    cfg.audio.backend = "simulated"
-    cfg.audio.sample_rate = fs
-    cfg.scene.items = ["target_only", "mixture"]
-    cfg.scene.target_file = str(target)
-    cfg.scene.interferer_file = str(interferer)
-    cfg.scene.duration_s = 0.05
-    cfg.scene.countdown_s = 0
-    cfg.scene.gap_s = 0
-    cfg.storage.root = str(tmp_path / "runs")
-    cfg.storage.compute_sha256 = False
-
-    store = capture_scene_block(cfg, OneSilentChannelBackend(cfg.audio), log=lambda _: None)
-    with store.path("labels.csv").open(encoding="utf-8-sig", newline="") as handle:
-        row = next(csv.DictReader(handle))
-    assert row["quality_flag"] == "存在静音通道"
-    assert row["supervision_ready"] == "否"
-
-
-def test_scene_failure_checkpoints_and_resume_skips_completed_pair(tmp_path: Path):
-    fs = 16_000
-    target_folder, interferer_folder = tmp_path / "targets", tmp_path / "interferers"
-    target_folder.mkdir()
-    interferer_folder.mkdir()
-    for index in range(3):
-        signal = np.sin(2 * np.pi * (300 + index * 100) * np.arange(320) / fs)
-        sf.write(target_folder / f"target_{index}.wav", signal, fs)
-        sf.write(interferer_folder / f"noise_{index}.wav", signal, fs)
-    cfg = ExperimentConfig()
-    cfg.audio.backend = "simulated"
-    cfg.audio.sample_rate = fs
-    cfg.scene.source_mode = "folders"
-    cfg.scene.target_folder = str(target_folder)
-    cfg.scene.interferer_folder = str(interferer_folder)
-    cfg.scene.items = ["target_only", "mixture"]
-    cfg.scene.duration_s = 0.02
-    cfg.scene.countdown_s = 0
-    cfg.scene.gap_s = 0
-    cfg.storage.root = str(tmp_path / "runs")
-    cfg.storage.compute_sha256 = False
-
-    class FailSecondBackend(SimulatedBackend):
-        def __init__(self, audio):
-            super().__init__(audio)
-            self.calls = 0
-
-        def play_record(self, output: np.ndarray) -> CaptureResult:
-            self.calls += 1
-            if self.calls == 2:
-                raise RuntimeError("injected failure")
-            return super().play_record(output)
-
-    with pytest.raises(RuntimeError, match="injected failure"):
-        capture_scene_block(cfg, FailSecondBackend(cfg.audio), log=lambda _: None)
-    run = next((tmp_path / "runs").iterdir())
-    manifest = json.loads((run / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["status"] == "failed"
-    assert len((run / "labels.jsonl").read_text(encoding="utf-8").splitlines()) == 1
-    cfg.scene.resume_run = str(run)
-    resumed_backend = FailSecondBackend(cfg.audio)
-    resumed_backend.calls = -100  # disable the injected second-call failure
-    store = capture_scene_block(cfg, resumed_backend, log=lambda _: None)
-    assert store.root == run
-    assert store.manifest["status"] == "completed"
-    assert len((run / "labels.jsonl").read_text(encoding="utf-8").splitlines()) == 3
-    assert resumed_backend.calls == -98
-
-
-def test_scene_resume_rejects_changed_level_or_physical_labels(tmp_path: Path):
-    fs = 16_000
-    signal = np.sin(2 * np.pi * 440 * np.arange(320) / fs)
-    target, interferer = tmp_path / "target.wav", tmp_path / "interferer.wav"
-    sf.write(target, signal, fs)
-    sf.write(interferer, signal, fs)
-    cfg = ExperimentConfig()
-    cfg.audio.backend = "simulated"
-    cfg.audio.sample_rate = fs
-    cfg.scene.items = ["target_only", "mixture"]
-    cfg.scene.target_file = str(target)
-    cfg.scene.interferer_file = str(interferer)
-    cfg.scene.duration_s = 0.02
-    cfg.scene.countdown_s = 0
-    cfg.scene.gap_s = 0
-    cfg.storage.root = str(tmp_path / "runs")
-    cfg.storage.compute_sha256 = False
-    cfg.metadata = {"wearing_id": "w01"}
-
-    class AlwaysFail(SimulatedBackend):
-        def play_record(self, output: np.ndarray) -> CaptureResult:
-            raise RuntimeError("stop here")
-
-    with pytest.raises(RuntimeError, match="stop here"):
-        capture_scene_block(cfg, AlwaysFail(cfg.audio), log=lambda _: None)
-    run = next((tmp_path / "runs").iterdir())
-    cfg.scene.resume_run = str(run)
-    cfg.scene.target_level_dbfs = -12
-    cfg.metadata["wearing_id"] = "w02"
-    with pytest.raises(ValueError, match="不能续采"):
-        capture_scene_block(cfg, SimulatedBackend(cfg.audio), log=lambda _: None)
-
-
-def test_source_indexes_and_reviewed_excel_feed_training_labels(tmp_path: Path):
-    fs = 16_000
-    target_folder, interferer_folder = tmp_path / "targets", tmp_path / "interferers"
-    target_folder.mkdir()
-    interferer_folder.mkdir()
-    signal = np.sin(2 * np.pi * 440 * np.arange(320) / fs)
-    sf.write(target_folder / "utterance.wav", signal, fs)
-    sf.write(interferer_folder / "noise.wav", signal, fs)
-    target_index = tmp_path / "target_index.csv"
-    target_index.write_text(
-        "relative_path,speaker_id,utterance_id\nutterance.wav,spk007,utt042\n",
-        encoding="utf-8-sig",
-    )
-    interferer_index = tmp_path / "interferer_index.csv"
-    interferer_index.write_text(
-        "relative_path,noise_id,noise_class\nnoise.wav,n008,cafe\n",
-        encoding="utf-8-sig",
-    )
-    cfg = ExperimentConfig()
-    cfg.audio.backend = "simulated"
-    cfg.audio.sample_rate = fs
-    cfg.scene.source_mode = "folders"
-    cfg.scene.target_folder = str(target_folder)
-    cfg.scene.interferer_folder = str(interferer_folder)
-    cfg.scene.target_index_csv = str(target_index)
-    cfg.scene.interferer_index_csv = str(interferer_index)
-    cfg.scene.items = ["target_only", "mixture"]
     cfg.scene.duration_s = 0.02
     cfg.scene.countdown_s = 0
     cfg.scene.gap_s = 0
@@ -885,7 +672,7 @@ def test_pure_target_and_pure_interferer_scenes_are_supported(tmp_path: Path):
         assert row["supervision_ready"] == "否"
 
 
-def test_folder_scene_batch_cycles_files_and_writes_labels(tmp_path: Path):
+def test_folder_scene_batch_uses_seeded_plan_and_writes_labels(tmp_path: Path):
     fs = 16_000
     target_folder = tmp_path / "targets"
     interferer_folder = tmp_path / "interferers"
@@ -976,20 +763,36 @@ def test_folder_sources_are_hashed_lazily_per_captured_pair(tmp_path: Path, monk
     assert len(calls) == 2
 
 
-def test_cartesian_pairing_rejects_multi_million_task_explosion(tmp_path: Path, monkeypatch):
+def test_large_folder_pairing_is_bounded_and_reproducible(tmp_path: Path, monkeypatch):
     cfg = ExperimentConfig().scene
     cfg.source_mode = "folders"
-    cfg.pairing_mode = "cartesian"
+    cfg.measurement_count = 7
+    cfg.pairing_seed = 123
     cfg.target_folder = str(tmp_path / "targets")
     cfg.interferer_folder = str(tmp_path / "interferers")
-    fake_targets = [tmp_path / f"t{index}.wav" for index in range(2_000)]
-    fake_interferers = [tmp_path / f"n{index}.wav" for index in range(2_000)]
-    scans = iter((fake_targets, fake_interferers))
-    monkeypatch.setattr("acoustic_capture.scene._scan_audio_folder", lambda *_: next(scans))
-    with pytest.raises(ValueError, match="4,000,000"):
-        discover_source_pairs(cfg)
-    assert MAX_CARTESIAN_PAIRS < 4_000_000
+    fake_targets = [Path(cfg.target_folder) / f"t{index}.wav" for index in range(2_000)]
+    fake_interferers = [Path(cfg.interferer_folder) / f"n{index}.wav" for index in range(2_000)]
+    scans = {
+        Path(cfg.target_folder): fake_targets,
+        Path(cfg.interferer_folder): fake_interferers,
+    }
+    monkeypatch.setattr(
+        "acoustic_capture.scene._scan_audio_folder", lambda root, *_: scans[root]
+    )
 
+    pairs = discover_source_pairs(cfg)
+    assert len(pairs) == cfg.measurement_count
+    assert discover_source_pairs(cfg) == pairs
+    assert len({pair.target for pair in pairs}) == cfg.measurement_count
+    assert len({pair.interferer for pair in pairs}) == cfg.measurement_count
+    assert all(pair.target in fake_targets and pair.interferer in fake_interferers for pair in pairs)
+
+    # Folder enumeration order must not change a saved seed's source plan.
+    scans[Path(cfg.target_folder)] = fake_targets[::-1]
+    scans[Path(cfg.interferer_folder)] = fake_interferers[::-1]
+    assert discover_source_pairs(cfg) == pairs
+    cfg.pairing_seed += 1
+    assert discover_source_pairs(cfg) != pairs
 
 def test_speech_dataset_packages_multichannel_pairs_and_flattened_labels(tmp_path: Path):
     fs = 16_000

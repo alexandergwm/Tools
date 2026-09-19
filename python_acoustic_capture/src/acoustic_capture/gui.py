@@ -40,6 +40,17 @@ from .storage import _safe_name
 from .viewer import ResultsViewer
 
 
+def _run_quality_warnings(manifest: dict) -> list[str]:
+    summary = manifest.get("summary", {})
+    quality = summary.get("quality", {})
+    messages = list(summary.get("warnings", []))
+    messages.extend(quality.get("issues", []))
+    messages.extend(quality.get("warnings", []))
+    if quality.get("status") == "review_required" and not messages:
+        messages.append("RIR 质量需要复核，暂不建议直接用于训练")
+    return list(dict.fromkeys(messages))
+
+
 FIELDS = [
     ("audio.backend", "音频后端", str, "common"),
     ("audio.host_api", "音频协议 / 主机接口", str, "common"),
@@ -342,6 +353,7 @@ class CaptureGUI(tk.Tk):
             for name in ("ambient", "target_only", "interferer_only", "mixture")
         }
         self.metadata_summary_var = tk.StringVar()
+        self.scene_estimate_var = tk.StringVar()
         self.events: queue.Queue[object] = queue.Queue()
         self._busy = False
         self._stop_event = threading.Event()
@@ -1406,10 +1418,10 @@ class CaptureGUI(tk.Tk):
         if self.checklist_row is None:
             if not self.save():
                 return
-            config = self.config_data
+            config = deepcopy(self.config_data)
         else:
             try:
-                config = self._apply_values()
+                config = deepcopy(self._apply_values())
             except Exception as exc:
                 messagebox.showerror("清单实验配置无效", str(exc))
                 return
@@ -1883,8 +1895,10 @@ class CaptureGUI(tk.Tk):
                     self._append(f"测试已停止，已完成的数据已保存：{path}")
                     messagebox.showinfo("测试已停止", f"已完成的数据已保存到：\n{path}")
                     continue
-                self._update_checklist_progress("已完成", completed_run=path)
-                warnings = manifest.get("summary", {}).get("warnings", [])
+                warnings = _run_quality_warnings(manifest)
+                self._update_checklist_progress(
+                    "已完成", completed_run=path, last_error="; ".join(warnings)
+                )
                 if warnings:
                     messagebox.showwarning("测试完成，但存在质量警告", "\n".join(warnings) + f"\n\n结果已保存到：\n{path}")
                 else:
