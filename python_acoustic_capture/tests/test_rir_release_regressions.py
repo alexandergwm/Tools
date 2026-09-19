@@ -99,4 +99,9 @@ def test_audio_com_is_initialized_and_balanced_on_worker_even_after_exception():
     thread.start()
     thread.join(3)
     assert not thread.is_alive()
-    assert results == [0x800401F0, 0, 0, 0, 0x800401F0]
+    # Other Windows libraries can establish an implicit MTA for the process.
+    # Both an initially uninitialized thread and an existing apartment are valid;
+    # this context must preserve that initial state and work while nested.
+    assert results[0] in (0x800401F0, 0)
+    assert results[1:4] == [0, 0, 0]
+    assert results[-1] == results[0]

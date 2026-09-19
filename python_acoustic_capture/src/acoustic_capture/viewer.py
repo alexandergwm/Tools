@@ -169,6 +169,8 @@ class ResultsViewer(ttk.Frame):
         self._live_timeline_line: object | None = None
         self._live_total_s = 0.0
         self._monitor_active = False
+        self._live_background = None
+        self._animation_artists = []
         self._build()
 
     def _build(self):
@@ -179,6 +181,14 @@ class ResultsViewer(ttk.Frame):
 
         self.run_label = ttk.Label(self, text="尚未加载结果", foreground="#555555")
         self.run_label.pack(fill="x", pady=(0, 6))
+
+        self.human_prompt_panel = ttk.LabelFrame(self, text="佩戴者提示 / 朗读语料", padding=12)
+        self.human_instruction = tk.StringVar()
+        self.human_prompt = tk.StringVar()
+        ttk.Label(self.human_prompt_panel, textvariable=self.human_instruction,
+                  font=("TkDefaultFont", 16, "bold"), foreground="#176747").pack(anchor="w")
+        ttk.Label(self.human_prompt_panel, textvariable=self.human_prompt,
+                  font=("TkDefaultFont", 13), wraplength=780, justify="left").pack(fill="x", pady=(8, 0))
 
         transport = ttk.LabelFrame(self, text="当前播放 / 录制", padding=8)
         transport.pack(fill="x", pady=(0, 6))
@@ -316,6 +326,7 @@ class ResultsViewer(ttk.Frame):
         self.canvas.mpl_connect("button_press_event", self._on_button_press)
         self.canvas.mpl_connect("motion_notify_event", self._on_motion)
         self.canvas.mpl_connect("button_release_event", self._on_button_release)
+        self.canvas.mpl_connect("draw_event", self._cache_live_background)
         for axis, title in zip(
             self.axes, ("Playback / reference", "Microphone recording", "Estimated impulse response")
         ):
@@ -467,6 +478,7 @@ class ResultsViewer(ttk.Frame):
         fade_out_s: float,
     ) -> None:
         """Show the ESS that would be played before a measurement starts."""
+        self._reset_live_animation()
         self.set_capture_mode(playback=True, recording=True, title="RIR 准备就绪")
         self.run_dir = None
         self.preview_spec = {
@@ -602,6 +614,7 @@ class ResultsViewer(ttk.Frame):
         stream_samples: int,
     ) -> None:
         """Show the exact two source signals while a paired stream is running."""
+        self._reset_live_animation()
         self.set_capture_mode(playback=True, recording=True, title="语音播录准备中")
         self.run_dir = None
         self.preview_spec = None
@@ -649,9 +662,78 @@ class ResultsViewer(ttk.Frame):
         self.summary_var.set("Preparing audio stream… The red line is the actual playback/recording position.")
         self.canvas.draw_idle()
 
+    def _reset_live_animation(self):
+        self._animation_artists = []
+        self._live_background = None
+
+    def _cache_live_background(self, _event=None):
+        self._live_background = self.canvas.copy_from_bbox(self.figure.bbox)
+        for line in self._animation_artists:
+            if line.axes is not None:
+                line.axes.draw_artist(line)
+
+    def prepare_live_animation(self):
+        """Render text/axes once, before audio starts; only blit cursors in flight."""
+        self._animation_artists = list(self._live_lines) + list(self._live_source_lines.values())
+        if self._live_timeline_line is not None:
+            self._animation_artists.append(self._live_timeline_line)
+        for line in self._animation_artists:
+            line.set_animated(True)
+        self.canvas.draw()
+
+    def show_human_stage(self, stage, prompt, ordinal, rounds, frames, sample_rate):
+        self.show_speech_workflow_guide()
+        self.human_prompt_panel.pack(fill="x", before=self.run_label, pady=(0, 6))
+        quiet = stage == "interferer_only"
+        label = {"target_only": "TARGET-ONLY", "interferer_only": "INTERFERER-ONLY", "mixture": "MIXED"}[stage]
+        instruction = "请保持安静，只有干扰音箱发声" if quiet else "请自然朗读下方语料" + ("，干扰音箱会同时发声" if stage == "mixture" else "，干扰音箱保持安静")
+        self._human_stage_instruction = f"{label} · {instruction}"
+        self.human_instruction.set("准备 · " + self._human_stage_instruction)
+        self.human_prompt.set("放松休息，请不要说话。下一阶段会提示您继续朗读。" if quiet else prompt)
+        self.preview_spec = None
+        self._live_segments = {}
+        self._live_source_lines.clear()
+        self._live_lines.clear()
+        self._live_timeline_line = None
+        for axis, item, color in zip(self.axes, ("target_only", "interferer_only", "mixture"), ("#4c9bd6", "#f2a65a", "#7fbf7f")):
+            axis.clear()
+            self._stage_diagram(axis, item, human=True, active=item == stage)
+            axis.barh(.08, frames / sample_rate, height=.1, color=color, alpha=.3 if item == stage else .1)
+            axis.set_title({"target_only": "TARGET ONLY - read aloud", "interferer_only": "INTERFERER ONLY - stay quiet", "mixture": "MIXED - read aloud with noise"}[item])
+            axis.set_xlim(0, frames / sample_rate)
+            axis.set_ylim(0, 1)
+            axis.set_yticks([])
+            axis.set_xlabel("Time (s)")
+            if item == stage:
+                self._live_lines.append(axis.axvline(0, ymin=0, ymax=.18, color="#d62728", linewidth=2))
+        self.run_label.configure(text=f"S4 · 第 {ordinal}/{rounds} 轮 · 真人不同阶段不构成严格配对监督样本")
+        self.set_capture_mode(playback=stage != "target_only", recording=True, title=self._human_stage_instruction)
+        self.summary_var.set("S4：每阶段独立录制并按 4 秒切片；不同次朗读不构成严格监督配对，语料仅作为朗读提示。")
+        self.canvas.draw_idle()
+
+    @staticmethod
+    def _stage_diagram(axis, stage, *, human=False, active=True):
+        voice_on = stage in {"target_only", "mixture"}
+        noise_on = stage in {"interferer_only", "mixture"}
+        for x, y, label, enabled, color in (
+            (.15, .72, "PERSON / READ" if human else "TARGET / MOUTH", voice_on, "#337db0"),
+            (.15, .32, "NOISE SPEAKER", noise_on, "#c67b24"),
+            (.78, .52, "MICROPHONES / REC", True, "#38805c"),
+        ):
+            axis.text(x, y, label + ("\nON" if enabled else "\nQUIET"), transform=axis.transAxes,
+                      ha="center", va="center", fontsize=11,
+                      color=color if active and enabled else "#888888",
+                      bbox=dict(boxstyle="round,pad=.65", facecolor="#f3f6f8", edgecolor=color if active and enabled else "#cccccc"))
+        for y, enabled in ((.72, voice_on), (.32, noise_on)):
+            axis.annotate("", xy=(.62, .52), xytext=(.32, y), xycoords="axes fraction",
+                          arrowprops=dict(arrowstyle="->", lw=2, color="#38805c" if active and enabled else "#dddddd"))
+
     def update_live_progress(self, frames: int, total_frames: int, sample_rate: int, phase: str) -> None:
         """Advance the red cursor for RIR and speech live previews."""
         self._update_transport_progress(frames, total_frames, sample_rate, phase)
+        if self.human_prompt_panel.winfo_ismapped():
+            prefix = "正在采集 · " if phase in {"playing", "recording"} else "准备 · " if phase == "opening_audio_stream" else "本阶段已结束 · "
+            self.human_instruction.set(prefix + self._human_stage_instruction)
         if not self._live_lines and not self._live_source_lines and self.preview_spec is None:
             return
         total = max(1, int(total_frames))
@@ -691,10 +773,16 @@ class ResultsViewer(ttk.Frame):
         if self._live_segments:
             phase_text += f"  |  now: {active}  |  {time_s:.2f}/{total / max(1, sample_rate):.2f} s"
         self.summary_var.set(phase_text)
-        self.canvas.draw_idle()
+        if self._live_background is not None and self._animation_artists:
+            self.canvas.restore_region(self._live_background)
+            for line in self._animation_artists:
+                if line.axes is not None:
+                    line.axes.draw_artist(line)
+            self.canvas.blit(self.figure.bbox)
 
     def show_speech_workflow_guide(self) -> None:
         """Replace a stale ESS preview with the supervised speech workflow."""
+        self._reset_live_animation()
         self.set_capture_mode(playback=True, recording=True, title="语音增强准备就绪")
         self.run_dir = None
         self.preview_spec = None
@@ -717,47 +805,10 @@ class ResultsViewer(ttk.Frame):
         for axis in self.axes:
             axis.clear()
             axis.set_axis_off()
-        self.axes[0].text(
-            0.5,
-            0.5,
-            "TARGET ONLY  >  MIXED",
-            ha="center",
-            va="center",
-            fontsize=11,
-            weight="bold",
-            color="#1F4E78",
-            transform=self.axes[0].transAxes,
-        )
-        self.axes[1].text(
-            0.5,
-            0.55,
-            "One continuous full-duplex audio stream",
-            ha="center",
-            va="center",
-            fontsize=13,
-            transform=self.axes[1].transAxes,
-        )
-        self.axes[1].text(
-            0.5,
-            0.35,
-            "Same target source samples and one shared full-duplex stream",
-            ha="center",
-            va="center",
-            fontsize=11,
-            color="#555555",
-            transform=self.axes[1].transAxes,
-        )
-        self.axes[2].text(
-            0.5,
-            0.5,
-            "TRAINING INPUT: mixture     |     LABEL: target only",
-            ha="center",
-            va="center",
-            fontsize=13,
-            weight="bold",
-            color="#548235",
-            transform=self.axes[2].transAxes,
-        )
+        for axis, stage, title in zip(self.axes, ("target_only", "interferer_only", "mixture"),
+                                      ("1. TARGET ONLY", "2. INTERFERER ONLY", "3. MIXED")):
+            axis.set_title(title)
+            self._stage_diagram(axis, stage)
         self.summary_var.set(
             "默认监督采集会在一次连续声卡流中录制 target-only、interferer-only 与 mixed；"
             "两段复用完全相同的目标语音。训练输入是 mixed，监督标签是同一行的 target-only。"
@@ -766,6 +817,7 @@ class ResultsViewer(ttk.Frame):
 
     def show_basic_workflow_guide(self, action: str) -> None:
         """Use the otherwise empty result area as a plain playback/recording map."""
+        self._reset_live_animation()
         playback = action in {"play", "play_record"}
         recording = action in {"record", "play_record"}
         title = {
@@ -901,6 +953,7 @@ class ResultsViewer(ttk.Frame):
         return self.path_by_label.get(f"{category}:{label}") if label else None
 
     def refresh_plots(self):
+        self._reset_live_animation()
         summaries = []
         channel_max = 1
         self._x_bounds.clear()

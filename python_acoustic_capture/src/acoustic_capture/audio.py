@@ -258,6 +258,9 @@ class SoundDeviceBackend(AudioBackend):
             "output_underflow": False,
             "output_overflow": False,
             "callback_count": 0,
+            "xrun_callback_count": 0,
+            "first_xrun_callback": None,
+            "last_xrun_callback": None,
             "first_callback_time": None,
             "last_callback_time": None,
         }
@@ -286,6 +289,12 @@ class SoundDeviceBackend(AudioBackend):
         for name in names:
             target[name] = bool(target[name] or getattr(status, name, False))
         target["xrun"] = any(bool(target[name]) for name in names)
+        if any(bool(getattr(status, name, False)) for name in names):
+            target["xrun_callback_count"] = target.get("xrun_callback_count", 0) + 1
+            index = target.get("callback_count", 0) + 1
+            if target.get("first_xrun_callback") is None:
+                target["first_xrun_callback"] = index
+            target["last_xrun_callback"] = index
         message = str(status).strip()
         if message and message not in str(target["text"]):
             target["text"] = "; ".join(part for part in (target["text"], message) if part)
@@ -321,6 +330,8 @@ class SoundDeviceBackend(AudioBackend):
                 stream.start()
                 self._emit_progress(active_phase, 0, expected_frames, force=True)
             while bool(getattr(stream, "active", False)):
+                if processed_frames is not None:
+                    self._emit_progress(active_phase, processed_frames(), expected_frames)
                 if self._abort_requested.is_set():
                     cancelled = True
                     try:
@@ -404,6 +415,8 @@ class SoundDeviceBackend(AudioBackend):
         input_count = max(self.config.input_channels)
         frames = len(output)
         recording = np.zeros((frames, input_count), dtype=np.float32)
+        # Touch recording pages before the real-time callback, not on first use.
+        recording.fill(0)
         callback_status = self._new_callback_status()
         callback_errors: list[Exception] = []
         cursor = 0
@@ -419,7 +432,6 @@ class SoundDeviceBackend(AudioBackend):
                 recording[cursor : cursor + copied] = indata[:copied]
                 outdata[:copied] = output[cursor : cursor + copied]
                 cursor += copied
-                self._emit_progress("playing", cursor, frames)
             if cursor >= frames or self._abort_requested.is_set():
                 raise sd.CallbackStop()
 
@@ -469,7 +481,6 @@ class SoundDeviceBackend(AudioBackend):
             if copied:
                 recording[cursor : cursor + copied] = indata[:copied]
                 cursor += copied
-                self._emit_progress("recording", cursor, frames)
             if cursor >= frames or self._abort_requested.is_set():
                 raise sd.CallbackStop()
 
@@ -514,7 +525,6 @@ class SoundDeviceBackend(AudioBackend):
             if copied:
                 outdata[:copied] = output[cursor : cursor + copied]
                 cursor += copied
-                self._emit_progress("playing", cursor, frames)
             if cursor >= frames or self._abort_requested.is_set():
                 raise sd.CallbackStop()
 
@@ -706,7 +716,6 @@ class SoundDeviceBackend(AudioBackend):
                 )
                 raise sd.CallbackAbort()
             captured_frames += callback_frames
-            self._emit_progress("recording_to_file", captured_frames, 0)
             if self._abort_requested.is_set() or stop_requested():
                 raise sd.CallbackStop()
 
@@ -739,6 +748,7 @@ class SoundDeviceBackend(AudioBackend):
                     stream.start()
                     self._emit_progress("recording_to_file", 0, 0, force=True)
                 while bool(getattr(stream, "active", False)) or not block_queue.empty():
+                    self._emit_progress("recording_to_file", captured_frames, 0)
                     if stop_requested():
                         self._abort_requested.set()
                     if self._abort_requested.is_set() and bool(

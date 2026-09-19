@@ -11,6 +11,41 @@ import acoustic_capture.gui as gui_module
 from acoustic_capture.gui import CaptureGUI, FIELDS, _display, _get
 
 
+def test_xrun_diagnostics_record_first_and_last_callback():
+    status = SoundDeviceBackend._new_callback_status()
+    event = SimpleNamespace(input_underflow=False, input_overflow=False,
+                            output_underflow=True, output_overflow=False)
+    SoundDeviceBackend._merge_callback_status(status, event)
+    status["callback_count"] = 17
+    SoundDeviceBackend._merge_callback_status(status, event)
+    assert status["xrun"]
+    assert status["xrun_callback_count"] == 2
+    assert status["first_xrun_callback"] == 1
+    assert status["last_xrun_callback"] == 18
+
+
+def test_progress_never_runs_inside_audio_callback():
+    inside = [False]
+    sd = FakeDevice([2, 2, 2])
+    original_stream = sd.Stream
+    def stream(**kwargs):
+        callback = kwargs["callback"]
+        def wrapped(*args):
+            inside[0] = True
+            try:
+                return callback(*args)
+            finally:
+                inside[0] = False
+        kwargs["callback"] = wrapped
+        return original_stream(**kwargs)
+    sd.Stream = stream
+    backend = SoundDeviceBackend(AudioConfig(input_channels=[1, 2]))
+    progress_contexts = []
+    backend.set_progress_callback(lambda _: progress_contexts.append(inside[0]))
+    backend._duplex_stream(np.zeros((6, 1), dtype=np.float32), sd)
+    assert progress_contexts and not any(progress_contexts)
+
+
 class FakeDevice:
     class CallbackStop(Exception):
         pass
@@ -218,7 +253,8 @@ def test_gui_save_and_validate_cannot_change_pending_measurement(tmp_path, monke
         _update_metadata_summary=lambda: None,
         _append=lambda *_: None,
         _stop_event=SimpleNamespace(clear=lambda: None, is_set=lambda: False),
-        viewer=SimpleNamespace(stop_audio=lambda: None, set_capture_mode=lambda **_: None),
+        viewer=SimpleNamespace(stop_audio=lambda: None, set_capture_mode=lambda **_: None, prepare_live_animation=lambda: None),
+        _refresh_rir_preview=lambda **_: None,
         _set_busy=lambda _: None,
         events=SimpleNamespace(put=lambda _: None),
     )

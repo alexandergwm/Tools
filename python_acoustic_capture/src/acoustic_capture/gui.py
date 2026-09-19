@@ -32,6 +32,7 @@ from .config import ExperimentConfig, load_config, save_config
 from .labels import import_reviewed_labels
 from .checklist import apply_checklist_row, create_checklist, read_checklist, update_checklist_row
 from .general import capture_general_io
+from .human import capture_human
 from .professional import assert_capture_ready, build_preflight_report, format_preflight_report
 from .rir import capture_rir
 from .scene import capture_scene_block, discover_source_pairs, estimate_scene_duration
@@ -52,12 +53,16 @@ def _run_quality_warnings(manifest: dict) -> list[str]:
 
 
 FIELDS = [
+    ("human.corpus_file", "朗读语料 TXT（留空用内置语料）", str, "human"),
+    ("human.duration_s", "每阶段时长（秒）", float, "human"),
+    ("human.rounds", "采集轮数", int, "human"),
+    ("human.preparation_s", "阶段准备时间（秒）", float, "human"),
     ("audio.backend", "音频后端", str, "common"),
     ("audio.host_api", "音频协议 / 主机接口", str, "common"),
     ("audio.input_device", "录制设备名称或编号", str, "common"),
     ("audio.output_device", "播放设备名称或编号", str, "common"),
     ("audio.sample_rate", "采样率", int, "common"),
-    ("audio.block_size", "缓冲区帧数", int, "common"),
+    ("audio.block_size", "缓冲区帧数（0=驱动自动）", int, "common"),
     ("audio.input_channels", "录制通道（逗号分隔）", lambda x: [int(v) for v in x.split(",")], "common"),
     ("general.action", "播录操作", str, "basic"),
     ("general.source_file", "要播放的音频文件", str, "basic"),
@@ -124,6 +129,7 @@ LABEL_TO_RIR_STRATEGY = {
     label: value for value, label in RIR_STRATEGY_TO_LABEL.items()
 }
 FILE_PATH_FIELDS = {
+    "human.corpus_file",
     "general.source_file",
     "scene.target_file",
     "scene.interferer_file",
@@ -212,6 +218,9 @@ CORE_AUDIO_PRESETS = (
 )
 
 ADVANCED_FIELDS = {
+    "human.preparation_s",
+    "scene.source_mode",
+    "scene.repetitions",
     "audio.backend",
     "audio.sample_rate",
     "audio.block_size",
@@ -383,6 +392,9 @@ class CaptureGUI(tk.Tk):
             "scene.repetitions",
             "scene.countdown_s",
             "scene.gap_s",
+            "human.duration_s",
+            "human.rounds",
+            "human.preparation_s",
         ):
             self.variables[name].trace_add("write", self._update_scene_estimate)
         # A fixed 1500x900 logical size can extend beyond the work area on
@@ -406,7 +418,7 @@ class CaptureGUI(tk.Tk):
         ).pack(side="left")
         ttk.Label(
             toolbar,
-            text="其余配置与工具位于顶部菜单",
+            textvariable=self.variables["audio.backend"],
             foreground="#6a7076",
         ).pack(side="left", padx=10)
         ttk.Button(toolbar, text="检查声卡", command=self.check_hardware).pack(
@@ -420,11 +432,13 @@ class CaptureGUI(tk.Tk):
         mode_bar.pack(fill="x")
         ttk.Label(mode_bar, text="测试模式", font=("TkDefaultFont", 11, "bold")).pack(side="left", padx=(0, 8))
         for value, label in (
-            ("rir", "RIR 采集"),
-            ("audio", "音频 / 语音采集"),
+            ("rir", "S1-RIR采集"),
+            ("audio", "S23-人工头语音对数据集采集"),
+            ("human", "S4-真实数据集采集"),
+            ("record", "简单录制"),
         ):
             ttk.Radiobutton(
-                mode_bar, text=label, value=value, variable=self.mode_var, command=self._set_mode
+                mode_bar, text=label, value=value, variable=self.mode_var, command=self._select_mode
             ).pack(side="left", padx=8)
         advanced = ttk.Checkbutton(
             mode_bar,
@@ -752,6 +766,8 @@ class CaptureGUI(tk.Tk):
             f"佩戴={metadata.get('wearing_id') or '未填'}",
             f"麦杆={metadata.get('boom_pose_id') or '未填'}",
         ]
+        if self.mode_var.get() == "human":
+            parts[0] = f"受试者={metadata.get('subject_id') or '未填'}"
         if self.checklist_row is not None:
             parts.insert(0, f"清单#{self.checklist_row.get('_row_number')}")
         if self.mode_var.get() == "rir":
@@ -780,6 +796,9 @@ class CaptureGUI(tk.Tk):
             messagebox.showerror("实验元数据无效", str(exc))
             return
         fields = list(COMMON_METADATA_FIELDS)
+        if self.mode_var.get() == "human":
+            fields = [field for field in fields if field[0] != "artificial_head_id"]
+            fields.insert(0, ("subject_id", "受试者编号（无需真实姓名）", str))
         try:
             microphone_channels = [
                 int(value.strip())
@@ -1072,6 +1091,8 @@ class CaptureGUI(tk.Tk):
             config = self._apply_values()
             if self.mode_var.get() == "rir":
                 workflow = "rir"
+            elif self.mode_var.get() in {"human", "record"}:
+                workflow = "human" if self.mode_var.get() == "human" else "io"
             else:
                 workflow = str(AUDIO_PRESETS[self.audio_preset_var.get()]["kind"])
             report = build_preflight_report(config, workflow)
@@ -1104,6 +1125,8 @@ class CaptureGUI(tk.Tk):
             selected = filedialog.askdirectory(title="选择文件夹", initialdir=initial)
         else:
             filetypes = (
+                [("UTF-8 朗读语料", "*.txt"), ("所有文件", "*.*")]
+                if field == "human.corpus_file" else
                 [("CSV 素材索引", "*.csv"), ("所有文件", "*.*")]
                 if field.endswith("index_csv")
                 else [("音频文件", "*.wav *.flac *.aiff *.aif"), ("所有文件", "*.*")]
@@ -1181,7 +1204,7 @@ class CaptureGUI(tk.Tk):
 
     def start_named_experiment(self, kind: str):
         """Require a fresh manual name before starting one physical experiment."""
-        kind_label = {"rir": "RIR", "scene": "语音增强", "io": "音频播录"}[kind]
+        kind_label = {"rir": "RIR", "scene": "语音增强", "io": "简单录制", "human": "真人语音"}[kind]
         checklist_selected = self.checklist_row is not None
         if checklist_selected:
             if self.checklist_kind != kind:
@@ -1355,6 +1378,13 @@ class CaptureGUI(tk.Tk):
         self._set_mode()
 
     def start_current_workflow(self):
+        if self.mode_var.get() == "human":
+            self.start_named_experiment("human")
+            return
+        if self.mode_var.get() == "record":
+            self.variables["general.action"].set(ACTION_TO_LABEL["record"])
+            self.start_named_experiment("io")
+            return
         if self.mode_var.get() == "rir":
             self.start_named_experiment("rir")
             return
@@ -1433,8 +1463,10 @@ class CaptureGUI(tk.Tk):
         self.viewer.stop_audio()
         self._set_busy(True)
         if kind == "rir":
+            self._refresh_rir_preview(allow_busy=True)
+            self.viewer.prepare_live_animation()
             self.viewer.set_capture_mode(playback=True, recording=True, title="正在预检 RIR 实验…")
-        elif kind == "scene":
+        elif kind in {"scene", "human"}:
             self.viewer.set_capture_mode(playback=True, recording=True, title="正在预检语音实验…")
         else:
             action = str(config.general.action)
@@ -1466,6 +1498,19 @@ class CaptureGUI(tk.Tk):
                 backend.set_progress_callback(
                     lambda update: self.events.put(("AUDIO_PROGRESS", update))
                 )
+                def visual_progress(update):
+                    # Finish expensive first rendering BEFORE starting the stream.
+                    ready = threading.Event()
+                    self.events.put(("VISUAL_READY", update, ready))
+                    deadline = time.monotonic() + 30
+                    while not ready.wait(.05):
+                        if self._stop_event.is_set():
+                            return
+                        if time.monotonic() > deadline:
+                            raise TimeoutError("预览准备超时，尚未开始播放，请重试")
+                    if getattr(ready, "render_error", None):
+                        raise RuntimeError(f"预览准备失败，未开始播放：{ready.render_error}")
+
                 if kind == "rir":
                     store = capture_rir(
                         config,
@@ -1476,6 +1521,9 @@ class CaptureGUI(tk.Tk):
                         ),
                         stop_requested=self._stop_event.is_set,
                     )
+                elif kind == "human":
+                    store = capture_human(config, backend, log=logger,
+                        stop_requested=self._stop_event.is_set, progress=visual_progress)
                 else:
                     operation = {
                         "io": capture_general_io,
@@ -1487,7 +1535,8 @@ class CaptureGUI(tk.Tk):
                             backend,
                             log=logger,
                             stop_requested=self._stop_event.is_set,
-                            progress=lambda update: self.events.put(("SCENE_PROGRESS", update)),
+                            progress=lambda update: visual_progress(update) if update.get("event") == "pair_prepared"
+                                else self.events.put(("SCENE_PROGRESS", update)),
                         )
                     else:
                         store = operation(
@@ -1509,6 +1558,8 @@ class CaptureGUI(tk.Tk):
 
     def _set_busy(self, busy: bool):
         self._busy = busy
+        if busy:
+            self._active_ui_mode = self.mode_var.get()
         self.viewer.set_capture_busy(busy)
         if busy and self._preview_after_id is not None:
             try:
@@ -1551,13 +1602,26 @@ class CaptureGUI(tk.Tk):
             self._append("仍在等待声卡驱动停止；界面可继续响应。若超过超时限制，本次会自动报错退出。")
             self._cancel_watch_after_id = self.after(2_000, self._check_cancel_watch)
 
+    def _select_mode(self):
+        if self._busy:
+            self.mode_var.set(self._active_ui_mode)
+            return
+        mode = self.mode_var.get()
+        if mode in {"audio", "human"}:
+            self.variables["scene.source_mode"].set(SOURCE_MODE_TO_LABEL["folders"])
+        if mode == "audio":
+            self.audio_preset_var.set(CORE_AUDIO_PRESETS[0])
+        if mode == "record":
+            self.variables["general.action"].set(ACTION_TO_LABEL["record"])
+        self._set_mode()
+
     def _set_mode(self):
         mode = self.mode_var.get()
         preset = AUDIO_PRESETS[self.audio_preset_var.get()]
         viewer_mode_key = (mode, self.audio_preset_var.get() if mode == "audio" else "rir")
         viewer_mode_changed = viewer_mode_key != self._viewer_mode_key
-        is_scene = mode == "audio" and preset["kind"] == "scene"
-        is_basic = mode == "audio" and preset["kind"] == "io"
+        is_scene = mode == "human" or mode == "audio" and preset["kind"] == "scene"
+        is_basic = mode == "record" or mode == "audio" and preset["kind"] == "io"
         visible_groups = {"common"}
         if mode == "rir":
             visible_groups.update({"rir", "rir_speech"})
@@ -1565,12 +1629,14 @@ class CaptureGUI(tk.Tk):
             visible_groups.update({"speech", "rir_speech"})
         elif is_basic:
             visible_groups.add("basic")
+        if mode == "human":
+            visible_groups.add("human")
 
         advanced = self.advanced_var.get()
         self.audio_preset_box.configure(
             values=list(AUDIO_PRESETS) if advanced else list(CORE_AUDIO_PRESETS)
         )
-        action = str(preset.get("action") or "")
+        action = "record" if mode == "record" else str(preset.get("action") or "")
         if preset.get("items") is None:
             scene_items = {name for name, variable in self.item_vars.items() if variable.get()}
         else:
@@ -1626,12 +1692,18 @@ class CaptureGUI(tk.Tk):
                 visible = visible and source_mode == "folders"
             elif name == "scene.repetitions":
                 visible = visible and source_mode == "single"
+            if mode == "human" and group == "speech":
+                visible = name in {"scene.interferer_folder", "scene.interferer_level_dbfs", "audio.interferer_output_channel"}
+            if mode == "human" and name == "audio.target_output_channel":
+                visible = False
+            if mode == "record" and name in {"audio.target_output_channel", "audio.interferer_output_channel"}:
+                visible = False
             for widget in self.field_rows.get(name, ()):
                 widget.grid() if visible else widget.grid_remove()
         for widget, group in self.section_widgets:
             widget.grid() if group in visible_groups else widget.grid_remove()
         for widget in self.scene_widgets:
-            widget.grid() if is_scene and advanced else widget.grid_remove()
+            widget.grid() if is_scene and advanced and mode != "human" else widget.grid_remove()
         if advanced:
             self.metadata_label.grid()
             self.metadata.grid()
@@ -1646,7 +1718,7 @@ class CaptureGUI(tk.Tk):
         self._update_metadata_summary()
 
         for widget in self.audio_preset_widgets:
-            if mode == "audio":
+            if mode == "audio" and advanced:
                 widget.pack(fill="x", before=self.main_paned)
             else:
                 widget.pack_forget()
@@ -1658,6 +1730,9 @@ class CaptureGUI(tk.Tk):
             self.experiment_status.configure(
                 text="每次佩戴、角度、高度或麦杆姿态对应一个新实验；本实验内的有效 RIR 自动平均。"
             )
+        elif mode == "human":
+            self.start_button.configure(text="▶  开始真人采集")
+            self.experiment_status.configure(text="每轮：佩戴者朗读 → 保持安静、音箱播放 → 朗读与音箱同时发声。自动按 4 秒切分；非严格监督配对。")
         elif is_scene:
             self.start_button.configure(text="▶  开始新的语音增强实验")
             self.experiment_status.configure(
@@ -1669,15 +1744,21 @@ class CaptureGUI(tk.Tk):
                 text="输入本次名称并开始；录制过程中可随时停止，已完成的数据会保留。"
             )
         self.start_button.pack(side="left", fill="x", expand=True, padx=4)
-        if is_scene:
+        if is_scene and mode != "human":
             self.scene_scan_button.pack(side="left", padx=4)
         if mode == "rir":
             self._schedule_rir_preview()
+        elif mode == "human" and viewer_mode_changed:
+            self.viewer.show_human_stage("target_only", "准备后按提示自然朗读，不需要每句话正好 4 秒。", 1, 1,
+                round(float(self.variables["human.duration_s"].get()) * self.config_data.audio.sample_rate), self.config_data.audio.sample_rate)
         elif is_scene and (self.viewer.run_dir is None or viewer_mode_changed):
             self.viewer.show_speech_workflow_guide()
         elif is_basic and (self.viewer.run_dir is None or viewer_mode_changed):
             self.viewer.show_basic_workflow_guide(action)
         self._viewer_mode_key = viewer_mode_key
+        if mode != "human":
+            self.viewer.human_prompt_panel.pack_forget()
+        self._update_scene_estimate()
 
     def _scene_for_estimate(self):
         scene = deepcopy(self.config_data.scene)
@@ -1710,6 +1791,14 @@ class CaptureGUI(tk.Tk):
 
     def _update_scene_estimate(self, *_):
         try:
+            if self.mode_var.get() == "human":
+                seconds = 3 * int(self.variables["human.rounds"].get()) * (
+                    float(self.variables["human.duration_s"].get()) + float(self.variables["human.preparation_s"].get()))
+                self.scene_estimate_var.set(f"三阶段总时长约 {_format_duration(seconds)}，另加声卡初始化与保存耗时")
+                return
+            if self.mode_var.get() != "audio":
+                self.scene_estimate_var.set("")
+                return
             estimate = estimate_scene_duration(self._scene_for_estimate())
             self.scene_estimate_var.set(
                 f"计划 {estimate.task_count} 次测量；预计最短测试时长 "
@@ -1795,7 +1884,21 @@ class CaptureGUI(tk.Tk):
                 event = self.events.get_nowait()
             except queue.Empty:
                 break
-            if isinstance(event, tuple) and event and event[0] == "PREFLIGHT_WARNING":
+            if isinstance(event, tuple) and event and event[0] == "VISUAL_READY":
+                _, update, ready = event
+                try:
+                    if update.get("event") == "human_prepared":
+                        self.viewer.show_human_stage(update["stage"], update["prompt"], update["round"], update["rounds"], update["frames"], update["sample_rate"])
+                    else:
+                        self.viewer.show_live_speech_pair(update["target"], update["interferer"], update["sample_rate"], update["segments"],
+                            target_name=update["target_name"], interferer_name=update["interferer_name"],
+                            pair_index=update["pair_index"], pair_count=update["pair_count"], stream_samples=update["stream_samples"])
+                    self.viewer.prepare_live_animation()
+                except Exception as exc:
+                    ready.render_error = str(exc)
+                finally:
+                    ready.set()
+            elif isinstance(event, tuple) and event and event[0] == "PREFLIGHT_WARNING":
                 _, check_id, title, detail = event
                 if check_id not in self._logged_preflight_warning_ids:
                     self._append(f"预检提醒：{title}：{detail}")
@@ -1878,8 +1981,7 @@ class CaptureGUI(tk.Tk):
                 )
             elif isinstance(event, tuple) and event and event[0] == "RIR_PROGRESS":
                 _, path, take = event
-                self._append(f"第 {take} 次 RIR 已完成，正在刷新右侧图形：{path}")
-                self.viewer.load_run(path)
+                self._append(f"第 {take} 次 RIR 已保存：{path}；全部结束后显示结果")
             elif isinstance(event, str) and event.startswith("__DONE__"):
                 self._set_busy(False)
                 self._worker_thread = None

@@ -304,7 +304,8 @@ def test_gui_buttons_run_all_simulated_workflows(tmp_path: Path, monkeypatch):
         assert app.start_button.winfo_manager() == "pack"
         app.start_button.invoke()
         rir_run = _wait_for_run(app, Path(config.storage.root), "rir")
-        assert sum(path == rir_run.resolve() for path in loaded_runs) >= 3
+        # Do not render completed RIRs while the next take may be playing.
+        assert sum(path == rir_run.resolve() for path in loaded_runs) == 1
 
         app.mode_var.set("audio")
         app.audio_preset_var.set("标准监督：目标 + 干扰 + MIXED（推荐）")

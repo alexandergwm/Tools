@@ -22,7 +22,7 @@ class AudioConfig:
     input_device: str | int | None = None
     output_device: str | int | None = None
     sample_rate: int = 48_000
-    block_size: int = 1024
+    block_size: int = 0  # let the host choose its native callback block size
     input_channels: list[int] = field(default_factory=lambda: [1, 2])
     target_output_channel: int = 1
     interferer_output_channel: int = 2
@@ -127,6 +127,14 @@ class StorageConfig:
 
 
 @dataclass
+class HumanConfig:
+    corpus_file: str = ""
+    duration_s: float = 20.0
+    rounds: int = 1
+    preparation_s: float = 3.0
+
+
+@dataclass
 class ExperimentConfig:
     audio: AudioConfig = field(default_factory=AudioConfig)
     general: GeneralIOConfig = field(default_factory=GeneralIOConfig)
@@ -134,10 +142,13 @@ class ExperimentConfig:
     repeats: RepeatConfig = field(default_factory=RepeatConfig)
     acqua: AcquaConfig = field(default_factory=AcquaConfig)
     scene: SceneConfig = field(default_factory=SceneConfig)
+    human: HumanConfig = field(default_factory=HumanConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def validate(self) -> None:
+        if not 4 <= self.human.duration_s <= 300 or isinstance(self.human.rounds, bool) or not isinstance(self.human.rounds, int) or self.human.rounds < 1 or not 0 <= self.human.preparation_s <= 30:
+            raise ValueError("Human capture: duration 4..300 seconds, positive rounds, preparation 0..30 seconds required")
         a, s, r = self.audio, self.sweep, self.repeats
         if a.dtype != "float32":
             raise ValueError("audio.dtype must be float32 (normalized audio samples)")
@@ -287,6 +298,7 @@ def load_config(path: str | Path) -> ExperimentConfig:
         repeats=_make(RepeatConfig, repeat_values),
         acqua=_make(AcquaConfig, raw.get("acqua")),
         scene=_make(SceneConfig, scene_values),
+        human=_make(HumanConfig, raw.get("human")),
         storage=_make(StorageConfig, raw.get("storage")),
         metadata=raw.get("metadata", {}),
     )
@@ -298,6 +310,7 @@ def load_config(path: str | Path) -> ExperimentConfig:
     # Relative paths are interpreted relative to the YAML file, not the shell.
     for section, attr in (
         (cfg.general, "source_file"),
+        (cfg.human, "corpus_file"),
         (cfg.scene, "target_file"),
         (cfg.scene, "interferer_file"),
         (cfg.scene, "target_folder"),
