@@ -1746,7 +1746,7 @@ class CaptureGUI(tk.Tk):
         elif is_scene:
             self.start_button.configure(text="▶  开始新的语音增强实验")
             self.experiment_status.configure(
-                text="按素材配对连续采集；target-only 与 mixed 使用同一目标语音，可直接用于监督训练。"
+                text="三阶段复用同一组素材；仅将验收通过的配对用于监督训练，请检查 supervision_ready 标签。"
             )
         else:
             self.start_button.configure(text="▶  开始新的音频播录")

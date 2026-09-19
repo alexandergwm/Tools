@@ -811,7 +811,9 @@ def test_speech_dataset_packages_multichannel_pairs_and_flattened_labels(tmp_pat
     cfg.scene.interferer_file = str(interferer)
     cfg.scene.duration_s = 0.05
     cfg.scene.countdown_s = 0
-    cfg.scene.gap_s = 0
+    # Allow the simulated room response to decay between scenes. Zero gap
+    # contaminates the next scene and must not pass the default acoustic QC.
+    cfg.scene.gap_s = 0.2
     cfg.storage.root = str(tmp_path / "runs")
     cfg.storage.compute_sha256 = False
     cfg.metadata = {

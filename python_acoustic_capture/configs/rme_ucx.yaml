@@ -43,6 +43,7 @@ repeats:
 scene:
   items:
   - target_only
+  - interferer_only
   - mixture
   source_mode: folders
   duration_s: 4.0

@@ -6,7 +6,8 @@ import numpy as np
 
 
 def channel_metrics(signal: np.ndarray, clip_threshold: float = 0.999) -> list[dict[str, float | int | bool]]:
-    signal = np.atleast_2d(signal) if signal.ndim == 1 else signal
+    signal = np.asarray(signal)
+    signal = signal[:, None] if signal.ndim == 1 else signal
     result = []
     for channel in range(signal.shape[1]):
         x = signal[:, channel].astype(np.float64)
@@ -143,6 +144,10 @@ def evaluate_supervision_quality_gate(
     if enabled:
         residual = float(metrics.get("residual_db_max", 0.0))
         correlation = float(metrics.get("correlation_min", 0.0))
+        if not all(np.isfinite(value) for value in (residual, correlation, max_residual_db, min_correlation)):
+            reasons.append("non-finite supervision metrics or thresholds")
+        if not metrics:
+            reasons.append("missing supervision metrics")
         if residual > max_residual_db:
             reasons.append(
                 f"residual_db_max={residual:.2f} > {max_residual_db:.2f}"

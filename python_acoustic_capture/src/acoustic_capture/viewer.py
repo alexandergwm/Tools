@@ -187,8 +187,14 @@ class ResultsViewer(ttk.Frame):
         self.human_prompt = tk.StringVar()
         ttk.Label(self.human_prompt_panel, textvariable=self.human_instruction,
                   font=("TkDefaultFont", 16, "bold"), foreground="#176747").pack(anchor="w")
-        ttk.Label(self.human_prompt_panel, textvariable=self.human_prompt,
-                  font=("TkDefaultFont", 13), wraplength=780, justify="left").pack(fill="x", pady=(8, 0))
+        self.human_prompt_label = ttk.Label(
+            self.human_prompt_panel, textvariable=self.human_prompt,
+            font=("TkDefaultFont", 24, "bold"), foreground="#17212b",
+            wraplength=780, justify="left")
+        self.human_prompt_label.pack(fill="x", pady=(12, 4))
+        self.human_prompt_label.bind(
+            "<Configure>", lambda event: self.human_prompt_label.configure(
+                wraplength=max(1, event.width)))
 
         transport = ttk.LabelFrame(self, text="当前播放 / 录制", padding=8)
         transport.pack(fill="x", pady=(0, 6))
@@ -687,7 +693,7 @@ class ResultsViewer(ttk.Frame):
         self.human_prompt_panel.pack(fill="x", before=self.run_label, pady=(0, 6))
         quiet = stage == "interferer_only"
         label = {"target_only": "TARGET-ONLY", "interferer_only": "INTERFERER-ONLY", "mixture": "MIXED"}[stage]
-        instruction = "请保持安静，只有干扰音箱发声" if quiet else "请自然朗读下方语料" + ("，干扰音箱会同时发声" if stage == "mixture" else "，干扰音箱保持安静")
+        instruction = "请保持安静，只有干扰音箱发声" if quiet else ("请再次朗读本轮同一句，干扰音箱会同时发声" if stage == "mixture" else "请自然朗读下方这一句，干扰音箱保持安静")
         self._human_stage_instruction = f"{label} · {instruction}"
         self.human_instruction.set("准备 · " + self._human_stage_instruction)
         self.human_prompt.set("放松休息，请不要说话。下一阶段会提示您继续朗读。" if quiet else prompt)
@@ -709,7 +715,7 @@ class ResultsViewer(ttk.Frame):
                 self._live_lines.append(axis.axvline(0, ymin=0, ymax=.18, color="#d62728", linewidth=2))
         self.run_label.configure(text=f"S4 · 第 {ordinal}/{rounds} 轮 · 真人不同阶段不构成严格配对监督样本")
         self.set_capture_mode(playback=stage != "target_only", recording=True, title=self._human_stage_instruction)
-        self.summary_var.set("S4：每阶段独立录制并按 4 秒切片；不同次朗读不构成严格监督配对，语料仅作为朗读提示。")
+        self.summary_var.set("每轮一行语料：TARGET-ONLY 与 MIXED 读同一句，下一轮换句；语料用完后循环。不同次朗读不构成严格监督配对。")
         self.canvas.draw_idle()
 
     @staticmethod

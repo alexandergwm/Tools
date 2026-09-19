@@ -902,9 +902,12 @@ def capture_scene_block(
                         microphones_by_item["interferer_only"],
                         microphones_by_item["mixture"],
                     )
-                quality_gate = evaluate_supervision_quality_gate(
-                    additivity, config.metadata
-                )
+                gate_metadata = dict(config.metadata)
+                # Three-stage acquisition can verify acoustic consistency, not
+                # just the identity of the digital playback samples.
+                if "quality_gate" not in gate_metadata and additivity:
+                    gate_metadata["quality_gate"] = {"enabled": True}
+                quality_gate = evaluate_supervision_quality_gate(additivity, gate_metadata)
                 if quality_gate["enabled"] and not additivity:
                     quality_gate["passed"] = False
                     quality_gate["reasons"] = [

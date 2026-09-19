@@ -43,7 +43,7 @@ repeats:
   pause_s: 1.0
 
 scene:
-  # 默认现场方案：目标人工嘴单独播放后，立即采集两路同时播放的 mixed。
+  # Three stages: target-only, interferer-only, then mixed, with silence gaps.
   items: [target_only, interferer_only, mixture]
   source_mode: folders
   duration_s: 4.0

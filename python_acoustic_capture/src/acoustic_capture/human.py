@@ -6,6 +6,7 @@ import numpy as np
 from .signals import load_audio, fit_duration, scale_dbfs, route_outputs
 from .storage import RunStore
 from .live_session import capture_session
+from .quality import channel_metrics, multichannel_health_metrics
 
 DEFAULT_CORPUS = """从这到百货大楼有多远？十三四公里。怎么坐车？过马路先坐二路公共汽车，然后换地铁。他是一个略显瘦小的男孩。
 主楼位于校园的东北侧
@@ -54,7 +55,7 @@ def capture_human(config, backend, log=print, stop_requested=None, progress=None
     warning = "真人 target-only 与 mixed 是独立朗读，非严格配对监督参考；朗读提示不是已核验转写。"
     summary = {"warnings": [warning], "strict_supervised_pair": False, "completed_stages": 0}
     store.write_json("references/reading_corpus.json", {"lines": corpus})
-    fields = ["round", "stage", "recording", "clip", "start_sample", "end_sample", "prompt_text", "interferer_source", "strict_supervised_pair", "status", "quality_passed", "timing_discontinuity"]
+    fields = ["round", "stage", "recording", "clip", "start_sample", "end_sample", "prompt_text", "interferer_source", "strict_supervised_pair", "status", "quality_passed", "timing_discontinuity", "quality_issues"]
 
     def save_labels():
         path = store.root / "raw" / "labels.csv"
@@ -75,7 +76,8 @@ def capture_human(config, backend, log=print, stop_requested=None, progress=None
             if fade:
                 noise[:fade] *= np.linspace(0, 1, fade)
                 noise[-fade:] *= np.linspace(1, 0, fade)
-            prompt = "\n".join(corpus[(ordinal * 5 + i) % len(corpus)] for i in range(5))
+            # One corpus line per round; keep it fixed across all three stages.
+            prompt = corpus[ordinal % len(corpus)]
             for stage in ("target_only", "interferer_only", "mixture"):
                 if stop():
                     break
@@ -95,13 +97,28 @@ def capture_human(config, backend, log=print, stop_requested=None, progress=None
                     result = backend.play_record(output)
                 raw = f"raw/round_{ordinal + 1:03d}_{stage}.wav"
                 store.write_audio(raw, result.microphones, fs)
-                store.write_json(f"metrics/round_{ordinal + 1:03d}_{stage}.json", result.status)
+                channels = channel_metrics(result.microphones)
+                health = multichannel_health_metrics(result.microphones)
+                issues = []
+                if any(item["clipped"] for item in channels):
+                    issues.append("削波")
+                if health["has_nonfinite_samples"]:
+                    issues.append("非有限音频样点")
+                if health["has_silent_channel"]:
+                    issues.append("静音通道")
+                if health["exact_duplicate_channel_pairs"]:
+                    issues.append("录制通道完全重复")
+                store.write_json(f"metrics/round_{ordinal + 1:03d}_{stage}.json", {
+                    **result.status, "channels": channels, "array_health": health,
+                    "quality_issues": issues,
+                })
                 actual = len(result.microphones)
                 bad = bool(result.status.get("xrun") or result.status.get("timing_discontinuity"))
                 status = "timing_discontinuity" if result.status.get("timing_discontinuity") else "xrun" if bad else "partial" if actual < frames else "complete"
                 base = dict(round=ordinal + 1, stage=stage, recording=raw, prompt_text=prompt if stage != "interferer_only" else "",
                             interferer_source=str(source_path) if stage != "target_only" else "",
-                            strict_supervised_pair=False, status=status, quality_passed=status == "complete",
+                            strict_supervised_pair=False, status=status, quality_passed=status == "complete" and not issues,
+                            quality_issues="; ".join(issues),
                             timing_discontinuity=bool(result.status.get("timing_discontinuity")))
                 # Always index raw audio, including a cancelled stage shorter than 4 s.
                 rows.append(dict(base, clip="", start_sample=0, end_sample=actual))
@@ -112,6 +129,8 @@ def capture_human(config, backend, log=print, stop_requested=None, progress=None
                     rows.append(dict(base, clip=clip, start_sample=begin, end_sample=begin + chunk))
                 if bad:
                     summary["warnings"].append(f"第 {ordinal + 1} 轮 {stage} 发生音频丢帧，见 labels.csv")
+                if issues:
+                    summary["warnings"].append(f"第 {ordinal + 1} 轮 {stage}：{'、'.join(issues)}，不合格录音已保留")
                 if status == "complete":
                     summary["completed_stages"] += 1
                 save_labels()
